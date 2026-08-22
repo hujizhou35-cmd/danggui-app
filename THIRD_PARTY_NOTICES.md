@@ -22,7 +22,7 @@ packages. The dependency purpose and offline-boundary review are recorded in
 | `cupertino_icons` | 1.0.9 | MIT | [flutter/packages](https://github.com/flutter/packages/tree/main/third_party/packages/cupertino_icons) |
 | `drift` | 2.34.3 | MIT | [simolus3/drift](https://github.com/simolus3/drift) |
 | `drift_flutter` | 0.3.1 | MIT | [simolus3/drift](https://github.com/simolus3/drift) |
-| `file_picker` | 11.0.3 | MIT | [miguelpruivo/flutter_file_picker](https://github.com/miguelpruivo/flutter_file_picker) |
+| `file_picker` | 12.0.0 | MIT | [miguelpruivo/flutter_file_picker](https://github.com/miguelpruivo/flutter_file_picker) |
 | `flutter_local_notifications` | 22.3.0 | BSD 3-Clause | [MaikuB/flutter_local_notifications](https://github.com/MaikuB/flutter_local_notifications) |
 | `flutter_riverpod` | 3.4.2 | MIT | [rrousselGit/riverpod](https://github.com/rrousselGit/riverpod) |
 | `flutter_secure_storage` | 10.3.1 | BSD 3-Clause | [mogol/flutter_secure_storage](https://github.com/mogol/flutter_secure_storage) |
@@ -30,7 +30,7 @@ packages. The dependency purpose and offline-boundary review are recorded in
 | `intl` | 0.20.3 | BSD 3-Clause | [dart-lang/i18n](https://github.com/dart-lang/i18n/tree/main/pkgs/intl) |
 | `path` | 1.9.1 | BSD 3-Clause | [dart-lang/core](https://github.com/dart-lang/core/tree/main/pkgs/path) |
 | `path_provider` | 2.1.6 | BSD 3-Clause | [flutter/packages](https://github.com/flutter/packages/tree/main/packages/path_provider) |
-| `share_plus` | 12.0.2 | BSD 3-Clause | [fluttercommunity/plus_plugins](https://github.com/fluttercommunity/plus_plugins) |
+| `share_plus` | 13.3.0 | BSD 3-Clause | [fluttercommunity/plus_plugins](https://github.com/fluttercommunity/plus_plugins) |
 | `timezone` | 0.11.1 | BSD 3-Clause | [dart-lang/labs](https://github.com/dart-lang/labs/tree/main/pkgs/timezone) |
 | `uuid` | 4.6.0 | MIT | [Daegalus/dart-uuid](https://github.com/Daegalus/dart-uuid) |
 

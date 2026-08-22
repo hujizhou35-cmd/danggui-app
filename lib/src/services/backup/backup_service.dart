@@ -245,13 +245,11 @@ final class BackupService {
   }
 
   Future<File?> pickBackup() async {
-    final result = await FilePicker.pickFiles(
+    final result = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: const <String>['dgbak'],
-      allowMultiple: false,
-      withData: false,
     );
-    final path = result?.files.single.path;
+    final path = result?.path;
     return path == null ? null : File(path);
   }
 

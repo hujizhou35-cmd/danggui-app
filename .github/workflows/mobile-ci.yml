@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment:
-      name: ${{ github.event_name == 'pull_request' && 'ci' || 'android-release' }}
+      name: ${{ startsWith(github.ref, 'refs/tags/v') && 'android-release' || 'ci' }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -82,6 +82,40 @@ jobs:
 
       - name: Test
         run: flutter test --reporter expanded
+
+      - name: Upload Golden failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: danggui-golden-failures-${{ runner.os }}-${{ github.sha }}
+          path: test/**/failures/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Render complete Linux Golden candidate set
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! find test -path '*/failures/*.png' -print -quit | grep -q .; then
+            echo 'No Golden comparison failures were produced; skipping candidate rendering.'
+            exit 0
+          fi
+          flutter test --no-pub --update-goldens --concurrency=1 \
+            test/ui/component_gallery_golden_test.dart \
+            test/ui/app_pages_golden_test.dart
+          candidate_dir="${RUNNER_TEMP}/danggui-linux-golden-candidates"
+          mkdir -p "${candidate_dir}"
+          cp test/ui/goldens/*.png "${candidate_dir}/"
+
+      - name: Upload complete Linux Golden candidates
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: danggui-linux-golden-candidates-${{ github.sha }}
+          path: ${{ runner.temp }}/danggui-linux-golden-candidates/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Configure protected release signing or explicit debug fallback
         shell: bash

@@ -52,9 +52,10 @@ $env:DANGGUI_KEY_PASSWORD = "<strong-secret>"
 
 产物验证包括 APK 签名、AAB JAR 签名、最终权限和 SHA-256。正式发布时还应设置 `DANGGUI_EXPECTED_CERT_SHA256`，防止误用其他证书。
 
-## GitHub Actions Secrets
+## GitHub Actions 签名环境
 
-仓库 Secrets 使用以下名称：
+正式签名材料只保存在受保护的 `android-release` Environment；仓库级
+Secrets 与 `ci` Environment 均保持为空。`android-release` 使用以下名称：
 
 | Secret | 内容 |
 |---|---|
@@ -62,11 +63,23 @@ $env:DANGGUI_KEY_PASSWORD = "<strong-secret>"
 | `ANDROID_KEYSTORE_PASSWORD` | keystore 密码 |
 | `ANDROID_KEY_ALIAS` | 默认 `danggui` |
 | `ANDROID_KEY_PASSWORD` | key 密码 |
-| `ANDROID_EXPECTED_CERT_SHA256` | 可选但正式标签必须配置的证书 SHA-256 |
+| `ANDROID_EXPECTED_CERT_SHA256` | 正式标签必须配置的证书 SHA-256 |
 
-四项签名 Secrets 全部存在时 Linux CI 生成正式签名 APK/AAB；全部缺失时生成名称带 `debug-fallback` 的测试产物；部分存在则失败。来自外部 fork 的 PR 不会获得 Secrets，因此只能生成 debug 回退产物。
+`android-linux` 作业根据 ref 选择环境：所有 PR（包括同仓库分支）、`main`
+推送和手动验证都只能进入无 Secrets 的 `ci`，必须生成名称带
+`debug-fallback` 的测试产物；只有 `v*` 标签可进入 `android-release`。脚本
+还会断言 PR 实际收到的签名字段数量必须为零，形成第二道失败关闭门禁。非
+标签事件不会取得正式材料；标签中四项签名字段全部存在时生成正式签名
+APK/AAB，部分或全部缺失都会被版本标签门禁拒绝。维护者不得把这些值重新
+配置为仓库级 Secrets，否则任意同仓库 PR 都会重新获得读取长期签名材料的
+能力。
 
-`v*` 版本标签是强制发布门禁：必须同时配置四项正式签名 Secrets 和 `ANDROID_EXPECTED_CERT_SHA256`，否则 CI 立即失败，不允许在版本标签上产出 debug 回退包。
+`android-release` 的部署策略只允许 `v*` tag；版本标签还必须同时取得四项正式签名字段和
+`ANDROID_EXPECTED_CERT_SHA256`，否则 CI 立即失败，不允许在版本标签上产出
+debug 回退包。仓库另以服务端 tag ruleset 限制 `v*` 的创建、更新和删除，
+唯一永久绕过者为仓库 owner；普通写入角色不能绕过受保护主分支直接触发签名
+环境。`main` 自身要求经 PR 合并、严格状态检查、会话解决，且管理员同样受
+保护规则约束。
 
 CI 产出：
 
