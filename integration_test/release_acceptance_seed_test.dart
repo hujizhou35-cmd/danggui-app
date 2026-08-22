@@ -1,5 +1,6 @@
 import 'package:danggui/main.dart' as app;
 import 'package:danggui/src/application/app_store.dart';
+import 'package:danggui/src/domain/models.dart';
 import 'package:danggui/src/features/tasks/tasks_page.dart';
 import 'package:danggui/src/services/notifications/notification_coordinator.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -24,6 +25,23 @@ void main() {
     );
     final container = providerContainerFor(tester, find.byType(TasksPage));
     final database = await container.read(databaseProvider.future);
+    final controller = container.read(appStoreProvider.notifier);
+    await controller.saveSettings(
+      const AppSettingsModel(
+        localeMode: LocaleMode.en,
+        fontMode: FontMode.serif,
+        textScalePercent: 110,
+        density: DisplayDensity.compact,
+        defaultSoundEnabled: false,
+        defaultVibrationEnabled: false,
+        defaultSnoozeMinutes: 30,
+        autoBackupEnabled: false,
+        autoBackupHourLocal: 3,
+        autoBackupMinuteLocal: 17,
+        backupEncryptionEnabled: false,
+        helpSeenVersion: 7,
+      ),
+    );
     final coordinator = container.read(notificationCoordinatorProvider);
     await coordinator.initialize();
     final initialPermission = await coordinator.permissionsGranted();
@@ -45,18 +63,33 @@ void main() {
           : 'API $apiLevel must support ordinary notifications without a runtime prompt.',
     );
 
+    final folderId = await controller.createFolder(
+      releaseAcceptanceFolderName(apiLevel),
+    );
+    final noteId = await controller.createNote(
+      title: releaseAcceptanceNoteTitle(apiLevel),
+      body: releaseAcceptanceNoteBody(apiLevel),
+      folderId: folderId,
+    );
+    final pastTaskId = await controller.createTask(
+      title: releaseAcceptancePastTitle(apiLevel),
+      dueDate: DateTime.now(),
+      plan: 'Past plan sentinel API $apiLevel',
+      body: releaseAcceptancePastBody(apiLevel),
+    );
+    await controller.setTaskActive(pastTaskId, false);
+    await controller.addTaskToPast(pastTaskId);
+
     final reminderAt = DateTime.now().add(releaseAcceptanceReminderLead);
-    final taskId = await container
-        .read(appStoreProvider.notifier)
-        .createTask(
-          title: title,
-          dueDate: DateTime(reminderAt.year, reminderAt.month, reminderAt.day),
-          plan: releaseAcceptancePlan(apiLevel),
-          body: releaseAcceptanceBody(apiLevel),
-          reminderAt: reminderAt,
-          soundEnabled: true,
-          vibrationEnabled: true,
-        );
+    final taskId = await controller.createTask(
+      title: title,
+      dueDate: DateTime(reminderAt.year, reminderAt.month, reminderAt.day),
+      plan: releaseAcceptancePlan(apiLevel),
+      body: releaseAcceptanceBody(apiLevel),
+      reminderAt: reminderAt,
+      soundEnabled: true,
+      vibrationEnabled: true,
+    );
     await coordinator.reconcile();
     await waitForNotificationRegistration(database, taskId);
     await tester.pump();
@@ -71,6 +104,8 @@ void main() {
     final snapshot = await databaseSnapshot(
       database,
       taskId: taskId,
+      noteId: noteId,
+      pastTaskId: pastTaskId,
       notificationsGranted: notificationsGranted!,
     );
     expect(snapshot['quickCheck'], <String>['ok']);
@@ -79,6 +114,24 @@ void main() {
     final task = snapshot['task']! as Map<String, Object?>;
     expect(task['reminderStatus'], 'scheduled');
     expect(snapshot['notificationRegistration'], isNotNull);
+    final note = snapshot['note']! as Map<String, Object?>;
+    final folder = snapshot['folder']! as Map<String, Object?>;
+    final past = snapshot['past']! as Map<String, Object?>;
+    final settings = snapshot['settings']! as Map<String, Object?>;
+    expect(note['title'], releaseAcceptanceNoteTitle(apiLevel));
+    expect(note['folderId'], folderId);
+    expect(folder['name'], releaseAcceptanceFolderName(apiLevel));
+    expect(
+      (note['blocks']! as List<Object?>).toString(),
+      contains(releaseAcceptanceNoteBody(apiLevel)),
+    );
+    expect(past['sourceTaskId'], pastTaskId);
+    expect(
+      (past['documentBlocks']! as List<Object?>).toString(),
+      contains(releaseAcceptancePastTitle(apiLevel)),
+    );
+    expect(settings['localeMode'], LocaleMode.en.name);
+    expect(settings['defaultSnoozeMinutes'], 30);
 
     await writeReleaseAcceptanceEvidence('before.json', <String, Object?>{
       'contractVersion': releaseAcceptanceContractVersion,
@@ -91,6 +144,14 @@ void main() {
         'sameVersionSignedOverlayOnly': true,
         'schemaMigrationClaimed': false,
         'physicalDeviceHapticsOrOemClaimed': false,
+        'crossDomainSentinels': <String>[
+          'task',
+          'reminder',
+          'note',
+          'folder',
+          'past',
+          'settings',
+        ],
       },
       ...snapshot,
       'ui': <String, Object?>{

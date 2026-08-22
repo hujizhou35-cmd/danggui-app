@@ -23,7 +23,8 @@ run_case() {
           *" flutter test "*)
             printf "%s\n" "flutter-test" >> "${EVENT_LOG}"
             flutter_invocations="$(grep -c "^flutter-test$" "${EVENT_LOG}")"
-            if [[ "${SCENARIO}" == "clean" ]] &&
+            if [[ "${SCENARIO}" == "clean" ||
+                  "${SCENARIO}" == "acceptance-failure" ]] &&
                (( flutter_invocations == 2 )); then
               printf "%s\n" "All tests passed!"
               return 0
@@ -84,7 +85,7 @@ run_case() {
           *" pm path com.danggui.memo "*)
             printf "%s\n" "target-package-query" >> "${EVENT_LOG}"
             case "${SCENARIO}" in
-              clean|retry-failure)
+              clean|retry-failure|acceptance-failure)
                 # The historical bug queried the target through the unhealthy
                 # daemon before restart. Make that ordering fail closed.
                 grep -Fqx "start-server" "${EVENT_LOG}" || return 42
@@ -107,6 +108,14 @@ run_case() {
         esac
       }
       adb() { return 0; }
+      bash() {
+        if [[ "$1" == "integration_test/run_android_release_acceptance.sh" ]]; then
+          printf "%s\n" "release-acceptance" >> "${EVENT_LOG}"
+          [[ "${SCENARIO}" == "acceptance-failure" ]] && return 1
+          return 0
+        fi
+        command bash "$@"
+      }
       source integration_test/run_android_emulator_smoke.sh 24
     ' 2>&1
   )"
@@ -115,14 +124,14 @@ run_case() {
 
   case "${scenario}" in
     clean) expected_status=0 ;;
-    ordinary-failure|retry-failure) expected_status=1 ;;
+    ordinary-failure|retry-failure|acceptance-failure) expected_status=1 ;;
   esac
   if (( status != expected_status )); then
     failed=1
   fi
   case "${scenario}" in
     clean)
-      expected_events=$'flutter-test\nkill-server\nstart-server\nwait-for-device\nboot-query\nsystem-package-query\ntarget-package-query\nuninstall\ntarget-package-query\nflutter-test'
+      expected_events=$'flutter-test\nkill-server\nstart-server\nwait-for-device\nboot-query\nsystem-package-query\ntarget-package-query\nuninstall\ntarget-package-query\nflutter-test\nrelease-acceptance'
       [[ -f "${retry_log}" ]] || failed=1
       [[ "${output}" == *'performing one bounded ADB recovery'* ]] || failed=1
       [[ "${output}" != *'refusing to retry'* ]] || failed=1
@@ -130,6 +139,12 @@ run_case() {
       [[ "${events}" == "${expected_events}" ]] || failed=1
       [[ "$(grep -c '^target-package-query$' "${event_log}")" == '2' ]] ||
         failed=1
+      ;;
+    acceptance-failure)
+      expected_events=$'flutter-test\nkill-server\nstart-server\nwait-for-device\nboot-query\nsystem-package-query\ntarget-package-query\nuninstall\ntarget-package-query\nflutter-test\nrelease-acceptance'
+      [[ -f "${retry_log}" ]] || failed=1
+      [[ "${output}" == *'All tests passed!'* ]] || failed=1
+      [[ "${events}" == "${expected_events}" ]] || failed=1
       ;;
     retry-failure)
       expected_events=$'flutter-test\nkill-server\nstart-server\nwait-for-device\nboot-query\nsystem-package-query\ntarget-package-query\nuninstall\ntarget-package-query\nflutter-test'
@@ -159,7 +174,7 @@ run_case() {
 }
 
 for scenario in \
-  clean retry-failure installed unknown system-pm-failure non-install-timeout \
+  clean acceptance-failure retry-failure installed unknown system-pm-failure non-install-timeout \
   missing-built missing-installing missing-no-tests ordinary-failure; do
   run_case "${scenario}" || exit 1
 done

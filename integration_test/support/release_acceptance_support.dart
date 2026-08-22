@@ -34,6 +34,21 @@ String releaseAcceptancePlan(int apiLevel) =>
 String releaseAcceptanceBody(int apiLevel) =>
     'Same-version signed overlay data sentinel for API $apiLevel.';
 
+String releaseAcceptanceNoteTitle(int apiLevel) =>
+    'Danggui retained note API $apiLevel';
+
+String releaseAcceptanceFolderName(int apiLevel) =>
+    'Danggui retained folder API $apiLevel';
+
+String releaseAcceptanceNoteBody(int apiLevel) =>
+    'Cross-domain note sentinel survives the signed overlay on API $apiLevel.';
+
+String releaseAcceptancePastTitle(int apiLevel) =>
+    'Danggui retained Past entry API $apiLevel';
+
+String releaseAcceptancePastBody(int apiLevel) =>
+    'Cross-domain Past sentinel survives the signed overlay on API $apiLevel.';
+
 Future<void> waitForFinder(
   WidgetTester tester,
   Finder finder, {
@@ -88,6 +103,8 @@ Future<void> writeReleaseAcceptanceEvidence(
 Future<Map<String, Object?>> databaseSnapshot(
   DangguiDatabase database, {
   required String taskId,
+  required String noteId,
+  required String pastTaskId,
   required bool notificationsGranted,
 }) async {
   final quickCheck = await database.quickCheck();
@@ -129,6 +146,87 @@ Future<Map<String, Object?>> databaseSnapshot(
         ],
       )
       .getSingleOrNull();
+  final note = await database
+      .customSelect(
+        'SELECT id, document_id, folder_id, title, pinned_at_utc, '
+        'semantic_hash, created_at_utc, updated_at_utc, row_version '
+        'FROM notes WHERE id = ?',
+        variables: <Variable<Object>>[Variable.withString(noteId)],
+      )
+      .getSingle();
+  final noteBodyRows = await database
+      .customSelect(
+        'SELECT block_type, plain_text, is_checked, sort_rank, semantic_hash, '
+        'row_version FROM document_blocks WHERE document_id = ? '
+        'ORDER BY sort_rank, id',
+        variables: <Variable<Object>>[
+          Variable.withString(note.read<String>('document_id')),
+        ],
+      )
+      .get();
+  final noteFolderId = note.read<String>('folder_id');
+  final folder = await database
+      .customSelect(
+        'SELECT id, name, normalized_name, sort_rank, created_at_utc, '
+        'updated_at_utc, row_version FROM folders WHERE id = ?',
+        variables: <Variable<Object>>[Variable.withString(noteFolderId)],
+      )
+      .getSingle();
+  final pastEvent = await database
+      .customSelect(
+        'SELECT id, document_id, source_task_id, append_sequence, '
+        'completed_at_utc, completion_local_date, completion_zone_id, '
+        'source_snapshot_version, source_snapshot_json, source_sha256, '
+        'anchor_state, created_at_utc, updated_at_utc, row_version '
+        'FROM past_events WHERE source_task_id = ?',
+        variables: <Variable<Object>>[Variable.withString(pastTaskId)],
+      )
+      .getSingle();
+  final pastParts = await database
+      .customSelect(
+        'SELECT id, role, source_order, original_payload_json, '
+        'original_plain_text, original_sha256 FROM past_event_parts '
+        'WHERE event_id = ? ORDER BY source_order, id',
+        variables: <Variable<Object>>[
+          Variable.withString(pastEvent.read<String>('id')),
+        ],
+      )
+      .get();
+  final pastAnchors = await database
+      .customSelect(
+        'SELECT pal.id, pal.part_id, pal.current_block_id, '
+        'pal.last_known_block_id, pal.relation, pal.link_state, '
+        'pal.current_sha256, db.block_type AS current_block_type, '
+        'db.plain_text AS current_plain_text, db.sort_rank AS current_sort_rank '
+        'FROM past_anchor_links pal '
+        'JOIN past_event_parts pep ON pep.id = pal.part_id '
+        'LEFT JOIN document_blocks db ON db.id = pal.current_block_id '
+        'WHERE pep.event_id = ? ORDER BY pep.source_order, pal.id',
+        variables: <Variable<Object>>[
+          Variable.withString(pastEvent.read<String>('id')),
+        ],
+      )
+      .get();
+  final pastDocumentBlocks = await database
+      .customSelect(
+        'SELECT id, block_type, plain_text, is_checked, sort_rank, '
+        'semantic_hash, row_version FROM document_blocks '
+        'WHERE document_id = ? ORDER BY sort_rank, id',
+        variables: <Variable<Object>>[
+          Variable.withString(pastEvent.read<String>('document_id')),
+        ],
+      )
+      .get();
+  final settings = await database
+      .customSelect(
+        'SELECT locale_mode, font_mode, text_scale_percent, density, '
+        'default_sound_enabled, default_vibration_enabled, '
+        'default_snooze_minutes, auto_backup_enabled, '
+        'auto_backup_hour_local, auto_backup_minute_local, '
+        'backup_encryption_enabled, help_seen_version, updated_at_utc, '
+        'row_version FROM app_settings WHERE id = 1',
+      )
+      .getSingle();
   final counts = <String, int>{};
   for (final table in <String>[
     'tasks',
@@ -137,6 +235,12 @@ Future<Map<String, Object?>> databaseSnapshot(
     'platform_jobs',
     'documents',
     'document_blocks',
+    'notes',
+    'folders',
+    'past_events',
+    'past_event_parts',
+    'past_anchor_links',
+    'search_records',
   ]) {
     final row = await database
         .customSelect('SELECT COUNT(*) AS count FROM $table')
@@ -198,7 +302,137 @@ Future<Map<String, Object?>> databaseSnapshot(
               'last_error_code',
             ),
           },
+    'note': <String, Object?>{
+      'id': note.read<String>('id'),
+      'documentId': note.read<String>('document_id'),
+      'folderId': note.readNullable<String>('folder_id'),
+      'title': note.read<String>('title'),
+      'pinnedAtUtcMicros': note.readNullable<int>('pinned_at_utc'),
+      'semanticHash': note.read<String>('semantic_hash'),
+      'createdAtUtcMicros': note.read<int>('created_at_utc'),
+      'updatedAtUtcMicros': note.read<int>('updated_at_utc'),
+      'rowVersion': note.read<int>('row_version'),
+      'blocks': noteBodyRows
+          .map(
+            (row) => <String, Object?>{
+              'type': row.read<String>('block_type'),
+              'text': row.read<String>('plain_text'),
+              'checked': row.readNullable<bool>('is_checked'),
+              'sortRank': row.read<int>('sort_rank'),
+              'semanticHash': row.read<String>('semantic_hash'),
+              'rowVersion': row.read<int>('row_version'),
+            },
+          )
+          .toList(growable: false),
+    },
+    'folder': <String, Object?>{
+      'id': folder.read<String>('id'),
+      'name': folder.read<String>('name'),
+      'normalizedName': folder.read<String>('normalized_name'),
+      'sortRank': folder.read<int>('sort_rank'),
+      'createdAtUtcMicros': folder.read<int>('created_at_utc'),
+      'updatedAtUtcMicros': folder.read<int>('updated_at_utc'),
+      'rowVersion': folder.read<int>('row_version'),
+    },
+    'past': <String, Object?>{
+      'eventId': pastEvent.read<String>('id'),
+      'documentId': pastEvent.read<String>('document_id'),
+      'sourceTaskId': pastEvent.read<String>('source_task_id'),
+      'appendSequence': pastEvent.read<int>('append_sequence'),
+      'completedAtUtcMicros': pastEvent.read<int>('completed_at_utc'),
+      'completionLocalDate': pastEvent.read<String>('completion_local_date'),
+      'completionZoneId': pastEvent.read<String>('completion_zone_id'),
+      'sourceSnapshotVersion': pastEvent.read<int>('source_snapshot_version'),
+      'sourceSnapshotJson': pastEvent.read<String>('source_snapshot_json'),
+      'sourceSha256': pastEvent.read<String>('source_sha256'),
+      'anchorState': pastEvent.read<String>('anchor_state'),
+      'createdAtUtcMicros': pastEvent.read<int>('created_at_utc'),
+      'updatedAtUtcMicros': pastEvent.read<int>('updated_at_utc'),
+      'rowVersion': pastEvent.read<int>('row_version'),
+      'parts': pastParts
+          .map(
+            (row) => <String, Object?>{
+              'id': row.read<String>('id'),
+              'role': row.read<String>('role'),
+              'sourceOrder': row.read<int>('source_order'),
+              'originalPayloadJson': row.read<String>('original_payload_json'),
+              'originalPlainText': row.read<String>('original_plain_text'),
+              'originalSha256': row.read<String>('original_sha256'),
+            },
+          )
+          .toList(growable: false),
+      'anchors': pastAnchors
+          .map(
+            (row) => <String, Object?>{
+              'id': row.read<String>('id'),
+              'partId': row.read<String>('part_id'),
+              'currentBlockId': row.readNullable<String>('current_block_id'),
+              'lastKnownBlockId': row.read<String>('last_known_block_id'),
+              'relation': row.read<String>('relation'),
+              'linkState': row.read<String>('link_state'),
+              'currentSha256': row.readNullable<String>('current_sha256'),
+              'currentBlockType': row.readNullable<String>(
+                'current_block_type',
+              ),
+              'currentPlainText': row.readNullable<String>(
+                'current_plain_text',
+              ),
+              'currentSortRank': row.readNullable<int>('current_sort_rank'),
+            },
+          )
+          .toList(growable: false),
+      'documentBlocks': pastDocumentBlocks
+          .map(
+            (row) => <String, Object?>{
+              'id': row.read<String>('id'),
+              'type': row.read<String>('block_type'),
+              'text': row.read<String>('plain_text'),
+              'checked': row.readNullable<bool>('is_checked'),
+              'sortRank': row.read<int>('sort_rank'),
+              'semanticHash': row.read<String>('semantic_hash'),
+              'rowVersion': row.read<int>('row_version'),
+            },
+          )
+          .toList(growable: false),
+    },
+    'settings': <String, Object?>{
+      'localeMode': settings.read<String>('locale_mode'),
+      'fontMode': settings.read<String>('font_mode'),
+      'textScalePercent': settings.read<int>('text_scale_percent'),
+      'density': settings.read<String>('density'),
+      'defaultSoundEnabled': settings.read<bool>('default_sound_enabled'),
+      'defaultVibrationEnabled': settings.read<bool>(
+        'default_vibration_enabled',
+      ),
+      'defaultSnoozeMinutes': settings.read<int>('default_snooze_minutes'),
+      'autoBackupEnabled': settings.read<bool>('auto_backup_enabled'),
+      'autoBackupHourLocal': settings.read<int>('auto_backup_hour_local'),
+      'autoBackupMinuteLocal': settings.read<int>('auto_backup_minute_local'),
+      'backupEncryptionEnabled': settings.read<bool>(
+        'backup_encryption_enabled',
+      ),
+      'helpSeenVersion': settings.read<int>('help_seen_version'),
+      'updatedAtUtcMicros': settings.read<int>('updated_at_utc'),
+      'rowVersion': settings.read<int>('row_version'),
+    },
   };
+}
+
+Future<void> waitForReleaseAcceptanceHostSignal() async {
+  const timeout = Duration(minutes: 18);
+  const interval = Duration(milliseconds: 250);
+  final deadline = DateTime.now().add(timeout);
+  final signal = await releaseAcceptanceEvidenceFile(
+    'notification-observed.signal',
+  );
+  while (DateTime.now().isBefore(deadline)) {
+    if (await signal.exists()) return;
+    await Future<void>.delayed(interval);
+  }
+  throw StateError(
+    'Host notification evidence signal did not arrive within '
+    '${timeout.inMinutes} minutes.',
+  );
 }
 
 String assertReleaseAcceptanceCard(

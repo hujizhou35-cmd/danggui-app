@@ -853,6 +853,17 @@ final class _Audit {
       );
     }
 
+    const smokePath = 'integration_test/run_android_emulator_smoke.sh';
+    final smoke = _requiredText(smokePath);
+    if (smoke != null) {
+      _expectContains(
+        smokePath,
+        smoke,
+        'bash integration_test/run_android_release_acceptance.sh',
+        'successful device smoke must continue into release acceptance',
+      );
+    }
+
     for (final splitContract in <String>[
       '[armeabi-v7a]=1001',
       '[arm64-v8a]=2001',

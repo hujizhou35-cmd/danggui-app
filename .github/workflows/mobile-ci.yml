@@ -229,7 +229,8 @@ jobs:
         run: rm -f "${RUNNER_TEMP}/danggui-release.jks"
 
   android-emulator-smoke:
-    name: Android release acceptance (API ${{ matrix.api-level }})
+    # Keep these display names stable: main branch protection requires them.
+    name: Android cold-start smoke (API ${{ matrix.api-level }})
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -237,6 +238,27 @@ jobs:
       matrix:
         api-level: [24, 36]
     steps:
+      - name: Initialize emulator acceptance evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/danggui-emulator-api-${{ matrix.api-level }}"
+          mkdir -p "${evidence_dir}"
+          printf '%s\n' \
+            '{"status":"initialized","phase":"workflow-started"}' \
+            > "${evidence_dir}/workflow-phase.json"
+          printf '%s\n' \
+            '{"status":"not-captured","phase":"before-overlay-install"}' \
+            > "${evidence_dir}/before.json"
+          printf '%s\n' \
+            '{"status":"not-captured","phase":"after-overlay-install"}' \
+            > "${evidence_dir}/after.json"
+          printf '%s\n' 'not captured' \
+            > "${evidence_dir}/notification-before.txt"
+          printf '%s\n' 'not captured' \
+            > "${evidence_dir}/notification-after.txt"
+          : > "${evidence_dir}/notification-shade.png"
+
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

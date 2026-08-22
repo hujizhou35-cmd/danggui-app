@@ -4,15 +4,17 @@
 
 ## API 24 / 36 模拟器自动证据
 
-每个 API 矩阵均由 CI 始终上传 `danggui-emulator-api-<API>-acceptance-<SHA>`，成功门禁要求同时具备：
+每个 API 矩阵作业一旦开始执行步骤，就会在检出源码和安装工具链之前先创建阶段哨兵；后续用 `if: always()` 上传 `danggui-emulator-api-<API>-acceptance-<SHA>`。若 GitHub 未能分配 runner 或作业被外部取消，则平台无法承诺产出 Artifact。成功门禁要求同时具备：
 
-- `before.json`、`after.json`：dataset、事项、正文、提醒时刻和注册记录一致；`PRAGMA quick_check` 为 `ok`，`foreign_key_check` 为空；事项卡实际渲染包含提醒时间与“提醒”语义。
+- `before.json`、`after.json`：dataset、事项/正文/提醒/注册、笔记及文件夹、过往连续文档/事件/部件/锚点、非默认设置均逐字段一致；`PRAGMA quick_check` 为 `ok`，`foreign_key_check` 为空；事项卡实际渲染包含提醒时间与“提醒”语义。
 - `initial-install.log`、`overlay-install.log`、`package-*.txt`、`overlay-debug-apk.sha256`、`overlay-apk-signature.txt`：明确记录同签名 `adb install --no-streaming -r -t` 覆盖边界。
 - `permission-policy.json`、`permission-dialog.xml`、`notification-appop*.txt`：API 36 由应用发起 `POST_NOTIFICATIONS` 请求，CI 识别真实系统权限弹窗并点击允许；API 24 明确记录运行时权限不适用且验收代码未发起权限请求。
-- `alarm-*.txt`、`notification-before.txt`、`notification-after.txt`、`notification-timing.json`：证明提醒先进入系统 AlarmManager，且未提前、并在 12 分钟硬上限内成为真实系统通知。
+- `alarm-*.txt`、`alarm-contract.json`、`notification-before.txt`、`notification-after.txt`、`notification-timing.json`：数据库中只有一个提醒，证据记录其平台通知 ID 与计划时刻；覆盖安装后它进入系统 AlarmManager，且未提前、并在设备时钟和主机单调时钟的双重硬上限内成为真实系统通知。
 - `notification-shade.png`：展开通知栏后的系统截图；`logcat-final.txt` 和 `script-exit-status.txt` 保留最终诊断。
 
 自动化采用 debug 同签名覆盖，以便通过应用沙盒导出结构化证据。正式发布 APK 的 SHA-256 与证书仍须在下方实体机记录中逐项填写。
+
+Flutter 设备测试结束会强制停止应用并清除未触发的系统 Alarm。为避免把测试宿主副作用误判为产品失败，显式覆盖安装先验证 `MY_PACKAGE_REPLACED` 后闹钟恢复；随后 verify 测试保持运行并等待主机证据信号，主机在应用仍存活时完成 Alarm、通知栏、截图和 UI XML 取证，再允许测试正常退出。自动化不把 force-stop 后的 Alarm 当作产品状态。
 
 ## 代表性实体机人工验收（未签署）
 

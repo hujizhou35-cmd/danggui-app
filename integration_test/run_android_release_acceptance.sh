@@ -12,13 +12,18 @@ readonly evidence_dir="${RUNNER_TEMP:?RUNNER_TEMP is not set}/danggui-emulator-a
 readonly acceptance_define="DANGGUI_ACCEPTANCE_API_LEVEL=${api_level}"
 readonly build_apk='build/app/outputs/flutter-apk/app-debug.apk'
 readonly app_evidence_path='files/danggui/release-acceptance'
+readonly host_signal_name='notification-observed.signal'
 mkdir -p "${evidence_dir}"
+
+verify_pid=''
+verify_status=''
 
 readonly before_json="${evidence_dir}/before.json"
 readonly after_json="${evidence_dir}/after.json"
 readonly notification_before="${evidence_dir}/notification-before.txt"
 readonly notification_after="${evidence_dir}/notification-after.txt"
 readonly notification_screenshot="${evidence_dir}/notification-shade.png"
+readonly workflow_phase="${evidence_dir}/workflow-phase.json"
 
 # These explicit placeholders make early, fail-closed exits diagnosable while
 # keeping the always-uploaded artifact contract stable.
@@ -27,6 +32,8 @@ printf '%s\n' '{"status":"not-captured","phase":"after-overlay-install"}' > "${a
 printf '%s\n' 'not captured' > "${notification_before}"
 printf '%s\n' 'not captured' > "${notification_after}"
 : > "${notification_screenshot}"
+printf '%s\n' '{"status":"running","phase":"release-acceptance"}' \
+  > "${workflow_phase}"
 
 bounded_adb() {
   timeout --signal=TERM --kill-after=5s 45s adb -s emulator-5554 "$@"
@@ -46,7 +53,8 @@ capture_alarm_when_scheduled() {
   local deadline=$(( SECONDS + 30 ))
   while true; do
     bounded_adb shell dumpsys alarm > "${destination}"
-    if grep -Fq "${package_name}" "${destination}"; then
+    if grep -Fq "${package_name}" "${destination}" &&
+       grep -Fq 'flutterlocalnotifications' "${destination}"; then
       return 0
     fi
     if (( SECONDS >= deadline )); then
@@ -60,7 +68,12 @@ capture_exit_evidence() {
   local status=$?
   trap - EXIT
   set +e
-  bounded_adb devices -l > "${evidence_dir}/adb-devices-final.txt" 2>&1
+  if [[ -n "${verify_pid}" ]] && kill -0 "${verify_pid}" 2>/dev/null; then
+    kill "${verify_pid}" 2>/dev/null
+    wait "${verify_pid}" 2>/dev/null
+  fi
+  timeout --signal=TERM --kill-after=5s 20s adb devices -l \
+    > "${evidence_dir}/adb-devices-final.txt" 2>&1
   bounded_adb shell dumpsys package "${package_name}" \
     > "${evidence_dir}/package-final.txt" 2>&1
   bounded_adb shell dumpsys alarm > "${evidence_dir}/alarm-final.txt" 2>&1
@@ -77,6 +90,15 @@ capture_exit_evidence() {
     adb -s emulator-5554 logcat -d -v threadtime \
     > "${evidence_dir}/logcat-final.txt" 2>&1
   printf '%s\n' "${status}" > "${evidence_dir}/script-exit-status.txt"
+  if (( status == 0 )); then
+    printf '%s\n' \
+      '{"status":"passed","phase":"release-acceptance-complete","exitStatus":0}' \
+      > "${workflow_phase}"
+  else
+    printf '%s\n' \
+      "{\"status\":\"failed\",\"phase\":\"release-acceptance\",\"exitStatus\":${status}}" \
+      > "${workflow_phase}"
+  fi
   exit "${status}"
 }
 trap capture_exit_evidence EXIT
@@ -96,6 +118,66 @@ run_flutter_logged() {
     return "${statuses[0]}"
   fi
   return "${statuses[1]}"
+}
+
+start_verify_logged() {
+  bounded_adb shell run-as "${package_name}" rm -f \
+    "${app_evidence_path}/${host_signal_name}"
+  (
+    set -o pipefail
+    timeout --signal=TERM --kill-after=30s 20m \
+      flutter test --no-pub \
+        integration_test/release_acceptance_verify_test.dart \
+        -d emulator-5554 --reporter expanded \
+        --dart-define="${acceptance_define}" 2>&1 |
+      tee "${evidence_dir}/verify.log"
+  ) &
+  verify_pid=$!
+}
+
+wait_for_verify_evidence() {
+  local destination="$1"
+  local deadline=$(( SECONDS + 180 ))
+  local candidate="${destination}.partial"
+  local read_status
+  while (( SECONDS < deadline )); do
+    set +e
+    bounded_adb exec-out run-as "${package_name}" \
+      cat "${app_evidence_path}/after.json" > "${candidate}" 2>/dev/null
+    read_status=$?
+    set -e
+    if (( read_status == 0 )) && jq -e . "${candidate}" >/dev/null 2>&1; then
+      mv "${candidate}" "${destination}"
+      return 0
+    fi
+    if ! kill -0 "${verify_pid}" 2>/dev/null; then
+      set +e
+      wait "${verify_pid}"
+      verify_status=$?
+      set -e
+      verify_pid=''
+      echo "Verify integration test exited before evidence was ready (status ${verify_status})." >&2
+      return 1
+    fi
+    sleep 1
+  done
+  echo 'Verify integration test did not publish after.json within 180 seconds.' >&2
+  return 1
+}
+
+finish_verify_logged() {
+  local status
+  if [[ -z "${verify_pid}" ]]; then
+    [[ -n "${verify_status}" ]] || return 1
+    return "${verify_status}"
+  fi
+  set +e
+  wait "${verify_pid}"
+  status=$?
+  set -e
+  verify_pid=''
+  verify_status="${status}"
+  return "${status}"
 }
 
 run_seed_with_permission_contract() {
@@ -293,7 +375,10 @@ jq -e \
   '.phase == "before-overlay-install" and .apiLevel == $api and
    .scope.sameVersionSignedOverlayOnly == true and
    .scope.schemaMigrationClaimed == false and
+   .scope.crossDomainSentinels == ["task", "reminder", "note", "folder", "past", "settings"] and
    .quickCheck == ["ok"] and .foreignKeyCheck == [] and
+   .counts.reminders == 1 and .counts.notes == 1 and .counts.folders == 1 and
+   .counts.past_events == 1 and
    .task.reminderStatus == "scheduled" and
    .ui.reminderTextVisible == true' "${before_json}" >/dev/null
 if (( api_level >= 33 )); then
@@ -314,12 +399,27 @@ readonly apksigner="${ANDROID_SDK_ROOT:?ANDROID_SDK_ROOT is not set}/build-tools
 "${apksigner}" verify --verbose --print-certs "${build_apk}" \
   > "${evidence_dir}/overlay-apk-signature.txt" 2>&1
 grep -Fq 'Verified using v' "${evidence_dir}/overlay-apk-signature.txt"
-grep -Fq 'Signer #1 certificate SHA-256 digest:' \
+grep -Fxq 'Number of signers: 1' \
   "${evidence_dir}/overlay-apk-signature.txt"
+mapfile -t signer_digests < <(
+  sed -n -E 's/^.*certificate SHA-256 digest:[[:space:]]*//p' \
+    "${evidence_dir}/overlay-apk-signature.txt"
+)
+(( ${#signer_digests[@]} > 0 ))
+normalized_signer_digest="${signer_digests[0]//:/}"
+normalized_signer_digest="${normalized_signer_digest,,}"
+[[ "${normalized_signer_digest}" =~ ^[0-9a-f]{64}$ ]]
+for signer_digest in "${signer_digests[@]}"; do
+  signer_digest="${signer_digest//:/}"
+  signer_digest="${signer_digest,,}"
+  [[ "${signer_digest}" == "${normalized_signer_digest}" ]]
+done
+printf '%s\n' "${normalized_signer_digest}" \
+  > "${evidence_dir}/overlay-apk-certificate-sha256.txt"
 
 bounded_adb shell dumpsys package "${package_name}" \
   > "${evidence_dir}/package-before-overlay.txt"
-capture_alarm_when_scheduled "${evidence_dir}/alarm-before-overlay.txt"
+bounded_adb shell dumpsys alarm > "${evidence_dir}/alarm-before-overlay.txt"
 capture_notification_dump "${notification_before}"
 expected_title="$(jq -er '.expectedSystemNotification.title' "${before_json}")"
 expected_body="$(jq -er '.expectedSystemNotification.body' "${before_json}")"
@@ -333,13 +433,29 @@ bounded_adb shell dumpsys package "${package_name}" \
   > "${evidence_dir}/package-after-explicit-overlay.txt"
 capture_alarm_when_scheduled \
   "${evidence_dir}/alarm-after-explicit-overlay.txt"
+platform_notification_id="$(
+  jq -er '.notificationRegistration.platformNotificationId' "${before_json}"
+)"
+[[ "${platform_notification_id}" =~ ^[0-9]+$ ]]
+scheduled_micros="$(jq -er '.task.reminderScheduledAtUtcMicros' "${before_json}")"
+[[ "${scheduled_micros}" =~ ^[0-9]+$ ]]
+scheduled_seconds=$(( scheduled_micros / 1000000 ))
+printf '%s\n' \
+  "{\"platformNotificationId\":${platform_notification_id},\"scheduledEpochSeconds\":${scheduled_seconds},\"solePersistedReminder\":true,\"alarmDump\":\"alarm-after-explicit-overlay.txt\"}" \
+  > "${evidence_dir}/alarm-contract.json"
+jq -e . "${evidence_dir}/alarm-contract.json" >/dev/null
 
-run_flutter_logged verify integration_test/release_acceptance_verify_test.dart
-extract_app_evidence after.json "${after_json}"
+start_verify_logged
+wait_for_verify_evidence "${after_json}"
+if ! kill -0 "${verify_pid}" 2>/dev/null; then
+  echo 'Verify integration test stopped before host notification checks.' >&2
+  exit 1
+fi
 jq -e \
   --argjson api "${api_level}" \
   '.phase == "after-overlay-install" and .apiLevel == $api and
    ([.retentionAssertions[]] | all) and
+   .scope.crossDomainSentinels == ["task", "reminder", "note", "folder", "past", "settings"] and
    .scope.schemaMigrationClaimed == false and
    .scope.physicalDeviceHapticsOrOemClaimed == false' "${after_json}" >/dev/null
 if (( api_level >= 33 )); then
@@ -351,15 +467,28 @@ else
 fi
 bounded_adb shell dumpsys package "${package_name}" \
   > "${evidence_dir}/package-after-verify.txt"
-bounded_adb shell dumpsys alarm > "${evidence_dir}/alarm-after-verify.txt"
+capture_alarm_when_scheduled "${evidence_dir}/alarm-after-verify.txt"
+sha256sum "${evidence_dir}/alarm-after-explicit-overlay.txt" \
+  "${evidence_dir}/alarm-after-verify.txt" \
+  > "${evidence_dir}/alarm-dumps.sha256"
 
-scheduled_micros="$(jq -er '.task.reminderScheduledAtUtcMicros' "${before_json}")"
-[[ "${scheduled_micros}" =~ ^[0-9]+$ ]]
-scheduled_seconds=$(( scheduled_micros / 1000000 ))
 deadline_seconds=$(( scheduled_seconds + 720 ))
+current_seconds="$(device_epoch_seconds)"
+remaining_seconds=$(( deadline_seconds - current_seconds ))
+if (( remaining_seconds < 0 )); then
+  remaining_seconds=0
+elif (( remaining_seconds > 1020 )); then
+  echo 'The persisted reminder deadline is outside the bounded acceptance window.' >&2
+  exit 1
+fi
+host_deadline=$(( SECONDS + remaining_seconds + 30 ))
 notification_seen=0
 observed_seconds=0
 while true; do
+  if ! kill -0 "${verify_pid}" 2>/dev/null; then
+    echo 'Verify integration test stopped before notification evidence completed.' >&2
+    exit 1
+  fi
   capture_notification_dump "${evidence_dir}/notification-poll.txt"
   current_seconds="$(device_epoch_seconds)"
   if grep -Fq "${expected_title}" "${evidence_dir}/notification-poll.txt" &&
@@ -368,7 +497,7 @@ while true; do
     notification_seen=1
     break
   fi
-  if (( current_seconds >= deadline_seconds )); then
+  if (( current_seconds >= deadline_seconds || SECONDS >= host_deadline )); then
     break
   fi
   sleep 5
@@ -407,6 +536,10 @@ bounded_adb exec-out cat /sdcard/danggui-notification-shade.xml \
   > "${evidence_dir}/notification-shade.xml" 2>&1
 grep -Fq "${expected_title}" "${evidence_dir}/notification-shade.xml"
 bounded_adb shell dumpsys alarm > "${evidence_dir}/alarm-after-notification.txt"
+
+bounded_adb shell run-as "${package_name}" touch \
+  "${app_evidence_path}/${host_signal_name}"
+finish_verify_logged
 
 printf '%s\n' 'release acceptance passed' \
   > "${evidence_dir}/acceptance-result.txt"

@@ -26,6 +26,10 @@ void main() {
     final title = beforeTask['title']! as String;
     final beforeRegistration =
         before['notificationRegistration']! as Map<String, Object?>;
+    final beforeNote = before['note']! as Map<String, Object?>;
+    final beforePast = before['past']! as Map<String, Object?>;
+    final noteId = beforeNote['id']! as String;
+    final pastTaskId = beforePast['sourceTaskId']! as String;
 
     await waitForFinder(
       tester,
@@ -50,6 +54,8 @@ void main() {
     final snapshot = await databaseSnapshot(
       database,
       taskId: taskId,
+      noteId: noteId,
+      pastTaskId: pastTaskId,
       notificationsGranted: notificationsGranted == true,
     );
     final afterTask = snapshot['task']! as Map<String, Object?>;
@@ -77,6 +83,8 @@ void main() {
           afterTask['updatedAtUtcMicros'] == beforeTask['updatedAtUtcMicros'],
       'taskRowVersionRetained':
           afterTask['rowVersion'] == beforeTask['rowVersion'],
+      'taskManualRankRetained':
+          afterTask['manualRank'] == beforeTask['manualRank'],
       'taskDueDateRetained':
           afterTask['dueLocalDate'] == beforeTask['dueLocalDate'],
       'reminderIdRetained': afterTask['reminderId'] == beforeTask['reminderId'],
@@ -107,6 +115,16 @@ void main() {
       'notificationRegistrationRevisionRetained':
           afterRegistration?['scheduleRevision'] ==
           beforeRegistration['scheduleRevision'],
+      'notificationRegistrationRetained':
+          jsonEncode(afterRegistration) == jsonEncode(beforeRegistration),
+      'noteRetained':
+          jsonEncode(snapshot['note']) == jsonEncode(before['note']),
+      'folderRetained':
+          jsonEncode(snapshot['folder']) == jsonEncode(before['folder']),
+      'pastRetained':
+          jsonEncode(snapshot['past']) == jsonEncode(before['past']),
+      'settingsRetained':
+          jsonEncode(snapshot['settings']) == jsonEncode(before['settings']),
       'platformOutboxSucceeded': snapshot['nonSucceededPlatformJobCount'] == 0,
       'quickCheckOk': _isQuickCheckOk(snapshot['quickCheck']),
       'foreignKeysOk': (snapshot['foreignKeyCheck']! as List<Object?>).isEmpty,
@@ -125,6 +143,14 @@ void main() {
         'sameVersionSignedOverlayOnly': true,
         'schemaMigrationClaimed': false,
         'physicalDeviceHapticsOrOemClaimed': false,
+        'crossDomainSentinels': <String>[
+          'task',
+          'reminder',
+          'note',
+          'folder',
+          'past',
+          'settings',
+        ],
       },
       ...snapshot,
       'ui': <String, Object?>{
@@ -143,6 +169,7 @@ void main() {
       isEmpty,
       reason: 'Every same-version overlay retention assertion must pass.',
     );
+    await waitForReleaseAcceptanceHostSignal();
   });
 }
 
