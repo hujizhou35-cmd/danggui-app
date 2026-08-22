@@ -8,7 +8,7 @@
 
 - `before.json`、`after.json`：dataset、事项/正文/提醒/注册、笔记及文件夹、过往连续文档/事件/部件/锚点、非默认设置均逐字段一致；`PRAGMA quick_check` 为 `ok`，`foreign_key_check` 为空；事项卡实际渲染包含提醒时间与“提醒”语义。
 - `initial-install.log`、`overlay-install.log`、`package-*.txt`、`overlay-debug-apk.sha256`、`overlay-apk-signature.txt`：明确记录同签名 `adb install --no-streaming -r -t` 覆盖边界。
-- `permission-policy.json`、`permission-dialog.xml`、`notification-appop*.txt`：API 36 由应用发起 `POST_NOTIFICATIONS` 请求，CI 识别真实系统权限弹窗并点击允许；API 24 明确记录运行时权限不适用且验收代码未发起权限请求。
+- `permission-policy.json`、`permission-dialog.xml`、`notification-appop*.txt`：API 36 先要求撤销命令成功、应用声明 `POST_NOTIFICATIONS` 且系统未明确报告 `granted=true`；Android 对从未请求的权限可能省略 `granted=false` 行，因此真正的硬门禁是随后必须观察到应用发起的系统权限弹窗、由系统 UI 点击允许，并在流程后看到 `granted=true`。API 24 明确记录运行时权限不适用且验收代码未发起权限请求。
 - `alarm-*.txt`、`alarm-contract.json`、`notification-before.txt`、`notification-after.txt`、`notification-timing.json`：数据库中只有一个提醒，证据记录其平台通知 ID 与计划时刻；覆盖后启动生产入口并执行正常协调，随后证明它存在于系统 AlarmManager，且未提前、并在设备时钟和主机单调时钟的双重硬上限内成为真实系统通知。证据不把 Alarm 的恢复来源归因于应用协调器或插件安装广播中的任一方。
 - `notification-shade.png`：展开通知栏后的系统截图；`logcat-final.txt` 和 `script-exit-status.txt` 保留最终诊断。
 

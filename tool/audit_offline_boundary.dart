@@ -842,6 +842,8 @@ final class _Audit {
       'flutter test --reporter expanded',
       'bash tool/verify_android_artifacts.sh --self-test',
       'bash integration_test/run_android_emulator_smoke_self_test.sh',
+      'bash integration_test/run_android_release_acceptance.sh',
+      '--self-test-permission-parser',
       'bash tool/verify_android_artifacts.sh',
       'bash tool/build_ios_unsigned.sh',
     ]) {

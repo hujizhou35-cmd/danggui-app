@@ -1,6 +1,64 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+notification_permission_is_declared_and_not_granted() {
+  local package_dump="$1"
+  grep -Eq \
+    '^[[:space:]]*android\.permission\.POST_NOTIFICATIONS[[:space:]]*$' \
+    "${package_dump}" &&
+    ! grep -Eq \
+      'android\.permission\.POST_NOTIFICATIONS:[[:space:]]*granted=true' \
+      "${package_dump}"
+}
+
+run_notification_permission_parser_self_test() {
+  local fixture
+  permission_parser_fixture="$(mktemp)"
+  fixture="${permission_parser_fixture}"
+  trap 'rm -f -- "${permission_parser_fixture}"' EXIT
+
+  printf '%s\n' \
+    'requested permissions:' \
+    '  android.permission.POST_NOTIFICATIONS' \
+    'runtime permissions:' > "${fixture}"
+  notification_permission_is_declared_and_not_granted "${fixture}"
+
+  printf '%s\n' \
+    'requested permissions:' \
+    '  android.permission.POST_NOTIFICATIONS' \
+    'runtime permissions:' \
+    '  android.permission.POST_NOTIFICATIONS: granted=false, flags=[]' \
+    > "${fixture}"
+  notification_permission_is_declared_and_not_granted "${fixture}"
+
+  printf '%s\n' \
+    'requested permissions:' \
+    '  android.permission.POST_NOTIFICATIONS' \
+    'runtime permissions:' \
+    '  android.permission.POST_NOTIFICATIONS: granted=true, flags=[]' \
+    > "${fixture}"
+  if notification_permission_is_declared_and_not_granted "${fixture}"; then
+    echo 'Permission parser accepted an explicitly granted permission.' >&2
+    return 1
+  fi
+
+  printf '%s\n' \
+    'requested permissions:' \
+    'runtime permissions:' > "${fixture}"
+  if notification_permission_is_declared_and_not_granted "${fixture}"; then
+    echo 'Permission parser accepted a package without the declaration.' >&2
+    return 1
+  fi
+
+  echo 'Android initial notification permission parser self-test passed.'
+}
+
+if [[ "${1:-}" == '--self-test-permission-parser' ]]; then
+  (( $# == 1 )) || exit 64
+  run_notification_permission_parser_self_test
+  exit 0
+fi
+
 if (( $# != 1 )) || [[ ! "$1" =~ ^[0-9]+$ ]]; then
   echo "Usage: $0 <api-level>" >&2
   exit 64
@@ -355,8 +413,11 @@ fi
 bounded_adb shell dumpsys package "${package_name}" \
   > "${evidence_dir}/package-initial.txt"
 if (( api_level >= 33 )); then
-  grep -Eq 'android.permission.POST_NOTIFICATIONS: granted=false' \
-    "${evidence_dir}/package-initial.txt"
+  if ! notification_permission_is_declared_and_not_granted \
+    "${evidence_dir}/package-initial.txt"; then
+    echo 'POST_NOTIFICATIONS was not declared or remained explicitly granted after revoke.' >&2
+    exit 1
+  fi
 fi
 bounded_adb shell cmd appops get "${package_name}" POST_NOTIFICATION \
   > "${evidence_dir}/notification-appop.txt" 2>&1 || true

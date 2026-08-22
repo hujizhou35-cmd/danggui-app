@@ -80,8 +80,11 @@ jobs:
       - name: Test Android certificate report parser
         run: bash tool/verify_android_artifacts.sh --self-test
 
-      - name: Test Android emulator retry gate
-        run: bash integration_test/run_android_emulator_smoke_self_test.sh
+      - name: Test Android emulator gates
+        run: |
+          bash integration_test/run_android_emulator_smoke_self_test.sh
+          bash integration_test/run_android_release_acceptance.sh \
+            --self-test-permission-parser
 
       - name: Analyze
         run: flutter analyze --fatal-infos
