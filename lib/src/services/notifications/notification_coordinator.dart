@@ -102,6 +102,8 @@ final class NotificationCoordinator {
   NotificationPresentation? _presentation;
   bool _reconciling = false;
   bool _reconcileRequested = false;
+  bool _interruptedJobsRecovered = false;
+  bool _startupRescheduleComplete = false;
 
   Future<void> initialize() async {
     if (!_gateway.isSupported) return;
@@ -326,6 +328,16 @@ final class NotificationCoordinator {
       await _restorePermissionDeniedReminders();
     }
     final now = _nowMicros();
+    if (!_interruptedJobsRecovered) {
+      await _recoverInterruptedJobs(database, now);
+      _interruptedJobsRecovered = true;
+    }
+    if (!_startupRescheduleComplete) {
+      _startupRescheduleComplete = await _rescheduleFutureRemindersAfterStart(
+        database,
+        now,
+      );
+    }
     final rows = await database
         .customSelect(
           'SELECT pj.id AS job_id, pj.kind, pj.attempts, '
@@ -351,6 +363,88 @@ final class NotificationCoordinator {
       await _runJob(database, row, now);
     }
     if (rows.length == 64) _reconcileRequested = true;
+  }
+
+  /// A persisted `running` row can only belong to an interrupted coordinator
+  /// when a new process starts. Return it to the ordinary durable retry path
+  /// before startup device-state repair decides which revisions it owns.
+  Future<void> _recoverInterruptedJobs(
+    DangguiDatabase database,
+    int now,
+  ) async {
+    await database.customUpdate(
+      'UPDATE platform_jobs SET status = ?, next_attempt_at_utc = ?, '
+      'last_error_code = ?, updated_at_utc = ? WHERE status = ?',
+      variables: <Variable<Object>>[
+        Variable.withString(PlatformJobStatus.failed.name),
+        Variable.withInt(now),
+        const Variable<String>('interrupted_recovered'),
+        Variable.withInt(now),
+        Variable.withString(PlatformJobStatus.running.name),
+      ],
+      updates: <TableInfo<Table, Object?>>{database.platformJobs},
+    );
+  }
+
+  /// Rebuilds device-owned notification state once per process start.
+  ///
+  /// Android may remove alarms when an application is force-stopped while the
+  /// durable outbox correctly remains [PlatformJobStatus.succeeded]. Reusing
+  /// the same platform notification id makes this operation idempotent. Jobs
+  /// still owned by the outbox are excluded so the two recovery paths cannot
+  /// schedule the same revision in one reconciliation pass.
+  Future<bool> _rescheduleFutureRemindersAfterStart(
+    DangguiDatabase database,
+    int now,
+  ) async {
+    final rows = await database
+        .customSelect(
+          'SELECT r.id AS reminder_id, r.task_id, r.scheduled_at_utc, '
+          'r.sound_enabled, r.vibration_enabled, '
+          'r.schedule_revision AS aggregate_revision, t.title, t.plan_text, '
+          's.default_snooze_minutes, nr.platform_notification_id '
+          'FROM reminders r '
+          'JOIN tasks t ON t.id = r.task_id '
+          'JOIN app_settings s ON s.id = 1 '
+          'LEFT JOIN notification_registrations nr '
+          'ON nr.reminder_id = r.id AND nr.platform = ? '
+          'AND nr.schedule_revision = r.schedule_revision '
+          'WHERE r.status = ? AND r.scheduled_at_utc > ? AND t.status = ? '
+          'AND NOT EXISTS ('
+          'SELECT 1 FROM platform_jobs active_job '
+          'WHERE active_job.aggregate_id = r.id '
+          'AND active_job.aggregate_revision = r.schedule_revision '
+          'AND active_job.status IN (?, ?, ?)) '
+          'ORDER BY r.scheduled_at_utc, r.id',
+          variables: <Variable<Object>>[
+            Variable.withString(_gateway.platformName),
+            Variable.withString(ReminderStatus.scheduled.name),
+            Variable.withInt(now),
+            Variable.withString(TaskStatus.active.name),
+            Variable.withString(PlatformJobStatus.pending.name),
+            Variable.withString(PlatformJobStatus.failed.name),
+            Variable.withString(PlatformJobStatus.running.name),
+          ],
+        )
+        .get();
+    var complete = true;
+    for (final row in rows) {
+      try {
+        final scheduled = await _schedule(
+          database,
+          row,
+          now,
+          notificationId: row.readNullable<int>('platform_notification_id'),
+        );
+        complete = scheduled && complete;
+      } on Object {
+        // A startup repair is derived device state, not a new business event.
+        // Leave it incomplete so a later reconcile retries without creating a
+        // duplicate or misleading outbox job.
+        complete = false;
+      }
+    }
+    return complete;
   }
 
   Future<void> _runJob(DangguiDatabase database, QueryRow row, int now) async {
@@ -408,28 +502,28 @@ final class NotificationCoordinator {
   Future<bool> _schedule(
     DangguiDatabase database,
     QueryRow row,
-    int now,
-  ) async {
+    int now, {
+    int? notificationId,
+  }) async {
     final scheduledAt = row.read<int>('scheduled_at_utc');
     final reminderId = row.read<String>('reminder_id');
-    final id = _notificationId(reminderId);
+    final id = notificationId ?? _notificationId(reminderId);
     if (scheduledAt <= now) {
       await _gateway.cancel(id);
       return true;
     }
     final plan = row.read<String>('plan_text').trim();
+    final presentation =
+        _presentation ??
+        _notificationPresentation(
+          LocaleMode.system,
+          systemLocaleName: _systemLocaleName(),
+        );
     await _gateway.schedule(
       LocalNotificationRequest(
         notificationId: id,
         title: row.read<String>('title'),
-        body: plan.isEmpty
-            ? (_presentation ??
-                      _notificationPresentation(
-                        LocaleMode.system,
-                        systemLocaleName: _systemLocaleName(),
-                      ))
-                  .emptyPlanBody
-            : plan,
+        body: plan.isEmpty ? presentation.emptyPlanBody : plan,
         scheduledAtUtc: DateTime.fromMicrosecondsSinceEpoch(
           scheduledAt,
           isUtc: true,
@@ -468,7 +562,14 @@ final class NotificationCoordinator {
       'scheduled_locale = excluded.scheduled_locale, '
       'registered_at_utc = excluded.registered_at_utc, '
       'last_error_code = NULL',
-      <Object?>[reminderId, _gateway.platformName, id, revision, 'system', now],
+      <Object?>[
+        reminderId,
+        _gateway.platformName,
+        id,
+        revision,
+        presentation.localeTag,
+        now,
+      ],
     );
     return true;
   }

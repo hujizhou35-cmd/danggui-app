@@ -63,6 +63,195 @@ void main() {
     },
   );
 
+  test(
+    'new coordinator reschedules a succeeded future reminder exactly once',
+    () async {
+      await _createFutureReminder(tasks, nowUtc);
+      await coordinator.reconcile();
+      final originalRegistration = await database
+          .select(database.notificationRegistrations)
+          .getSingle();
+      await database.customStatement(
+        'UPDATE notification_registrations SET platform_notification_id = ?',
+        <Object?>[424242],
+      );
+      final originalJobs = await database.select(database.platformJobs).get();
+      expect(originalJobs, hasLength(1));
+      expect(originalJobs.single.status, PlatformJobStatus.succeeded);
+
+      nowUtc = nowUtc.add(const Duration(minutes: 1));
+      gateway = FakeNotificationGateway();
+      coordinator = NotificationCoordinator(
+        () async => database,
+        gateway: gateway,
+        nowUtc: () => nowUtc,
+        systemLocaleName: () => 'zh_CN',
+      );
+
+      await coordinator.reconcile();
+      await coordinator.reconcile();
+
+      expect(gateway.scheduleCalls, 1);
+      expect(gateway.scheduled.single.notificationId, 424242);
+      final repairedRegistration = await database
+          .select(database.notificationRegistrations)
+          .getSingle();
+      expect(repairedRegistration.platformNotificationId, 424242);
+      expect(
+        repairedRegistration.scheduleRevision,
+        originalRegistration.scheduleRevision,
+      );
+      final repairedJobs = await database.select(database.platformJobs).get();
+      expect(repairedJobs, hasLength(originalJobs.length));
+      expect(repairedJobs.single.status, PlatformJobStatus.succeeded);
+    },
+  );
+
+  test(
+    'failed startup reschedule retries without creating another outbox job',
+    () async {
+      await _createFutureReminder(tasks, nowUtc);
+      await coordinator.reconcile();
+      final registration = await database
+          .select(database.notificationRegistrations)
+          .getSingle();
+
+      gateway = FakeNotificationGateway()..scheduleFailuresRemaining = 1;
+      coordinator = NotificationCoordinator(
+        () async => database,
+        gateway: gateway,
+        nowUtc: () => nowUtc,
+        systemLocaleName: () => 'zh_CN',
+      );
+
+      await coordinator.reconcile();
+      expect(gateway.scheduleCalls, 1);
+      expect(gateway.scheduled, isEmpty);
+      var jobs = await database.select(database.platformJobs).get();
+      expect(jobs, hasLength(1));
+      expect(jobs.single.status, PlatformJobStatus.succeeded);
+
+      await coordinator.reconcile();
+      await coordinator.reconcile();
+
+      expect(gateway.scheduleCalls, 2);
+      expect(gateway.scheduled, hasLength(1));
+      expect(
+        gateway.scheduled.single.notificationId,
+        registration.platformNotificationId,
+      );
+      jobs = await database.select(database.platformJobs).get();
+      expect(jobs, hasLength(1));
+      expect(jobs.single.status, PlatformJobStatus.succeeded);
+    },
+  );
+
+  test(
+    'new coordinator recovers an interrupted running job exactly once',
+    () async {
+      await _createFutureReminder(tasks, nowUtc);
+      await coordinator.reconcile();
+      final registration = await database
+          .select(database.notificationRegistrations)
+          .getSingle();
+      final jobBefore = await database
+          .select(database.platformJobs)
+          .getSingle();
+      await database.customStatement(
+        'UPDATE platform_jobs SET status = ?, last_error_code = NULL',
+        <Object?>[PlatformJobStatus.running.name],
+      );
+
+      gateway = FakeNotificationGateway();
+      coordinator = NotificationCoordinator(
+        () async => database,
+        gateway: gateway,
+        nowUtc: () => nowUtc,
+        systemLocaleName: () => 'zh_CN',
+      );
+
+      await coordinator.reconcile();
+      await coordinator.reconcile();
+
+      expect(gateway.scheduleCalls, 1);
+      expect(
+        gateway.scheduled.single.notificationId,
+        registration.platformNotificationId,
+      );
+      final jobAfter = await database.select(database.platformJobs).getSingle();
+      expect(jobAfter.id, jobBefore.id);
+      expect(jobAfter.status, PlatformJobStatus.succeeded);
+      expect(jobAfter.attempts, jobBefore.attempts + 1);
+      expect(jobAfter.lastErrorCode, isNull);
+      expect(await database.select(database.platformJobs).get(), hasLength(1));
+    },
+  );
+
+  test(
+    'startup reschedule preserves snooze options and localized presentation',
+    () async {
+      await database.customStatement(
+        'UPDATE app_settings SET locale_mode = ?, '
+        'default_snooze_minutes = 60 WHERE id = 1',
+        <Object?>[LocaleMode.en.name],
+      );
+      final task = await _createFutureReminder(
+        tasks,
+        nowUtc,
+        soundEnabled: false,
+        vibrationEnabled: true,
+      );
+      await coordinator.reconcile();
+      expect(
+        await coordinator.snoozeReminderForTask(task.id.value, minutes: 30),
+        isTrue,
+      );
+      final reminderBefore = await (database.select(
+        database.reminders,
+      )..where((row) => row.taskId.equals(task.id.value))).getSingle();
+      final registrationBefore = await database
+          .select(database.notificationRegistrations)
+          .getSingle();
+      final jobsBefore = await database.select(database.platformJobs).get();
+
+      gateway = FakeNotificationGateway();
+      coordinator = NotificationCoordinator(
+        () async => database,
+        gateway: gateway,
+        nowUtc: () => nowUtc,
+        systemLocaleName: () => 'zh_CN',
+      );
+
+      await coordinator.reconcile();
+
+      expect(gateway.presentations.single.localeTag, 'en');
+      final request = gateway.scheduled.single;
+      expect(request.notificationId, registrationBefore.platformNotificationId);
+      expect(
+        request.scheduledAtUtc.microsecondsSinceEpoch,
+        reminderBefore.scheduledAtUtc,
+      );
+      expect(request.soundEnabled, isFalse);
+      expect(request.vibrationEnabled, isTrue);
+      expect(request.defaultSnoozeMinutes, 60);
+      expect(request.body, 'Danggui task reminder');
+      final reminderAfter = await (database.select(
+        database.reminders,
+      )..where((row) => row.taskId.equals(task.id.value))).getSingle();
+      expect(reminderAfter.scheduleRevision, reminderBefore.scheduleRevision);
+      expect(reminderAfter.snoozeCount, reminderBefore.snoozeCount);
+      expect(reminderAfter.snoozedUntilUtc, reminderBefore.snoozedUntilUtc);
+      final registrationAfter = await database
+          .select(database.notificationRegistrations)
+          .getSingle();
+      expect(registrationAfter.scheduledLocale, 'en');
+      expect(
+        await database.select(database.platformJobs).get(),
+        hasLength(jobsBefore.length),
+      );
+    },
+  );
+
   const localizedPresentationCases =
       <(LocaleMode, String, String, String, String)>[
         (LocaleMode.zhHans, 'zh', '当归事项提醒', '当归本地事项到期提醒', '10 分钟'),
@@ -272,19 +461,26 @@ void main() {
     expect(gateway.permissionRequests, 1);
   });
 
-  test('stale outbox revision never reaches the platform', () async {
-    await _createFutureReminder(tasks, nowUtc);
-    await database.customStatement(
-      'UPDATE reminders SET schedule_revision = schedule_revision + 1',
-    );
+  test(
+    'stale outbox is discarded while startup repairs the current revision',
+    () async {
+      await _createFutureReminder(tasks, nowUtc);
+      await database.customStatement(
+        'UPDATE reminders SET schedule_revision = schedule_revision + 1',
+      );
 
-    await coordinator.reconcile();
+      await coordinator.reconcile();
 
-    expect(gateway.scheduled, isEmpty);
-    final stale = await database.select(database.platformJobs).getSingle();
-    expect(stale.status, PlatformJobStatus.succeeded);
-    expect(stale.lastErrorCode, 'stale_revision_discarded');
-  });
+      expect(gateway.scheduled, hasLength(1));
+      final registration = await database
+          .select(database.notificationRegistrations)
+          .getSingle();
+      expect(registration.scheduleRevision, 2);
+      final stale = await database.select(database.platformJobs).getSingle();
+      expect(stale.status, PlatformJobStatus.succeeded);
+      expect(stale.lastErrorCode, 'stale_revision_discarded');
+    },
+  );
 
   test(
     'revision changed during platform call is cancelled and not registered',
@@ -357,8 +553,10 @@ void main() {
 
 Future<TaskModel> _createFutureReminder(
   DriftTaskRepository tasks,
-  DateTime nowUtc,
-) async {
+  DateTime nowUtc, {
+  bool soundEnabled = true,
+  bool vibrationEnabled = true,
+}) async {
   final task = await tasks.createTask(const TaskDraft(title: '核对引用'));
   await tasks.setReminder(
     ReminderDraft(
@@ -366,6 +564,8 @@ Future<TaskModel> _createFutureReminder(
       scheduledLocalDateTime: '2026-08-22T12:00:00.000',
       scheduledZoneId: 'UTC',
       scheduledAtUtc: nowUtc.add(const Duration(hours: 2)),
+      soundEnabled: soundEnabled,
+      vibrationEnabled: vibrationEnabled,
     ),
   );
   return task;
@@ -376,6 +576,8 @@ final class FakeNotificationGateway implements NotificationGateway {
   bool permissionGranted = true;
   bool permissionRequestResult = true;
   int permissionRequests = 0;
+  int scheduleCalls = 0;
+  int scheduleFailuresRemaining = 0;
   void Function(String? actionId, String? payload)? onAction;
   Future<void> Function(LocalNotificationRequest request)? onSchedule;
   final List<LocalNotificationRequest> scheduled = [];
@@ -408,6 +610,11 @@ final class FakeNotificationGateway implements NotificationGateway {
 
   @override
   Future<void> schedule(LocalNotificationRequest request) async {
+    scheduleCalls += 1;
+    if (scheduleFailuresRemaining > 0) {
+      scheduleFailuresRemaining -= 1;
+      throw StateError('simulated schedule failure');
+    }
     scheduled.add(request);
     await onSchedule?.call(request);
   }
