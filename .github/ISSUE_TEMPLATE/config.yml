@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability / 安全漏洞
+    url: https://github.com/hujizhou35-cmd/danggui-app/security/advisories/new
+    about: Please report sensitive security issues privately. 请私下报告敏感安全问题。

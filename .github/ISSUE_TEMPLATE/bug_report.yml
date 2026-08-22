@@ -1,0 +1,53 @@
+name: Bug report / 缺陷报告
+description: Report a reproducible problem without including private user data. 报告可复现问题，请勿包含隐私数据。
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. Never upload real notes, databases, backups, passwords, or signing files.
+        感谢反馈。请勿上传真实笔记、数据库、备份、密码或签名文件。
+  - type: input
+    id: version
+    attributes:
+      label: App version / 应用版本
+      placeholder: 1.0.0+1
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform / 平台
+      options:
+        - Android
+        - iOS source or simulator
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps / 复现步骤
+      placeholder: Provide the smallest reproducible sequence. 请提供最短复现步骤。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / 实际行为
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation / 隐私确认
+      options:
+        - label: I removed all personal content and secrets. 我已移除所有个人内容和密钥。
+          required: true

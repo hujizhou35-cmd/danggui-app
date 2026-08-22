@@ -1,0 +1,150 @@
+import '../domain/models.dart';
+
+const _unset = Object();
+
+final class TaskViewModel {
+  const TaskViewModel({
+    required this.id,
+    required this.title,
+    required this.status,
+    required this.manualRank,
+    this.dueDate,
+    this.reminderAt,
+    this.plan = '',
+    this.body = '',
+    this.soundEnabled = true,
+    this.vibrationEnabled = true,
+  });
+
+  final String id;
+  final String title;
+  final TaskStatus status;
+  final int manualRank;
+  final DateTime? dueDate;
+  final DateTime? reminderAt;
+  final String plan;
+  final String body;
+  final bool soundEnabled;
+  final bool vibrationEnabled;
+
+  TaskViewModel copyWith({
+    String? title,
+    TaskStatus? status,
+    int? manualRank,
+    Object? dueDate = _unset,
+    Object? reminderAt = _unset,
+    String? plan,
+    String? body,
+    bool? soundEnabled,
+    bool? vibrationEnabled,
+  }) {
+    return TaskViewModel(
+      id: id,
+      title: title ?? this.title,
+      status: status ?? this.status,
+      manualRank: manualRank ?? this.manualRank,
+      dueDate: identical(dueDate, _unset) ? this.dueDate : dueDate as DateTime?,
+      reminderAt: identical(reminderAt, _unset)
+          ? this.reminderAt
+          : reminderAt as DateTime?,
+      plan: plan ?? this.plan,
+      body: body ?? this.body,
+      soundEnabled: soundEnabled ?? this.soundEnabled,
+      vibrationEnabled: vibrationEnabled ?? this.vibrationEnabled,
+    );
+  }
+}
+
+final class NoteViewModel {
+  const NoteViewModel({
+    required this.id,
+    required this.title,
+    required this.body,
+    required this.updatedAt,
+    this.folderId,
+    this.pinned = false,
+  });
+
+  final String id;
+  final String title;
+  final String body;
+  final String? folderId;
+  final bool pinned;
+  final DateTime updatedAt;
+
+  NoteViewModel copyWith({
+    String? title,
+    String? body,
+    Object? folderId = _unset,
+    bool? pinned,
+    DateTime? updatedAt,
+  }) {
+    return NoteViewModel(
+      id: id,
+      title: title ?? this.title,
+      body: body ?? this.body,
+      folderId: identical(folderId, _unset)
+          ? this.folderId
+          : folderId as String?,
+      pinned: pinned ?? this.pinned,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+}
+
+final class FolderViewModel {
+  const FolderViewModel({required this.id, required this.name});
+
+  final String id;
+  final String name;
+}
+
+final class PastBlockViewModel {
+  const PastBlockViewModel({
+    required this.id,
+    required this.type,
+    required this.text,
+    this.isChecked,
+  });
+
+  final String id;
+  final DocumentBlockType type;
+  final String text;
+  final bool? isChecked;
+}
+
+final class DangguiAppState {
+  const DangguiAppState({
+    this.tasks = const <TaskViewModel>[],
+    this.notes = const <NoteViewModel>[],
+    this.folders = const <FolderViewModel>[],
+    this.pastBlocks = const <PastBlockViewModel>[],
+    this.settings = const AppSettingsModel(),
+    this.searchQuery = '',
+  });
+
+  final List<TaskViewModel> tasks;
+  final List<NoteViewModel> notes;
+  final List<FolderViewModel> folders;
+  final List<PastBlockViewModel> pastBlocks;
+  final AppSettingsModel settings;
+  final String searchQuery;
+
+  DangguiAppState copyWith({
+    List<TaskViewModel>? tasks,
+    List<NoteViewModel>? notes,
+    List<FolderViewModel>? folders,
+    List<PastBlockViewModel>? pastBlocks,
+    AppSettingsModel? settings,
+    String? searchQuery,
+  }) {
+    return DangguiAppState(
+      tasks: tasks ?? this.tasks,
+      notes: notes ?? this.notes,
+      folders: folders ?? this.folders,
+      pastBlocks: pastBlocks ?? this.pastBlocks,
+      settings: settings ?? this.settings,
+      searchQuery: searchQuery ?? this.searchQuery,
+    );
+  }
+}

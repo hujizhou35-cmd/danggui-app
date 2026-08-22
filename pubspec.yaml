@@ -1,0 +1,79 @@
+name: danggui
+description: "当归：本地优先、无账号、无广告的事项、过往与笔记应用。"
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  archive: ^4.0.9
+  collection: ^1.19.1
+  cryptography: ^2.9.0
+  cupertino_icons: ^1.0.8
+  drift: ^2.34.3
+  drift_flutter: ^0.3.0
+  file_picker: ^12.0.0
+  flutter_local_notifications: ^22.3.0
+  flutter_riverpod: ^3.4.2
+  flutter_secure_storage: ^10.0.0
+  go_router: ^17.5.0
+  intl: ^0.20.2
+  path: ^1.9.1
+  path_provider: ^2.1.5
+  share_plus: ^13.3.0
+  timezone: ^0.11.0
+  uuid: ^4.5.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  build_runner: ^2.10.1
+  drift_dev: ^2.34.3
+  flutter_launcher_icons: ^0.14.4
+  flutter_lints: ^6.0.0
+  flutter_native_splash: ^2.4.7
+  mocktail: ^1.0.4
+
+flutter:
+  generate: true
+  uses-material-design: true
+  assets:
+    # Only runtime-visible brand art belongs in the Flutter asset bundle.
+    # Launcher/adaptive/splash source images below are consumed at build time.
+    - assets/brand/danggui-app-icon.png
+    - assets/brand/danggui-launch-artwork.png
+    - assets/help/
+  fonts:
+    - family: DangguiDisplay
+      fonts:
+        - asset: assets/fonts/NotoSerifSC-SemiBold.otf
+          weight: 600
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  image_path: assets/brand/danggui-app-icon.png
+  adaptive_icon_background: "#FCF1DE"
+  adaptive_icon_foreground: assets/brand/danggui-icon-foreground.png
+  adaptive_icon_monochrome: assets/brand/danggui-icon-monochrome.png
+  min_sdk_android: 24
+
+flutter_native_splash:
+  color: "#F4EFE7"
+  image: assets/brand/danggui-launch-artwork.png
+  android_gravity: fill
+  ios_content_mode: scaleAspectFill
+  android_12:
+    color: "#F4EFE7"
+    image: assets/brand/danggui-native-splash-emblem.png
+    icon_background_color: "#FCF1DE"
+  android: true
+  ios: true

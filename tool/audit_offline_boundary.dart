@@ -1,0 +1,1228 @@
+import 'dart:convert';
+import 'dart:io';
+
+const String expectedApplicationId = 'com.danggui.memo';
+const String expectedVersion = '1.0.0+1';
+const int expectedAndroidMinSdk = 24;
+const int expectedAndroidTargetSdk = 36;
+const int expectedAndroidCompileSdk = 36;
+const String expectedIosDeploymentTarget = '15.0';
+
+const Set<String> expectedAndroidPermissions = <String>{
+  'android.permission.POST_NOTIFICATIONS',
+  'android.permission.RECEIVE_BOOT_COMPLETED',
+  'android.permission.VIBRATE',
+};
+
+const Set<String> approvedRuntimeDependencies = <String>{
+  'archive',
+  'collection',
+  'cryptography',
+  'cupertino_icons',
+  'drift',
+  'drift_flutter',
+  'file_picker',
+  'flutter',
+  'flutter_local_notifications',
+  'flutter_localizations',
+  'flutter_riverpod',
+  'flutter_secure_storage',
+  'go_router',
+  'intl',
+  'path',
+  'path_provider',
+  'share_plus',
+  'timezone',
+  'uuid',
+};
+
+/// Result of the repository-level privacy and platform source audit.
+final class PrivacyPlatformAuditReport {
+  PrivacyPlatformAuditReport({
+    required this.checks,
+    required this.failures,
+    required this.warnings,
+  });
+
+  final List<String> checks;
+  final List<String> failures;
+  final List<String> warnings;
+
+  bool get passed => failures.isEmpty;
+}
+
+/// Audits the checked-in release configuration and, when available, the
+/// resolved Android/iOS plugin metadata produced by `flutter pub get`.
+PrivacyPlatformAuditReport auditPrivacyAndPlatform(
+  Directory root, {
+  bool scanResolvedPlugins = true,
+}) {
+  final audit = _Audit(root);
+
+  audit
+    ..auditIdentityAndVersion()
+    ..auditDependencyPolicy()
+    ..auditDartRuntimeBoundary()
+    ..auditAndroidConfiguration()
+    ..auditIosConfiguration()
+    ..auditCiIntegration();
+  if (scanResolvedPlugins) {
+    audit.auditResolvedMobilePlugins();
+  }
+
+  return PrivacyPlatformAuditReport(
+    checks: List<String>.unmodifiable(audit.checks),
+    failures: List<String>.unmodifiable(audit.failures),
+    warnings: List<String>.unmodifiable(audit.warnings),
+  );
+}
+
+void main(List<String> arguments) {
+  var rootPath = Directory.current.path;
+  var scanResolvedPlugins = true;
+
+  for (var index = 0; index < arguments.length; index += 1) {
+    final argument = arguments[index];
+    if (argument == '--no-resolved-plugins') {
+      scanResolvedPlugins = false;
+      continue;
+    }
+    if (argument == '--root' && index + 1 < arguments.length) {
+      rootPath = arguments[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith('--root=')) {
+      rootPath = argument.substring('--root='.length);
+      continue;
+    }
+    stderr.writeln(
+      'Usage: dart run tool/audit_offline_boundary.dart '
+      '[--root <repository>] [--no-resolved-plugins]',
+    );
+    exitCode = 64;
+    return;
+  }
+
+  final root = Directory(rootPath).absolute;
+  final report = auditPrivacyAndPlatform(
+    root,
+    scanResolvedPlugins: scanResolvedPlugins,
+  );
+
+  if (report.warnings.isNotEmpty) {
+    stdout.writeln('Audit notes:');
+    for (final warning in report.warnings) {
+      stdout.writeln('  - $warning');
+    }
+  }
+
+  if (!report.passed) {
+    stderr.writeln('Privacy/platform source audit FAILED:');
+    for (final failure in report.failures) {
+      stderr.writeln('  - $failure');
+    }
+    exitCode = 1;
+    return;
+  }
+
+  stdout.writeln(
+    'Privacy/platform source audit PASSED (${report.checks.length} checks): '
+    'offline boundary, mobile capabilities, identity, targets, backup policy, '
+    'and dependency policy match the release contract.',
+  );
+}
+
+final class _Audit {
+  _Audit(this.root);
+
+  final Directory root;
+  final List<String> checks = <String>[];
+  final List<String> failures = <String>[];
+  final List<String> warnings = <String>[];
+
+  void auditIdentityAndVersion() {
+    final pubspec = _requiredText('pubspec.yaml');
+    if (pubspec == null) return;
+
+    _expectMatch(
+      'pubspec.yaml',
+      pubspec,
+      RegExp(
+        '^version:\\s*${RegExp.escape(expectedVersion)}\\s*\$',
+        multiLine: true,
+      ),
+      'version must remain $expectedVersion',
+    );
+    _expectMatch(
+      'pubspec.yaml',
+      pubspec,
+      RegExp(r'^publish_to:\s*["\x27]none["\x27]\s*$', multiLine: true),
+      'package must not be accidentally publishable to pub.dev',
+    );
+
+    final androidStrings = _requiredText(
+      'android/app/src/main/res/values/strings.xml',
+    );
+    if (androidStrings != null) {
+      _expectMatch(
+        'android/app/src/main/res/values/strings.xml',
+        androidStrings,
+        RegExp(r'<string\s+name="app_name"[^>]*>当归</string>'),
+        'Android display name must be 当归',
+      );
+    }
+
+    final iosInfo = _requiredText('ios/Runner/Info.plist');
+    if (iosInfo != null) {
+      _expectPlistString(
+        'ios/Runner/Info.plist',
+        iosInfo,
+        'CFBundleDisplayName',
+        '当归',
+      );
+      _expectPlistString(
+        'ios/Runner/Info.plist',
+        iosInfo,
+        'CFBundleName',
+        '当归',
+      );
+      _expectPlistString(
+        'ios/Runner/Info.plist',
+        iosInfo,
+        'CFBundleIdentifier',
+        r'$(PRODUCT_BUNDLE_IDENTIFIER)',
+      );
+      _expectPlistString(
+        'ios/Runner/Info.plist',
+        iosInfo,
+        'CFBundleShortVersionString',
+        r'$(FLUTTER_BUILD_NAME)',
+      );
+      _expectPlistString(
+        'ios/Runner/Info.plist',
+        iosInfo,
+        'CFBundleVersion',
+        r'$(FLUTTER_BUILD_NUMBER)',
+      );
+    }
+  }
+
+  void auditDependencyPolicy() {
+    final pubspec = _requiredText('pubspec.yaml');
+    final lock = _requiredText('pubspec.lock');
+    if (pubspec == null || lock == null) return;
+
+    final runtimeDependencies = _topLevelKeysInSection(
+      pubspec,
+      'dependencies',
+      'dev_dependencies',
+    );
+    final unapproved = runtimeDependencies.difference(
+      approvedRuntimeDependencies,
+    );
+    final missing = approvedRuntimeDependencies.difference(runtimeDependencies);
+    _expect(
+      unapproved.isEmpty && missing.isEmpty,
+      'pubspec.yaml runtime dependencies are the reviewed allowlist',
+      'pubspec.yaml: runtime dependency allowlist drift; '
+          'unapproved=${_formatSet(unapproved)}, missing=${_formatSet(missing)}',
+    );
+
+    const forbiddenPackageFragments = <String>[
+      'adjust',
+      'admob',
+      'amplitude',
+      'appcenter',
+      'appsflyer',
+      'braze',
+      'crashlytics',
+      'facebook_app_events',
+      'firebase',
+      'google_mobile_ads',
+      'mixpanel',
+      'onesignal',
+      'sentry',
+      'segment_analytics',
+      'supabase',
+    ];
+    final lockPackages = _parseLockPackages(lock);
+    final forbiddenPackages = lockPackages.keys.where((name) {
+      final lower = name.toLowerCase();
+      return forbiddenPackageFragments.any(lower.contains);
+    }).toList()..sort();
+    _expect(
+      forbiddenPackages.isEmpty,
+      'pubspec.lock contains no cloud, ads, analytics, telemetry or push SDK',
+      'pubspec.lock: forbidden package(s): ${forbiddenPackages.join(', ')}',
+    );
+
+    final malformedPackages = <String>[];
+    for (final entry in lockPackages.entries) {
+      final source = RegExp(
+        r'^    source:\s*(\S+)\s*$',
+        multiLine: true,
+      ).firstMatch(entry.value)?.group(1);
+      if (source != 'hosted' && source != 'sdk') {
+        malformedPackages.add('${entry.key}: unsupported source $source');
+        continue;
+      }
+      if (source == 'hosted') {
+        final checksum = RegExp(
+          r'^      sha256:\s*["\x27]?([0-9a-f]{64})["\x27]?\s*$',
+          multiLine: true,
+          caseSensitive: false,
+        ).firstMatch(entry.value);
+        if (checksum == null) {
+          malformedPackages.add('${entry.key}: missing 64-character sha256');
+        }
+      }
+    }
+    _expect(
+      lockPackages.isNotEmpty && malformedPackages.isEmpty,
+      'every locked hosted dependency has a SHA-256 and no git/path source',
+      'pubspec.lock: dependency integrity issue(s): '
+          '${malformedPackages.join('; ')}',
+    );
+
+    _expectMatch(
+      'pubspec.lock',
+      lock,
+      RegExp(
+        r'^  dart:\s*["\x27]>=3\.13\.1 <4\.0\.0["\x27]\s*$',
+        multiLine: true,
+      ),
+      'locked Dart SDK floor must remain 3.13.1',
+    );
+  }
+
+  void auditDartRuntimeBoundary() {
+    final lib = Directory(_path('lib'));
+    if (!lib.existsSync()) {
+      failures.add('required directory is missing: lib');
+      return;
+    }
+
+    final patterns = <_ForbiddenPattern>[
+      _ForbiddenPattern(
+        RegExp(r'''import\s+['"]dart:(html|js|js_interop)['"]'''),
+        'browser/network runtime import',
+      ),
+      _ForbiddenPattern(
+        RegExp(
+          r'''import\s+['"]package:(http|dio|chopper|graphql|grpc|'''
+          r'''web_socket_channel|url_launcher|firebase_[^/]*)/''',
+          caseSensitive: false,
+        ),
+        'network-capable Dart package import',
+      ),
+      _ForbiddenPattern(
+        RegExp(
+          r'\b(HttpClient|WebSocket|RawSocket|SecureSocket)\s*\(|'
+          r'\b(Socket|WebSocket|RawSocket|SecureSocket)\.connect\s*\(|'
+          r'\bInternetAddress\.lookup\s*\(',
+        ),
+        'direct Dart network API',
+      ),
+      _ForbiddenPattern(
+        RegExp(r'''['"]https?://''', caseSensitive: false),
+        'hard-coded remote URL in production Dart',
+      ),
+    ];
+
+    final sourceFailures = _scanDirectory(lib, const <String>{
+      '.dart',
+    }, patterns);
+    _expect(
+      sourceFailures.isEmpty,
+      'production Dart contains no network import, socket API or endpoint',
+      sourceFailures.join('; '),
+    );
+  }
+
+  void auditAndroidConfiguration() {
+    final manifestPath = 'android/app/src/main/AndroidManifest.xml';
+    final manifest = _requiredText(manifestPath);
+    final debugManifest = _requiredText(
+      'android/app/src/debug/AndroidManifest.xml',
+    );
+    final profileManifest = _requiredText(
+      'android/app/src/profile/AndroidManifest.xml',
+    );
+    final gradle = _requiredText('android/app/build.gradle.kts');
+    final settingsGradle = _requiredText('android/settings.gradle.kts');
+    final notificationSource = _requiredText(
+      'lib/src/services/notifications/notification_coordinator.dart',
+    );
+
+    if (manifest != null) {
+      final permissions = _androidPermissions(manifest);
+      _expect(
+        _sameSet(permissions, expectedAndroidPermissions),
+        'Android source manifest has only the three local-reminder permissions',
+        '$manifestPath: permissions are ${_formatSet(permissions)}; expected '
+            '${_formatSet(expectedAndroidPermissions)}',
+      );
+      _expectContains(
+        manifestPath,
+        manifest,
+        'android:allowBackup="false"',
+        'Android OS cloud backup must be disabled',
+      );
+      _expectContains(
+        manifestPath,
+        manifest,
+        'android:usesCleartextTraffic="false"',
+        'Android cleartext traffic must be disabled defensively',
+      );
+      _expectContains(
+        manifestPath,
+        manifest,
+        'android:dataExtractionRules="@xml/data_extraction_rules"',
+        'Android 12+ extraction exclusions must be wired',
+      );
+      _expectContains(
+        manifestPath,
+        manifest,
+        'android:fullBackupContent="@xml/backup_rules"',
+        'legacy Android backup exclusions must be wired',
+      );
+      _expectContains(
+        manifestPath,
+        manifest,
+        'android:screenOrientation="portrait"',
+        'Android activity must be portrait-only',
+      );
+      for (final receiver in <String>[
+        'ScheduledNotificationReceiver',
+        'ScheduledNotificationBootReceiver',
+        'ActionBroadcastReceiver',
+      ]) {
+        _expectMatch(
+          manifestPath,
+          manifest,
+          RegExp(
+            '<receiver(?=[^>]*$receiver)(?=[^>]*android:exported="false")[^>]*>',
+            dotAll: true,
+          ),
+          '$receiver must not be exported',
+        );
+      }
+      _expectNoMatch(
+        manifestPath,
+        manifest,
+        RegExp(
+          r'android\.permission\.(INTERNET|SCHEDULE_EXACT_ALARM|'
+          r'USE_EXACT_ALARM|USE_FULL_SCREEN_INTENT|ACCESS_NETWORK_STATE|'
+          r'AD_ID|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|'
+          r'READ_MEDIA_|ACCESS_FINE_LOCATION|ACCESS_COARSE_LOCATION|'
+          r'CAMERA|RECORD_AUDIO)',
+        ),
+        'forbidden Android permission',
+      );
+    }
+
+    for (final entry in <String, String?>{
+      'android/app/src/debug/AndroidManifest.xml': debugManifest,
+      'android/app/src/profile/AndroidManifest.xml': profileManifest,
+    }.entries) {
+      if (entry.value == null) continue;
+      _expect(
+        _androidPermissions(entry.value!).isEmpty &&
+            !entry.value!.contains('<application'),
+        '${entry.key} adds no debug/profile capability',
+        '${entry.key}: debug/profile variants must not add permissions or an '
+            'application override',
+      );
+    }
+
+    if (gradle != null) {
+      _expectGradleValue(
+        'android/app/build.gradle.kts',
+        gradle,
+        'namespace',
+        '"$expectedApplicationId"',
+      );
+      _expectGradleValue(
+        'android/app/build.gradle.kts',
+        gradle,
+        'applicationId',
+        '"$expectedApplicationId"',
+      );
+      _expectGradleValue(
+        'android/app/build.gradle.kts',
+        gradle,
+        'minSdk',
+        '$expectedAndroidMinSdk',
+      );
+      _expectGradleValue(
+        'android/app/build.gradle.kts',
+        gradle,
+        'targetSdk',
+        '$expectedAndroidTargetSdk',
+      );
+      _expectGradleValue(
+        'android/app/build.gradle.kts',
+        gradle,
+        'compileSdk',
+        '$expectedAndroidCompileSdk',
+      );
+      _expectMatch(
+        'android/app/build.gradle.kts',
+        gradle,
+        RegExp(
+          r'(sourceCompatibility|targetCompatibility)\s*=\s*JavaVersion\.VERSION_17',
+        ),
+        'Android Java bytecode target must remain 17',
+      );
+      _expectNoMatch(
+        'android/app/build.gradle.kts',
+        gradle,
+        RegExp(
+          r'(firebase|google-services|crashlytics|analytics|sentry|amplitude|'
+          r'mixpanel|appcenter|google_mobile_ads)',
+          caseSensitive: false,
+        ),
+        'cloud/analytics/ads Gradle SDK or plugin',
+      );
+    }
+
+    if (settingsGradle != null) {
+      _expectMatch(
+        'android/settings.gradle.kts',
+        settingsGradle,
+        RegExp(
+          r'id\("com\.android\.application"\)\s+version\s+"\d+\.\d+\.\d+"',
+        ),
+        'Android Gradle plugin must be version-pinned',
+      );
+      _expectMatch(
+        'android/settings.gradle.kts',
+        settingsGradle,
+        RegExp(
+          r'id\("org\.jetbrains\.kotlin\.android"\)\s+version\s+"\d+\.\d+\.\d+"',
+        ),
+        'Kotlin Gradle plugin must be version-pinned',
+      );
+    }
+
+    if (notificationSource != null) {
+      _expectContains(
+        'lib/src/services/notifications/notification_coordinator.dart',
+        notificationSource,
+        'AndroidScheduleMode.inexactAllowWhileIdle',
+        'Android reminders must use the inexact allow-while-idle mode',
+      );
+      _expectNoMatch(
+        'lib/src/services/notifications/notification_coordinator.dart',
+        notificationSource,
+        RegExp(
+          r'AndroidScheduleMode\.(exact|exactAllowWhileIdle|alarmClock)\b|'
+          r'fullScreenIntent\s*:\s*true|requestExactAlarmsPermission',
+        ),
+        'exact-alarm or full-screen notification API',
+      );
+    }
+
+    _auditAndroidBackupRules();
+
+    final androidTree = Directory(_path('android/app/src/main'));
+    if (androidTree.existsSync()) {
+      final nativeFailures = _scanDirectory(
+        androidTree,
+        const <String>{'.kt', '.java'},
+        <_ForbiddenPattern>[
+          _ForbiddenPattern(
+            RegExp(
+              r'\b(java\.net\.|HttpURLConnection|OkHttpClient|Retrofit|'
+              r'WebSocket|Socket\s*\()',
+              caseSensitive: false,
+            ),
+            'Android native network API',
+          ),
+        ],
+      );
+      _expect(
+        nativeFailures.isEmpty,
+        'app Android native source contains no network API',
+        nativeFailures.join('; '),
+      );
+    }
+  }
+
+  void _auditAndroidBackupRules() {
+    final legacy = _requiredText(
+      'android/app/src/main/res/xml/backup_rules.xml',
+    );
+    final extraction = _requiredText(
+      'android/app/src/main/res/xml/data_extraction_rules.xml',
+    );
+    const domains = <String>{
+      'root',
+      'file',
+      'database',
+      'sharedpref',
+      'external',
+    };
+
+    if (legacy != null) {
+      final excluded = _excludedBackupDomains(legacy);
+      _expect(
+        domains.difference(excluded).isEmpty,
+        'legacy Android backup excludes every app data domain',
+        'android/app/src/main/res/xml/backup_rules.xml: missing exclusions '
+            '${_formatSet(domains.difference(excluded))}',
+      );
+    }
+    if (extraction != null) {
+      _expectContains(
+        'android/app/src/main/res/xml/data_extraction_rules.xml',
+        extraction,
+        '<cloud-backup>',
+        'Android cloud-backup rules must be explicit',
+      );
+      _expectContains(
+        'android/app/src/main/res/xml/data_extraction_rules.xml',
+        extraction,
+        '<device-transfer>',
+        'Android device-transfer rules must be explicit',
+      );
+      final excluded = _excludedBackupDomains(extraction);
+      for (final domain in domains) {
+        final count = RegExp(
+          '<exclude\\s+domain="${RegExp.escape(domain)}"\\s+path="\\."\\s*/>',
+        ).allMatches(extraction).length;
+        _expect(
+          count == 2,
+          'Android 12+ excludes $domain from cloud backup and device transfer',
+          'android/app/src/main/res/xml/data_extraction_rules.xml: expected two '
+              '$domain exclusions, found $count',
+        );
+      }
+      _expect(
+        domains.difference(excluded).isEmpty,
+        'Android 12+ extraction rules cover all app data domains',
+        'android/app/src/main/res/xml/data_extraction_rules.xml: missing '
+            '${_formatSet(domains.difference(excluded))}',
+      );
+    }
+  }
+
+  void auditIosConfiguration() {
+    final infoPath = 'ios/Runner/Info.plist';
+    final info = _requiredText(infoPath);
+    final projectPath = 'ios/Runner.xcodeproj/project.pbxproj';
+    final project = _requiredText(projectPath);
+    final frameworkInfo = _requiredText('ios/Flutter/AppFrameworkInfo.plist');
+    final appDelegate = _requiredText('ios/Runner/AppDelegate.swift');
+    final secureStorageSource = _requiredText(
+      'lib/src/services/backup/automatic_backup_coordinator.dart',
+    );
+
+    if (info != null) {
+      for (final locale in <String>['zh-Hans', 'en', 'ja', 'ru']) {
+        _expectMatch(
+          infoPath,
+          info,
+          RegExp('<string>${RegExp.escape(locale)}</string>'),
+          'iOS Info.plist must declare $locale localization',
+        );
+      }
+      final portraitCount = RegExp(
+        r'<string>UIInterfaceOrientationPortrait</string>',
+      ).allMatches(info).length;
+      _expect(
+        portraitCount == 2,
+        'iPhone and iPad are both portrait-only',
+        '$infoPath: expected two portrait orientation declarations, found '
+            '$portraitCount',
+      );
+      _expectNoMatch(
+        infoPath,
+        info,
+        RegExp(
+          r'<key>(UIBackgroundModes|NSAppTransportSecurity|'
+          r'NSUserTrackingUsageDescription|NSLocalNetworkUsageDescription|'
+          r'NSBonjourServices)</key>|<string>remote-notification</string>',
+        ),
+        'iOS background networking, tracking or local-network capability',
+      );
+    }
+
+    if (project != null) {
+      final deploymentTargets = RegExp(
+        r'IPHONEOS_DEPLOYMENT_TARGET\s*=\s*([^;]+);',
+      ).allMatches(project).map((match) => match.group(1)!.trim()).toList();
+      _expect(
+        deploymentTargets.length == 3 &&
+            deploymentTargets.every(
+              (target) => target == expectedIosDeploymentTarget,
+            ),
+        'all iOS project build configurations target iOS 15.0',
+        '$projectPath: deployment targets are ${deploymentTargets.join(', ')}',
+      );
+
+      final appBundleIds = RegExp(
+        'PRODUCT_BUNDLE_IDENTIFIER\\s*=\\s*${RegExp.escape(expectedApplicationId)};',
+      ).allMatches(project).length;
+      _expect(
+        appBundleIds == 3,
+        'all iOS app build configurations use $expectedApplicationId',
+        '$projectPath: expected three app bundle-ID assignments, found '
+            '$appBundleIds',
+      );
+
+      _expectNoMatch(
+        projectPath,
+        project,
+        RegExp(
+          r'CODE_SIGN_ENTITLEMENTS|SystemCapabilities|aps-environment|'
+          r'com\.apple\.developer\.|BackgroundModes|Push',
+          caseSensitive: false,
+        ),
+        'iOS entitlement or Xcode push/background/network capability',
+      );
+    }
+
+    if (frameworkInfo != null) {
+      _expectPlistString(
+        'ios/Flutter/AppFrameworkInfo.plist',
+        frameworkInfo,
+        'MinimumOSVersion',
+        expectedIosDeploymentTarget,
+      );
+    }
+
+    if (appDelegate != null) {
+      _expectContains(
+        'ios/Runner/AppDelegate.swift',
+        appDelegate,
+        'UNUserNotificationCenter.current().delegate',
+        'iOS local-notification delegate must be configured',
+      );
+      _expectNoMatch(
+        'ios/Runner/AppDelegate.swift',
+        appDelegate,
+        RegExp(
+          r'registerForRemoteNotifications|didRegisterForRemoteNotifications|'
+          r'didFailToRegisterForRemoteNotifications',
+        ),
+        'iOS remote-notification registration',
+      );
+      for (final marker in <String>[
+        'excludeDangguiDataFromSystemBackups()',
+        'for: .applicationSupportDirectory',
+        'appendingPathComponent("danggui", isDirectory: true)',
+        'values.isExcludedFromBackup = true',
+        'dangguiURL.setResourceValues(values)',
+      ]) {
+        _expectContains(
+          'ios/Runner/AppDelegate.swift',
+          appDelegate,
+          marker,
+          'iOS must attempt to exclude Application Support/danggui from '
+              'system backups',
+        );
+      }
+    }
+
+    if (secureStorageSource != null) {
+      _expectContains(
+        'lib/src/services/backup/automatic_backup_coordinator.dart',
+        secureStorageSource,
+        'accessibility: KeychainAccessibility.first_unlock_this_device',
+        'iOS backup passphrase must use a this-device-only Keychain class',
+      );
+      _expectContains(
+        'lib/src/services/backup/automatic_backup_coordinator.dart',
+        secureStorageSource,
+        'synchronizable: false',
+        'iOS backup passphrase must not synchronize through iCloud Keychain',
+      );
+      _expectNoMatch(
+        'lib/src/services/backup/automatic_backup_coordinator.dart',
+        secureStorageSource,
+        RegExp(r'synchronizable\s*:\s*true'),
+        'iCloud-synchronizable secure-storage option',
+      );
+    }
+
+    final entitlements = _filesBelow(Directory(_path('ios')), const <String>{
+      '.entitlements',
+    });
+    _expect(
+      entitlements.isEmpty,
+      'iOS project declares no entitlement file',
+      'ios: entitlement files require review: '
+          '${entitlements.map(_relative).join(', ')}',
+    );
+
+    final iosNativeFailures = _scanDirectory(
+      Directory(_path('ios/Runner')),
+      const <String>{'.swift', '.m', '.mm', '.h'},
+      <_ForbiddenPattern>[
+        _ForbiddenPattern(
+          RegExp(
+            r'\b(URLSession|NWConnection|CFHTTP|WKWebView|'
+            r'registerForRemoteNotifications)\b',
+          ),
+          'iOS native network or remote-notification API',
+        ),
+      ],
+    );
+    _expect(
+      iosNativeFailures.isEmpty,
+      'app iOS native source contains no network or remote-push API',
+      iosNativeFailures.join('; '),
+    );
+
+    final podfile = File(_path('ios/Podfile'));
+    final podLock = File(_path('ios/Podfile.lock'));
+    if (!podfile.existsSync() && !podLock.existsSync()) {
+      checks.add('iOS has no checked-in CocoaPods dependency graph');
+    } else {
+      final podText = <String>[
+        if (podfile.existsSync()) podfile.readAsStringSync(),
+        if (podLock.existsSync()) podLock.readAsStringSync(),
+      ].join('\n');
+      _expectNoMatch(
+        'ios/Podfile / ios/Podfile.lock',
+        podText,
+        RegExp(
+          r'(Firebase|GoogleAnalytics|Sentry|Amplitude|Mixpanel|AppCenter|'
+          r'Google-Mobile-Ads|OneSignal)',
+          caseSensitive: false,
+        ),
+        'forbidden CocoaPods SDK',
+      );
+    }
+  }
+
+  void auditResolvedMobilePlugins() {
+    final metadata = File(_path('.flutter-plugins-dependencies'));
+    if (!metadata.existsSync()) {
+      warnings.add(
+        'resolved-plugin audit skipped because .flutter-plugins-dependencies '
+        'is absent; run flutter pub get before the release gate',
+      );
+      return;
+    }
+
+    Object? decoded;
+    try {
+      decoded = jsonDecode(metadata.readAsStringSync());
+    } on FormatException catch (error) {
+      failures.add('.flutter-plugins-dependencies: invalid JSON: $error');
+      return;
+    }
+    if (decoded is! Map<String, Object?>) {
+      failures.add('.flutter-plugins-dependencies: root must be a JSON object');
+      return;
+    }
+    final plugins = decoded['plugins'];
+    if (plugins is! Map<String, Object?>) {
+      failures.add('.flutter-plugins-dependencies: plugins map is missing');
+      return;
+    }
+
+    final androidPlugins = _pluginEntries(plugins['android']);
+    final iosPlugins = _pluginEntries(plugins['ios']);
+    _auditResolvedAndroidPlugins(androidPlugins);
+    _auditResolvedIosPlugins(iosPlugins);
+  }
+
+  void auditCiIntegration() {
+    const workflowPath = '.github/workflows/mobile-ci.yml';
+    final workflow = _requiredText(workflowPath);
+    if (workflow == null) return;
+
+    for (final command in <String>[
+      'dart run tool/audit_offline_boundary.dart',
+      'flutter analyze --fatal-infos',
+      'flutter test --reporter expanded',
+      'bash tool/verify_android_artifacts.sh',
+      'bash tool/build_ios_unsigned.sh',
+    ]) {
+      _expectContains(
+        workflowPath,
+        workflow,
+        command,
+        "CI must run ${command.split(' ').first} release gate: $command",
+      );
+    }
+
+    for (final splitContract in <String>[
+      '[armeabi-v7a]=1001',
+      '[arm64-v8a]=2001',
+      '[x86_64]=4001',
+    ]) {
+      _expectContains(
+        workflowPath,
+        workflow,
+        splitContract,
+        'CI must enumerate and verify every Flutter split APK version code',
+      );
+    }
+
+    for (final verifierPath in <String>[
+      'tool/verify_android_artifacts.sh',
+      'tool/verify_android_artifacts.ps1',
+    ]) {
+      final verifier = _requiredText(verifierPath);
+      if (verifier == null) continue;
+      _expectContains(
+        verifierPath,
+        verifier,
+        'META-INF/',
+        'AAB verification must require a complete JAR signature block',
+      );
+      _expectContains(
+        verifierPath,
+        verifier,
+        '-printcert -jarfile',
+        'AAB verification must inspect the signing certificate',
+      );
+    }
+
+    _expectContains(
+      'tool/verify_android_artifacts.sh',
+      _requiredText('tool/verify_android_artifacts.sh') ?? '',
+      "sed -e 's/^[[:space:]]*//'",
+      'shell APK verification must whitelist the complete permission output',
+    );
+    _expectContains(
+      'tool/verify_android_artifacts.ps1',
+      _requiredText('tool/verify_android_artifacts.ps1') ?? '',
+      r'$_.ToString().Trim()',
+      'PowerShell APK verification must whitelist the complete permission output',
+    );
+
+    final actionUses = RegExp(
+      r'^\s*-?\s*uses:\s*([^\s#]+)',
+      multiLine: true,
+    ).allMatches(workflow).map((match) => match.group(1)!).toList();
+    final unpinnedActions = actionUses
+        .where((value) => !RegExp(r'@[0-9a-f]{40}$').hasMatch(value))
+        .toList();
+    _expect(
+      actionUses.isNotEmpty && unpinnedActions.isEmpty,
+      'every GitHub Action is pinned to a full commit SHA',
+      '$workflowPath: unpinned action(s): ${unpinnedActions.join(', ')}',
+    );
+  }
+
+  void _auditResolvedAndroidPlugins(List<Map<String, Object?>> plugins) {
+    final unexpectedPermissions = <String>[];
+    final inspected = <String>[];
+    for (final plugin in plugins) {
+      if (plugin['dev_dependency'] == true) continue;
+      final name = plugin['name'];
+      final path = plugin['path'];
+      if (name is! String || path is! String) {
+        failures.add(
+          '.flutter-plugins-dependencies: malformed Android plugin entry',
+        );
+        continue;
+      }
+      inspected.add(name);
+      final manifest = File(
+        '${Directory(path).path}${Platform.pathSeparator}android'
+        '${Platform.pathSeparator}src${Platform.pathSeparator}main'
+        '${Platform.pathSeparator}AndroidManifest.xml',
+      );
+      if (!manifest.existsSync()) continue;
+      for (final permission in _androidPermissions(
+        manifest.readAsStringSync(),
+      )) {
+        if (!expectedAndroidPermissions.contains(permission)) {
+          unexpectedPermissions.add('$name: $permission');
+        }
+      }
+    }
+    _expect(
+      unexpectedPermissions.isEmpty,
+      'resolved Android plugin manifests add no permission outside the '
+          'local-reminder allowlist (${inspected.length} plugins inspected)',
+      'resolved Android plugin manifest permission(s) require review: '
+          '${unexpectedPermissions.join(', ')}',
+    );
+  }
+
+  void _auditResolvedIosPlugins(List<Map<String, Object?>> plugins) {
+    final failuresForPlugins = <String>[];
+    final inspected = <String>[];
+    for (final plugin in plugins) {
+      if (plugin['dev_dependency'] == true) continue;
+      final name = plugin['name'];
+      final path = plugin['path'];
+      if (name is! String || path is! String) {
+        failures.add(
+          '.flutter-plugins-dependencies: malformed iOS plugin entry',
+        );
+        continue;
+      }
+      inspected.add(name);
+      final pluginRoot = Directory(path);
+      for (final sourceDirectoryName in <String>['ios', 'darwin']) {
+        final sourceDirectory = Directory(
+          '${pluginRoot.path}${Platform.pathSeparator}$sourceDirectoryName',
+        );
+        if (!sourceDirectory.existsSync()) continue;
+        failuresForPlugins.addAll(
+          _scanDirectory(
+            sourceDirectory,
+            const <String>{
+              '.swift',
+              '.m',
+              '.mm',
+              '.h',
+              '.plist',
+              '.entitlements',
+            },
+            <_ForbiddenPattern>[
+              _ForbiddenPattern(
+                RegExp(
+                  r'aps-environment|<string>remote-notification</string>|'
+                  r'registerForRemoteNotifications|\b(URLSession|NWConnection)\b',
+                  caseSensitive: false,
+                ),
+                'resolved iOS plugin push/network capability',
+              ),
+            ],
+            excludePathFragments: const <String>['/example/', r'\example\'],
+          ),
+        );
+      }
+    }
+    _expect(
+      failuresForPlugins.isEmpty,
+      'resolved iOS plugin production metadata contains no remote-push or '
+      'network API (${inspected.length} plugins inspected)',
+      failuresForPlugins.join('; '),
+    );
+  }
+
+  String? _requiredText(String relativePath) {
+    final file = File(_path(relativePath));
+    if (!file.existsSync()) {
+      failures.add('required file is missing: $relativePath');
+      return null;
+    }
+    return file.readAsStringSync();
+  }
+
+  void _expectContains(
+    String path,
+    String content,
+    String expected,
+    String reason,
+  ) {
+    _expect(
+      content.contains(expected),
+      reason,
+      '$path: $reason; missing ${jsonEncode(expected)}',
+    );
+  }
+
+  void _expectGradleValue(
+    String path,
+    String content,
+    String property,
+    String value,
+  ) {
+    _expectMatch(
+      path,
+      content,
+      RegExp(
+        '${RegExp.escape(property)}\\s*=\\s*${RegExp.escape(value)}(?:\\s|\$)',
+      ),
+      '$property must be $value',
+    );
+  }
+
+  void _expectPlistString(
+    String path,
+    String content,
+    String key,
+    String value,
+  ) {
+    _expectMatch(
+      path,
+      content,
+      RegExp(
+        '<key>${RegExp.escape(key)}</key>\\s*'
+        '<string>${RegExp.escape(value)}</string>',
+      ),
+      '$key must be $value',
+    );
+  }
+
+  void _expectMatch(
+    String path,
+    String content,
+    RegExp expression,
+    String reason,
+  ) {
+    _expect(expression.hasMatch(content), reason, '$path: $reason');
+  }
+
+  void _expectNoMatch(
+    String path,
+    String content,
+    RegExp expression,
+    String reason,
+  ) {
+    final match = expression.firstMatch(content);
+    if (match == null) {
+      checks.add('$path: no $reason');
+      return;
+    }
+    final line = _lineOf(content, match.start);
+    failures.add('$path:$line: $reason');
+  }
+
+  void _expect(bool condition, String success, String failure) {
+    if (condition) {
+      checks.add(success);
+    } else {
+      failures.add(failure);
+    }
+  }
+
+  String _path(String relativePath) {
+    return '${root.path}${Platform.pathSeparator}'
+        '${relativePath.replaceAll('/', Platform.pathSeparator)}';
+  }
+
+  String _relative(File file) {
+    final rootPrefix = '${root.path}${Platform.pathSeparator}';
+    return file.absolute.path.startsWith(rootPrefix)
+        ? file.absolute.path.substring(rootPrefix.length).replaceAll('\\', '/')
+        : file.path.replaceAll('\\', '/');
+  }
+
+  List<String> _scanDirectory(
+    Directory directory,
+    Set<String> extensions,
+    List<_ForbiddenPattern> patterns, {
+    List<String> excludePathFragments = const <String>[],
+  }) {
+    if (!directory.existsSync()) {
+      return <String>['required directory is missing: ${directory.path}'];
+    }
+    final files = _filesBelow(directory, extensions)
+      ..removeWhere((file) => excludePathFragments.any(file.path.contains));
+    final found = <String>[];
+    for (final file in files) {
+      final content = file.readAsStringSync();
+      for (final pattern in patterns) {
+        final match = pattern.expression.firstMatch(content);
+        if (match == null) continue;
+        found.add(
+          '${_relative(file)}:${_lineOf(content, match.start)}: '
+          '${pattern.reason}',
+        );
+      }
+    }
+    return found;
+  }
+}
+
+final class _ForbiddenPattern {
+  const _ForbiddenPattern(this.expression, this.reason);
+
+  final RegExp expression;
+  final String reason;
+}
+
+List<Map<String, Object?>> _pluginEntries(Object? value) {
+  if (value is! List<Object?>) return <Map<String, Object?>>[];
+  return value.whereType<Map<String, Object?>>().toList();
+}
+
+Set<String> _androidPermissions(String manifest) {
+  return RegExp(
+    r'<uses-permission(?:-sdk-\d+)?\b[^>]*\bandroid:name\s*=\s*'
+    r'["\x27]([^"\x27]+)["\x27]',
+    caseSensitive: false,
+  ).allMatches(manifest).map((match) => match.group(1)!).toSet();
+}
+
+Set<String> _excludedBackupDomains(String xml) {
+  return RegExp(r'<exclude\s+domain="([^"]+)"\s+path="\."\s*/>')
+      .allMatches(xml)
+      .map((match) => match.group(1)!)
+      .toSet();
+}
+
+Set<String> _topLevelKeysInSection(
+  String yaml,
+  String section,
+  String nextSection,
+) {
+  final start = RegExp(
+    '^${RegExp.escape(section)}:\\s*\$',
+    multiLine: true,
+  ).firstMatch(yaml);
+  final end = RegExp(
+    '^${RegExp.escape(nextSection)}:\\s*\$',
+    multiLine: true,
+  ).firstMatch(yaml);
+  if (start == null || end == null || end.start <= start.end) return <String>{};
+  final body = yaml.substring(start.end, end.start);
+  return RegExp(
+    r'^  ([a-zA-Z0-9_]+):',
+    multiLine: true,
+  ).allMatches(body).map((match) => match.group(1)!).toSet();
+}
+
+Map<String, String> _parseLockPackages(String lock) {
+  final packagesStart = RegExp(
+    r'^packages:\s*$',
+    multiLine: true,
+  ).firstMatch(lock);
+  final sdksStart = RegExp(r'^sdks:\s*$', multiLine: true).firstMatch(lock);
+  if (packagesStart == null || sdksStart == null) return <String, String>{};
+  final packagesText = lock.substring(packagesStart.end, sdksStart.start);
+  final starts = RegExp(
+    r'^  ([a-zA-Z0-9_]+):\s*$',
+    multiLine: true,
+  ).allMatches(packagesText).toList();
+  final result = <String, String>{};
+  for (var index = 0; index < starts.length; index += 1) {
+    final match = starts[index];
+    final end = index + 1 < starts.length
+        ? starts[index + 1].start
+        : packagesText.length;
+    result[match.group(1)!] = packagesText.substring(match.end, end);
+  }
+  return result;
+}
+
+List<File> _filesBelow(Directory directory, Set<String> extensions) {
+  if (!directory.existsSync()) return <File>[];
+  final files =
+      directory
+          .listSync(recursive: true, followLinks: false)
+          .whereType<File>()
+          .where((file) {
+            final lower = file.path.toLowerCase();
+            return extensions.any(lower.endsWith);
+          })
+          .toList()
+        ..sort((left, right) => left.path.compareTo(right.path));
+  return files;
+}
+
+bool _sameSet(Set<String> left, Set<String> right) {
+  return left.length == right.length && left.containsAll(right);
+}
+
+int _lineOf(String content, int offset) {
+  return '\n'.allMatches(content.substring(0, offset)).length + 1;
+}
+
+String _formatSet(Iterable<String> values) {
+  final sorted = values.toList()..sort();
+  return sorted.isEmpty ? '{}' : '{${sorted.join(', ')}}';
+}

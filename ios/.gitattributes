@@ -1,0 +1,9 @@
+*.swift text eol=lf
+*.h text eol=lf
+*.m text eol=lf
+*.plist text eol=lf
+*.pbxproj text eol=lf
+*.storyboard text eol=lf
+*.xcconfig text eol=lf
+*.json text eol=lf
+*.png binary

@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>当归 · Android UI Prototype v1</title>
+<style>
+  :root{
+    --paper:#F4EFE7;
+    --paper-2:#FBF8F2;
+    --paper-3:#EFE7DC;
+    --ink:#2E2925;
+    --muted:#81786F;
+    --muted-2:#AAA197;
+    --line:#D8CEC1;
+    --line-dark:#BEB2A4;
+    --sage:#6F8068;
+    --sage-soft:#DCE5D8;
+    --terra:#B5684C;
+    --terra-soft:#F0DDD4;
+    --brown:#8A654A;
+    --shadow:0 14px 36px rgba(52,42,34,.10);
+    --text-scale:1;
+    --card-gap:14px;
+    --card-pad:18px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0}
+  body{
+    font-family:"Noto Sans SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+    color:var(--ink);
+    background:
+      radial-gradient(circle at 10% 20%,rgba(255,255,255,.7),transparent 23%),
+      radial-gradient(circle at 85% 82%,rgba(255,255,255,.45),transparent 26%),
+      #E7E3DD;
+    display:grid;
+    place-items:center;
+    padding:20px;
+  }
+  button,input,textarea,select{font:inherit;color:inherit}
+  button{border:0;background:none;padding:0;cursor:pointer}
+  .stage{display:flex;align-items:center;gap:24px;max-width:1100px;width:100%;justify-content:center}
+  .prototype-note{max-width:330px;color:#5D554E;font-size:14px;line-height:1.75}
+  .prototype-note h1{font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;font-size:26px;margin:0 0 10px;color:var(--ink);font-weight:600}
+  .prototype-note p{margin:6px 0}
+  .prototype-note .tag{display:inline-flex;border:1px solid var(--line-dark);border-radius:999px;padding:4px 10px;margin:4px 4px 0 0;background:rgba(251,248,242,.65)}
+  .phone{
+    width:min(412px,100vw - 28px);
+    height:min(915px,calc(100vh - 28px));
+    min-height:680px;
+    border:1px solid rgba(86,75,66,.22);
+    border-radius:38px 34px 42px 36px / 36px 40px 35px 43px;
+    background:var(--paper);
+    box-shadow:0 30px 80px rgba(45,38,32,.18), inset 0 0 0 7px rgba(255,255,255,.35);
+    overflow:hidden;
+    position:relative;
+  }
+  .phone::after{
+    content:"";position:absolute;inset:5px;border-radius:34px 31px 38px 33px / 32px 37px 31px 39px;
+    border:1px solid rgba(255,255,255,.55);pointer-events:none;z-index:50
+  }
+  .app{
+    height:100%;display:flex;flex-direction:column;position:relative;overflow:hidden;
+    background:
+      repeating-linear-gradient(0deg,rgba(96,77,58,.012),rgba(96,77,58,.012) 1px,transparent 1px,transparent 4px),
+      radial-gradient(circle at 84% 15%,rgba(255,255,255,.65),transparent 28%),
+      var(--paper);
+    font-size:calc(15px * var(--text-scale));
+  }
+  .statusbar{height:34px;min-height:34px;display:flex;align-items:flex-end;justify-content:space-between;padding:0 19px 5px;font-size:12px;font-weight:650;color:#403A35;z-index:5}
+  .status-icons{display:flex;gap:6px;align-items:center}
+  .status-icons span{display:inline-block}
+  .view{display:none;flex:1;min-height:0;flex-direction:column;position:relative}
+  .view.active{display:flex}
+  .topbar{height:58px;min-height:58px;display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:4px 17px 6px;position:relative;z-index:4}
+  .topbar.left-space{justify-content:space-between}
+  .icon-btn{
+    width:39px;height:39px;display:grid;place-items:center;border:1.2px solid rgba(112,98,85,.35);
+    background:rgba(251,248,242,.64);border-radius:15px 13px 16px 12px / 13px 16px 12px 17px;
+    color:#514A44;transition:.18s ease
+  }
+  .icon-btn:active{transform:scale(.96);background:var(--paper-3)}
+  .icon-btn svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .search-inline{flex:1;height:42px;border:1.2px solid var(--line);background:rgba(251,248,242,.7);border-radius:17px 14px 18px 15px / 16px 19px 14px 18px;display:flex;align-items:center;gap:9px;padding:0 13px;color:var(--muted)}
+  .search-inline input{border:0;outline:0;background:transparent;min-width:0;flex:1;font-size:14px}
+  .search-inline svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round}
+  .search-expand{position:absolute;left:17px;right:153px;height:42px;display:none;align-items:center;gap:8px;background:var(--paper-2);border:1.2px solid var(--line);border-radius:16px;padding:0 12px;box-shadow:0 5px 18px rgba(50,42,35,.07)}
+  .search-expand.show{display:flex}
+  .search-expand input{border:0;background:transparent;outline:0;width:100%;font-size:14px}
+  .screen-scroll{flex:1;min-height:0;overflow:auto;padding:3px 17px 96px;scrollbar-width:none}
+  .screen-scroll::-webkit-scrollbar{display:none}
+  .items-list{display:flex;flex-direction:column;gap:var(--card-gap);padding-bottom:12px}
+  .item-card{
+    position:relative;background:rgba(251,248,242,.87);border:1.2px solid rgba(196,183,169,.82);
+    border-radius:23px 19px 25px 20px / 19px 25px 20px 24px;
+    padding:var(--card-pad) 17px 15px 18px;min-height:98px;box-shadow:0 8px 22px rgba(67,53,43,.055);
+    transition:.25s ease;overflow:hidden
+  }
+  .item-card:nth-child(even){border-radius:20px 24px 19px 25px / 24px 19px 25px 20px}
+  .item-card::after{content:"";position:absolute;inset:3px 5px 4px 4px;border:1px solid rgba(216,206,193,.28);border-radius:inherit;pointer-events:none;transform:rotate(.06deg)}
+  .item-card.is-off{background:rgba(239,234,226,.80);border-color:rgba(188,177,166,.70)}
+  .item-top{display:flex;align-items:center;gap:12px;position:relative;z-index:2}
+  .item-title{font-size:17px;font-weight:620;line-height:1.35;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .item-bottom{height:29px;margin-top:11px;display:flex;align-items:center;position:relative;z-index:2;color:var(--muted);font-size:13px}
+  .date-text{transition:.18s ease;opacity:1}
+  .item-actions{display:none;align-items:center;gap:20px;font-size:13px;font-weight:600}
+  .item-card.is-off .date-text{display:none}
+  .item-card.is-off .item-actions{display:flex}
+  .action-history{color:var(--brown)}
+  .action-delete{color:var(--terra)}
+  .task-switch{width:62px;height:35px;min-width:62px;border-radius:999px;background:var(--sage);padding:4px;position:relative;box-shadow:inset 0 0 0 1px rgba(51,64,48,.10);transition:.25s ease;z-index:3;touch-action:none}
+  .task-switch .knob{position:absolute;right:4px;top:4px;width:27px;height:27px;border-radius:50%;background:#FFFDF8;box-shadow:0 2px 7px rgba(39,35,31,.18);transition:.25s cubic-bezier(.2,.8,.25,1)}
+  .item-card.is-off .task-switch{background:#D4D0CA}
+  .item-card.is-off .task-switch .knob{right:31px}
+  .empty-date{height:1px}
+  .bottom-nav{
+    height:77px;min-height:77px;position:absolute;bottom:0;left:0;right:0;background:rgba(247,243,236,.94);
+    border-top:1px solid rgba(176,161,147,.55);display:flex;align-items:center;justify-content:space-around;padding:7px 10px 11px;z-index:25;backdrop-filter:blur(16px)
+  }
+  .bottom-nav::before{content:"";position:absolute;top:3px;left:14px;right:17px;border-top:1px solid rgba(255,255,255,.72);transform:rotate(-.08deg)}
+  .nav-item{width:72px;display:flex;flex-direction:column;align-items:center;gap:4px;color:#AAA096;font-size:11px;font-weight:580;transition:.18s ease}
+  .nav-item svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;transform:rotate(-.6deg)}
+  .nav-item:nth-child(2) svg{transform:rotate(.8deg)}
+  .nav-item.active{color:#4A433E;font-weight:720}
+  .nav-item.active svg{stroke-width:2.1}
+  .snackbar{position:absolute;left:20px;right:20px;bottom:88px;min-height:48px;background:#34302D;color:#FBF8F2;border-radius:17px 15px 18px 14px / 15px 18px 14px 17px;display:flex;align-items:center;justify-content:space-between;padding:0 15px;z-index:60;opacity:0;transform:translateY(16px);pointer-events:none;transition:.22s ease;font-size:13px;box-shadow:var(--shadow)}
+  .snackbar.show{opacity:1;transform:translateY(0)}
+  .snackbar button{color:#EBC7B9;font-weight:700}
+  .sheet-backdrop{position:absolute;inset:0;background:rgba(45,39,34,.24);z-index:70;opacity:0;pointer-events:none;transition:.2s ease}
+  .sheet-backdrop.show{opacity:1;pointer-events:auto}
+  .sheet{position:absolute;left:0;right:0;bottom:0;background:var(--paper-2);border-top:1.3px solid var(--line-dark);border-radius:28px 25px 0 0 / 25px 30px 0 0;padding:12px 20px 24px;z-index:72;transform:translateY(104%);transition:.28s cubic-bezier(.2,.8,.25,1);box-shadow:0 -18px 42px rgba(48,39,32,.12)}
+  .sheet.show{transform:translateY(0)}
+  .sheet-handle{width:42px;height:4px;border-radius:99px;background:#C7BCAF;margin:0 auto 18px}
+  .sheet-title{font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;font-size:20px;font-weight:600;margin-bottom:18px}
+  .line-field{border-bottom:1.2px solid var(--line-dark);padding:10px 2px 9px;margin-bottom:14px}
+  .line-field input{width:100%;border:0;background:transparent;outline:0;font-size:18px;font-weight:580}
+  .date-row{display:flex;align-items:center;justify-content:space-between;min-height:43px;border-bottom:1px solid var(--line);margin-bottom:20px;color:var(--muted)}
+  .date-row input{border:0;background:transparent;outline:0;text-align:right;color:var(--ink)}
+  .sheet-actions{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .text-btn{color:var(--brown);font-size:14px;font-weight:650;padding:10px 2px}
+  .primary-btn{background:var(--sage);color:#FFFDF8;border-radius:15px 13px 16px 12px;padding:12px 19px;font-weight:700;box-shadow:0 6px 14px rgba(87,106,80,.18)}
+  .detail-page{position:absolute;inset:34px 0 0;background:var(--paper);z-index:30;display:none;flex-direction:column}
+  .detail-page.show{display:flex}
+  .detail-top{height:58px;display:flex;align-items:center;justify-content:space-between;padding:5px 17px 6px}
+  .detail-scroll{flex:1;min-height:0;overflow:auto;padding:15px 24px 122px;scrollbar-width:none}
+  .detail-scroll::-webkit-scrollbar{display:none}
+  .detail-title{font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;font-size:28px;line-height:1.4;font-weight:610;outline:0;min-height:45px;margin-bottom:25px}
+  .detail-title:empty::before{content:"写下事项";color:#B5AAA0}
+  .smart-line{display:flex;align-items:flex-start;gap:14px;padding:10px 0;border-bottom:1px solid rgba(190,178,164,.52);font-size:14px;line-height:1.65}
+  .smart-key{width:42px;color:var(--muted);flex:none}
+  .smart-value{flex:1;outline:0;min-height:23px}
+  .smart-value.placeholder{color:#B2A79D}
+  .detail-body{outline:0;min-height:210px;padding:22px 0 30px;line-height:1.9;font-size:16px}
+  .detail-body:empty::before{content:"补充内容、步骤或想法……";color:#B5AAA0}
+  .checkline{display:flex;align-items:flex-start;gap:9px;margin:8px 0}
+  .checkmark{width:19px;height:19px;border:1.4px solid var(--line-dark);border-radius:6px 5px 7px 5px;margin-top:3px;display:grid;place-items:center;color:var(--sage)}
+  .checkmark.done::after{content:"✓";font-size:14px;font-weight:800}
+  .editor-toolbar{position:absolute;left:15px;right:15px;bottom:82px;height:50px;background:rgba(251,248,242,.94);border:1px solid var(--line);border-radius:18px 16px 19px 15px;display:flex;align-items:center;justify-content:space-around;box-shadow:0 8px 24px rgba(60,49,40,.10);z-index:35}
+  .tool-btn{width:38px;height:34px;display:grid;place-items:center;color:#5F5750;border-radius:10px;font-weight:700}
+  .tool-btn:active{background:var(--paper-3)}
+  .tool-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  .past-paper{background:rgba(251,248,242,.58);min-height:100%;border-left:1px solid rgba(199,186,171,.42);border-right:1px solid rgba(199,186,171,.26);padding:24px 21px 90px;outline:0;line-height:1.9;font-size:15px;box-shadow:inset 16px 0 28px rgba(103,82,63,.015),inset -18px 0 30px rgba(103,82,63,.012)}
+  .past-date{font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;font-size:20px;font-weight:620;margin:8px 0 13px}
+  .past-entry{margin:0 0 24px;padding-left:1px;position:relative}
+  .past-entry-time{font-size:13px;color:var(--brown);font-weight:680;margin-right:7px}
+  .past-entry-title{font-weight:650}
+  .past-meta{font-size:12px;color:var(--muted);margin-top:5px}
+  .selection-menu{position:absolute;left:34px;right:34px;top:178px;display:none;align-items:center;justify-content:space-between;background:#35312E;color:#FFFDF8;border-radius:14px 12px 15px 11px;padding:10px 12px;z-index:45;box-shadow:var(--shadow);font-size:12px}
+  .selection-menu.show{display:flex}
+  .selection-menu button{color:inherit;padding:4px 7px}
+  .selection-menu .convert{color:#E8C4B5;font-weight:700}
+  .notes-folders{display:flex;gap:8px;overflow:auto;padding:2px 0 13px;scrollbar-width:none}
+  .notes-folders::-webkit-scrollbar{display:none}
+  .folder-chip{white-space:nowrap;border:1px solid var(--line);border-radius:999px;padding:7px 12px;color:var(--muted);background:rgba(251,248,242,.55);font-size:12px}
+  .folder-chip.active{color:var(--ink);border-color:var(--line-dark);background:var(--paper-2);font-weight:650}
+  .note-card{padding:17px 5px 17px;border-bottom:1px solid rgba(185,171,157,.54);position:relative}
+  .note-card::after{content:"";position:absolute;left:4px;right:7px;bottom:2px;border-bottom:1px solid rgba(255,255,255,.65);transform:rotate(.08deg)}
+  .note-title{font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;font-size:18px;font-weight:620;margin-bottom:7px}
+  .note-preview{font-size:13px;color:var(--muted);line-height:1.65;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .note-date{font-size:11px;color:#A49A90;margin-top:8px}
+  .note-editor-title{font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;font-size:27px;font-weight:610;outline:0;margin:5px 0 20px}
+  .note-editor-body{font-size:16px;line-height:1.95;outline:0;min-height:520px}
+  .settings-scroll{padding-top:5px}
+  .settings-section{margin-bottom:26px}
+  .settings-heading{font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;font-size:18px;font-weight:620;margin:0 2px 11px}
+  .settings-card{background:rgba(251,248,242,.67);border:1px solid rgba(198,184,169,.72);border-radius:21px 18px 23px 19px / 18px 23px 19px 22px;overflow:hidden}
+  .setting-row{min-height:57px;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 15px;border-bottom:1px solid rgba(195,181,167,.48)}
+  .setting-row:last-child{border-bottom:0}
+  .setting-label{font-size:14px}
+  .setting-sub{font-size:11px;color:var(--muted);margin-top:3px}
+  .small-switch{width:45px;height:26px;background:#D3CEC7;border-radius:99px;padding:3px;position:relative;transition:.2s}
+  .small-switch::after{content:"";position:absolute;left:3px;top:3px;width:20px;height:20px;border-radius:50%;background:#FFFDF8;box-shadow:0 1px 4px rgba(48,42,37,.18);transition:.2s}
+  .small-switch.on{background:var(--sage)}
+  .small-switch.on::after{left:22px}
+  .segmented{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:rgba(239,232,223,.5)}
+  .segment{padding:6px 10px;font-size:11px;color:var(--muted)}
+  .segment.active{background:var(--paper-2);color:var(--ink);font-weight:700}
+  .range{width:110px;accent-color:var(--sage)}
+  .font-preview{font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;font-size:15px}
+  .danger{color:var(--terra)}
+  .time-modal{position:absolute;inset:0;display:none;place-items:center;background:rgba(45,39,34,.24);z-index:80}
+  .time-modal.show{display:grid}
+  .time-card{width:310px;background:var(--paper-2);border:1px solid var(--line-dark);border-radius:26px 22px 28px 23px / 22px 28px 22px 27px;padding:20px;box-shadow:var(--shadow)}
+  .time-title{font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",serif;font-size:19px;font-weight:620;margin-bottom:17px}
+  .wheel{height:150px;display:flex;align-items:center;justify-content:center;gap:16px;position:relative;border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-bottom:18px}
+  .wheel::before,.wheel::after{content:"";position:absolute;left:0;right:0;height:46px;pointer-events:none}
+  .wheel::before{top:0;background:linear-gradient(var(--paper-2),rgba(251,248,242,0))}
+  .wheel::after{bottom:0;background:linear-gradient(rgba(251,248,242,0),var(--paper-2))}
+  .wheel-column{width:76px;height:132px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;cursor:pointer;position:relative;z-index:2}
+  .wheel-column span{font-size:18px;color:#B0A69D;line-height:1}
+  .wheel-column strong{font-size:32px;font-weight:560;line-height:1;color:var(--ink)}
+  .wheel-sep{font-size:25px;color:var(--muted);position:relative;z-index:2}
+  .modal-actions{display:flex;justify-content:flex-end;gap:18px}
+  .export-options{display:flex;flex-direction:column;gap:10px}
+  .export-option{display:flex;align-items:center;justify-content:space-between;padding:13px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .mini-tag{font-size:10px;padding:4px 7px;border:1px solid var(--line);border-radius:999px;color:var(--muted)}
+  @media (max-width:820px){.prototype-note{display:none}.stage{width:auto}.phone{height:calc(100vh - 20px);width:min(412px,calc(100vw - 18px))}body{padding:10px}}
+</style>
+</head>
+<body>
+<div class="stage">
+  <aside class="prototype-note">
+    <h1>当归 · UI Prototype v1</h1>
+    <p>暖纸张、克制留白、轻微不规则手绘线条。核心交互已经按确认内容实现为可点击原型。</p>
+    <span class="tag">事项状态滑块</span><span class="tag">连续过往长笔记</span><span class="tag">独立笔记项目</span><span class="tag">本地优先</span>
+    <p style="margin-top:14px;color:#81786F">提示：点击事项进入详情；点击绿色滑块可模拟向左关闭；底部导航可切换页面。</p>
+  </aside>
+
+  <main class="phone" aria-label="当归安卓应用交互原型">
+    <div class="app">
+      <div class="statusbar"><span>21:15</span><div class="status-icons"><span>▴</span><span>◔</span><span>▰</span></div></div>
+
+      <section class="view active" id="view-tasks">
+        <div class="topbar">
+          <div class="search-expand" id="taskSearchBox"><input placeholder="搜索事项或日期" /><button onclick="toggleTaskSearch()">×</button></div>
+          <button class="icon-btn" aria-label="搜索" onclick="toggleTaskSearch()">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.1"/></svg>
+          </button>
+          <button class="icon-btn" aria-label="排序" onclick="showSnack('可切换：手动排序 / 按日期排序')">
+            <svg viewBox="0 0 24 24"><path d="M7 5v14M4 8l3-3 3 3M17 19V5M14 16l3 3 3-3"/></svg>
+          </button>
+          <button class="icon-btn" aria-label="新建事项" onclick="openSheet('quickAdd')">
+            <svg viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></svg>
+          </button>
+        </div>
+        <div class="screen-scroll">
+          <div class="items-list" id="itemsList">
+            <article class="item-card" data-title="复习生理学第三章" data-date="8月24日" data-detail="阅读第1—4节，整理重点和错题。" onclick="openDetail(event,this)">
+              <div class="item-top"><div class="item-title">复习生理学第三章</div><button class="task-switch" aria-label="事项状态" onclick="toggleTask(event,this)"><span class="knob"></span></button></div>
+              <div class="item-bottom"><span class="date-text">8月24日</span><div class="item-actions"><button class="action-history" onclick="addToPast(event,this)">加入过往</button><button class="action-delete" onclick="deleteTask(event,this)">删除</button></div></div>
+            </article>
+            <article class="item-card" data-title="修改论文引言" data-date="8月25日" data-detail="核对新增引用，补充理论背景。" onclick="openDetail(event,this)">
+              <div class="item-top"><div class="item-title">修改论文引言</div><button class="task-switch" aria-label="事项状态" onclick="toggleTask(event,this)"><span class="knob"></span></button></div>
+              <div class="item-bottom"><span class="date-text">8月25日</span><div class="item-actions"><button class="action-history" onclick="addToPast(event,this)">加入过往</button><button class="action-delete" onclick="deleteTask(event,this)">删除</button></div></div>
+            </article>
+            <article class="item-card" data-title="整理实验数据" data-date="" data-detail="检查缺失值，并整理变量命名。" onclick="openDetail(event,this)">
+              <div class="item-top"><div class="item-title">整理实验数据</div><button class="task-switch" aria-label="事项状态" onclick="toggleTask(event,this)"><span class="knob"></span></button></div>
+              <div class="item-bottom"><span class="date-text empty-date"></span><div class="item-actions"><button class="action-history" onclick="addToPast(event,this)">加入过往</button><button class="action-delete" onclick="deleteTask(event,this)">删除</button></div></div>
+            </article>
+            <article class="item-card" data-title="购买实验记录本" data-date="8月28日" data-detail="优先选择硬壳、A5 尺寸。" onclick="openDetail(event,this)">
+              <div class="item-top"><div class="item-title">购买实验记录本</div><button class="task-switch" aria-label="事项状态" onclick="toggleTask(event,this)"><span class="knob"></span></button></div>
+              <div class="item-bottom"><span class="date-text">8月28日</span><div class="item-actions"><button class="action-history" onclick="addToPast(event,this)">加入过往</button><button class="action-delete" onclick="deleteTask(event,this)">删除</button></div></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-past">
+        <div class="topbar left-space">
+          <div class="search-inline"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.1"/></svg><input id="pastSearch" placeholder="搜索关键词、日期或事项" oninput="searchPast()" /></div>
+          <button class="icon-btn" aria-label="导出" onclick="openSheet('export')"><svg viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4M5 13v6h14v-6"/></svg></button>
+        </div>
+        <div class="screen-scroll" style="padding-top:0">
+          <div class="past-paper" id="pastPaper" contenteditable="true" spellcheck="false">
+            <div class="past-date">8月21日　星期五</div>
+            <div class="past-entry" onpointerdown="pastLongPress(event,this)" onpointerup="cancelLongPress()" onpointerleave="cancelLongPress()"><span class="past-entry-time">09:15</span><span class="past-entry-title">完成课程作业</span><div>整理了课程重点，并补充两道错题。</div></div>
+            <div class="past-entry" onpointerdown="pastLongPress(event,this)" onpointerup="cancelLongPress()" onpointerleave="cancelLongPress()"><span class="past-entry-time">20:36</span><span class="past-entry-title">阅读生理学第三章</span><div>完成第1—4节，并整理了重点内容。</div><div class="past-meta">原计划：8月21日 · 晚饭后开始</div></div>
+            <div class="past-date">8月22日　星期六</div>
+            <div class="past-entry" onpointerdown="pastLongPress(event,this)" onpointerup="cancelLongPress()" onpointerleave="cancelLongPress()"><span class="past-entry-time">14:20</span><span class="past-entry-title">核对新增参考文献</span><div>确认引用位置，并更新修改说明。</div></div>
+            <div style="min-height:160px"><br>在这里继续写下今天的内容……</div>
+          </div>
+        </div>
+        <div class="selection-menu" id="selectionMenu"><button>剪切</button><button>复制</button><button>粘贴</button><button class="convert" onclick="convertPastSelection()">转为事项</button></div>
+      </section>
+
+      <section class="view" id="view-notes">
+        <div class="topbar left-space">
+          <div class="search-inline"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.2 4.1"/></svg><input placeholder="搜索笔记" /></div>
+          <button class="icon-btn" onclick="showSnack('一级文件夹：学习 / 科研 / 生活')"><svg viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2h9v10h-17z"/></svg></button>
+          <button class="icon-btn" onclick="openNoteEditor('新笔记','')"><svg viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></svg></button>
+        </div>
+        <div class="screen-scroll">
+          <div class="notes-folders"><button class="folder-chip active">全部</button><button class="folder-chip">科研</button><button class="folder-chip">学习</button><button class="folder-chip">生活</button><button class="folder-chip">未分类</button></div>
+          <article class="note-card" onclick="openNoteEditor('系统综述下一步工作','先核对 Kane 编码，再统一补充修改说明。\n\n- [ ] 核对新增引用\n- [ ] 更新表格说明')"><div class="note-title">系统综述下一步工作</div><div class="note-preview">先核对 Kane 编码，再统一补充修改说明。包含引用、表格与审计记录。</div><div class="note-date">科研 · 今天 18:40</div></article>
+          <article class="note-card" onclick="openNoteEditor('生理学复习','第三章重点包括心肌电生理、心动周期和心输出量。')"><div class="note-title">生理学复习</div><div class="note-preview">第三章重点包括心肌电生理、心动周期和心输出量。</div><div class="note-date">学习 · 昨天 22:10</div></article>
+          <article class="note-card" onclick="openNoteEditor('采购清单','□ 实验记录本\n□ 黑色中性笔\n□ 标签贴')"><div class="note-title">采购清单</div><div class="note-preview">实验记录本、黑色中性笔、标签贴。</div><div class="note-date">生活 · 8月20日</div></article>
+        </div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="topbar"></div>
+        <div class="screen-scroll settings-scroll">
+          <section class="settings-section"><h3 class="settings-heading">显示</h3><div class="settings-card">
+            <div class="setting-row"><div><div class="setting-label">字体</div><div class="setting-sub">日期与标题使用宋体，正文使用黑体</div></div><span class="font-preview">思源组合</span></div>
+            <div class="setting-row"><div><div class="setting-label">字号</div><div class="setting-sub">同时调整事项、过往与笔记</div></div><input class="range" type="range" min="90" max="120" value="100" oninput="changeTextScale(this.value)" /></div>
+            <div class="setting-row"><div><div class="setting-label">显示密度</div><div class="setting-sub">默认使用宽松模式</div></div><div class="segmented"><button class="segment active" onclick="setDensity('loose',this)">宽松</button><button class="segment" onclick="setDensity('compact',this)">紧凑</button></div></div>
+          </div></section>
+          <section class="settings-section"><h3 class="settings-heading">提醒</h3><div class="settings-card">
+            <div class="setting-row"><div><div class="setting-label">通知声音</div><div class="setting-sub">事项提醒时播放声音</div></div><button class="small-switch on" onclick="this.classList.toggle('on')"></button></div>
+            <div class="setting-row"><div><div class="setting-label">振动</div><div class="setting-sub">可与通知声音独立设置</div></div><button class="small-switch on" onclick="this.classList.toggle('on')"></button></div>
+            <div class="setting-row"><div><div class="setting-label">稍后提醒</div><div class="setting-sub">10分钟 / 30分钟 / 1小时</div></div><span style="color:var(--muted)">›</span></div>
+          </div></section>
+          <section class="settings-section"><h3 class="settings-heading">数据与备份</h3><div class="settings-card">
+            <div class="setting-row"><div><div class="setting-label">自动本地备份</div><div class="setting-sub">每天一次，保留最近30个备份</div></div><button class="small-switch on" onclick="this.classList.toggle('on')"></button></div>
+            <div class="setting-row" onclick="showSnack('备份文件夹：Documents/当归备份/')"><div><div class="setting-label">备份文件夹</div><div class="setting-sub">Documents/当归备份/</div></div><span style="color:var(--muted)">›</span></div>
+            <div class="setting-row" onclick="openSheet('export')"><div><div class="setting-label">导出全部个人数据</div><div class="setting-sub">Markdown + JSON，打包为 ZIP</div></div><span style="color:var(--muted)">›</span></div>
+            <div class="setting-row"><div><div class="setting-label">从备份恢复</div><div class="setting-sub">支持合并恢复与覆盖恢复</div></div><span style="color:var(--muted)">›</span></div>
+            <div class="setting-row"><div><div class="setting-label danger">最近删除</div><div class="setting-sub">删除内容保留30天</div></div><span style="color:var(--muted)">›</span></div>
+          </div></section>
+        </div>
+      </section>
+
+      <nav class="bottom-nav" id="bottomNav">
+        <button class="nav-item active" data-view="tasks" onclick="switchView('tasks',this)"><svg viewBox="0 0 24 24"><path d="M6 5h12M6 12h12M6 19h8"/><circle cx="3.5" cy="5" r=".7"/><circle cx="3.5" cy="12" r=".7"/><circle cx="3.5" cy="19" r=".7"/></svg><span>事项</span></button>
+        <button class="nav-item" data-view="past" onclick="switchView('past',this)"><svg viewBox="0 0 24 24"><path d="M5 4.5h12.5a1.5 1.5 0 011.5 1.5v14H6.5A1.5 1.5 0 015 18.5z"/><path d="M8 8h8M8 12h7M8 16h5"/></svg><span>过往</span></button>
+        <button class="nav-item" data-view="notes" onclick="switchView('notes',this)"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>笔记</span></button>
+        <button class="nav-item" data-view="settings" onclick="switchView('settings',this)"><svg viewBox="0 0 24 24"><path d="M12 8.5a3.5 3.5 0 100 7 3.5 3.5 0 000-7z"/><path d="M19 13.2v-2.4l-2-.7a7.7 7.7 0 00-.7-1.7l.9-1.9-1.7-1.7-1.9.9a7.7 7.7 0 00-1.7-.7l-.7-2H8.8l-.7 2a7.7 7.7 0 00-1.7.7l-1.9-.9-1.7 1.7.9 1.9a7.7 7.7 0 00-.7 1.7l-2 .7v2.4l2 .7c.2.6.4 1.2.7 1.7l-.9 1.9 1.7 1.7 1.9-.9c.5.3 1.1.5 1.7.7l.7 2h2.4l.7-2c.6-.2 1.2-.4 1.7-.7l1.9.9 1.7-1.7-.9-1.9c.3-.5.5-1.1.7-1.7z"/></svg><span>设置</span></button>
+      </nav>
+
+      <section class="detail-page" id="detailPage">
+        <div class="detail-top"><button class="icon-btn" onclick="closeDetail()"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><button class="icon-btn" onclick="showSnack('更多：导出 / 删除 / 复制为新事项')"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button></div>
+        <div class="detail-scroll">
+          <div class="detail-title" id="detailTitle" contenteditable="true" spellcheck="false">复习生理学第三章</div>
+          <div class="smart-line"><div class="smart-key">日期</div><div class="smart-value" id="detailDate" contenteditable="true">8月24日</div></div>
+          <div class="smart-line"><div class="smart-key">计划</div><div class="smart-value" id="detailPlan" contenteditable="true">晚饭后开始，预计两个小时</div></div>
+          <div class="smart-line" onclick="openTimeModal()"><div class="smart-key">提醒</div><div class="smart-value" id="detailReminder">8月24日 18:50　声音 · 振动</div></div>
+          <div class="detail-body" id="detailBody" contenteditable="true" spellcheck="false">阅读第1—4节，整理重点和错题。<div class="checkline"><span class="checkmark done"></span><span>阅读正文</span></div><div class="checkline"><span class="checkmark"></span><span>整理笔记</span></div><div class="checkline"><span class="checkmark"></span><span>完成习题</span></div></div>
+        </div>
+        <div class="editor-toolbar"><button class="tool-btn">Aa</button><button class="tool-btn"><svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg></button><button class="tool-btn"><svg viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M4 5h2v3H4M4 11h2v3H4M4 17h2v3H4"/></svg></button><button class="tool-btn"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="5" height="5" rx="1"/><path d="M4.5 6.5l1 1 2-2M11 6.5h9"/><rect x="3" y="15" width="5" height="5" rx="1"/><path d="M11 17.5h9"/></svg></button><button class="tool-btn" onclick="showSnack('插入：日期 / 计划 / 提醒 / 清单')"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></div>
+      </section>
+
+      <section class="detail-page" id="noteEditor">
+        <div class="detail-top"><button class="icon-btn" onclick="closeNoteEditor()"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><div style="display:flex;gap:9px"><button class="icon-btn" onclick="openSheet('export')"><svg viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4M5 13v6h14v-6"/></svg></button><button class="icon-btn" onclick="showSnack('长按文字：剪切 / 复制 / 粘贴 / 转为事项')"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button></div></div>
+        <div class="detail-scroll"><div class="note-editor-title" id="noteEditorTitle" contenteditable="true"></div><div class="note-editor-body" id="noteEditorBody" contenteditable="true"></div></div>
+        <div class="editor-toolbar"><button class="tool-btn">Aa</button><button class="tool-btn"><svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg></button><button class="tool-btn"><svg viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M4 5h2v3H4M4 11h2v3H4M4 17h2v3H4"/></svg></button><button class="tool-btn"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="5" height="5" rx="1"/><path d="M4.5 6.5l1 1 2-2M11 6.5h9"/><rect x="3" y="15" width="5" height="5" rx="1"/><path d="M11 17.5h9"/></svg></button><button class="tool-btn" onclick="showSnack('转为事项：第一行作标题，其余作正文')"><svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h9M5 18h7M17 14v7M13.5 17.5h7"/></svg></button></div>
+      </section>
+
+      <div class="sheet-backdrop" id="sheetBackdrop" onclick="closeSheets()"></div>
+      <section class="sheet" id="quickAddSheet"><div class="sheet-handle"></div><div class="sheet-title">新建事项</div><div class="line-field"><input id="newTaskTitle" placeholder="写下事项" /></div><div class="date-row"><span>日期</span><input id="newTaskDate" placeholder="可选" /></div><div class="sheet-actions"><button class="text-btn" onclick="openFullNewTask()">更多设置</button><button class="primary-btn" onclick="createTask()">加入事项</button></div></section>
+      <section class="sheet" id="exportSheet"><div class="sheet-handle"></div><div class="sheet-title">导出</div><div class="export-options"><button class="export-option" onclick="showSnack('已准备全部数据导出')"><span>导出全部</span><span class="mini-tag">ZIP</span></button><button class="export-option" onclick="showSnack('选择日期范围')"><span>按日期范围导出</span><span class="mini-tag">MD + JSON</span></button><button class="export-option" onclick="showSnack('选择当前文字或多条笔记')"><span>导出所选内容</span><span class="mini-tag">批量</span></button></div><div class="sheet-actions" style="margin-top:18px"><button class="text-btn" onclick="closeSheets()">取消</button><button class="primary-btn" onclick="showSnack('当归-数据导出.zip 已生成');closeSheets()">继续</button></div></section>
+
+      <div class="time-modal" id="timeModal"><div class="time-card"><div class="time-title">设置提醒时间</div><div class="wheel"><div class="wheel-column" onclick="cycleHour()"><span id="hourPrev">17</span><strong id="hourCurrent">18</strong><span id="hourNext">19</span></div><span class="wheel-sep">:</span><div class="wheel-column" onclick="cycleMinute()"><span id="minutePrev">45</span><strong id="minuteCurrent">50</strong><span id="minuteNext">55</span></div></div><div class="modal-actions"><button class="text-btn" onclick="closeTimeModal()">取消</button><button class="primary-btn" onclick="saveTime()">确定</button></div></div></div>
+
+      <div class="snackbar" id="snackbar"><span id="snackbarText">已完成</span><button onclick="hideSnack()">撤销</button></div>
+    </div>
+  </main>
+</div>
+<script>
+  let snackTimer=null, longPressTimer=null, lastClosedAt=null;
+  function switchView(name,btn){
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    document.getElementById('view-'+name).classList.add('active');
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    btn.classList.add('active');
+    closeDetail();closeNoteEditor();closeSheets();document.getElementById('selectionMenu').classList.remove('show');
+  }
+  function toggleTaskSearch(){document.getElementById('taskSearchBox').classList.toggle('show')}
+  function toggleTask(e,sw){e.stopPropagation();const card=sw.closest('.item-card');card.classList.toggle('is-off');if(card.classList.contains('is-off')){card.dataset.closedAt=new Date().toISOString();lastClosedAt=card.dataset.closedAt;showSnack('事项已关闭；提醒已暂停')}else{showSnack('事项已重新开启')}}
+  function addToPast(e,btn){e.stopPropagation();const card=btn.closest('.item-card');const title=card.dataset.title;const detail=card.dataset.detail||'';const now=new Date(card.dataset.closedAt||Date.now());const hh=String(now.getHours()).padStart(2,'0'),mm=String(now.getMinutes()).padStart(2,'0');const paper=document.getElementById('pastPaper');const entry=document.createElement('div');entry.className='past-entry';entry.innerHTML='<span class="past-entry-time">'+hh+':'+mm+'</span><span class="past-entry-title">'+escapeHtml(title)+'</span><div>'+escapeHtml(detail)+'</div>'+(card.dataset.date?'<div class="past-meta">原计划：'+escapeHtml(card.dataset.date)+'</div>':'');paper.appendChild(entry);card.remove();showSnack('已加入过往')}
+  function deleteTask(e,btn){e.stopPropagation();btn.closest('.item-card').remove();showSnack('已移入最近删除')}
+  function openDetail(e,card){if(e.target.closest('button'))return;document.getElementById('detailTitle').textContent=card.dataset.title;document.getElementById('detailDate').textContent=card.dataset.date||'';document.getElementById('detailBody').childNodes[0].textContent=(card.dataset.detail||'')+' ';document.getElementById('detailPage').classList.add('show');document.getElementById('bottomNav').style.display='none'}
+  function closeDetail(){document.getElementById('detailPage').classList.remove('show');document.getElementById('bottomNav').style.display='flex'}
+  function openSheet(type){closeSheets();document.getElementById('sheetBackdrop').classList.add('show');document.getElementById(type==='quickAdd'?'quickAddSheet':'exportSheet').classList.add('show')}
+  function closeSheets(){document.getElementById('sheetBackdrop').classList.remove('show');document.querySelectorAll('.sheet').forEach(s=>s.classList.remove('show'))}
+  function createTask(){const input=document.getElementById('newTaskTitle');const date=document.getElementById('newTaskDate').value.trim();const title=input.value.trim();if(!title){showSnack('请先写下事项');return}const card=document.createElement('article');card.className='item-card';card.dataset.title=title;card.dataset.date=date;card.dataset.detail='';card.onclick=function(e){openDetail(e,card)};card.innerHTML='<div class="item-top"><div class="item-title">'+escapeHtml(title)+'</div><button class="task-switch" aria-label="事项状态" onclick="toggleTask(event,this)"><span class="knob"></span></button></div><div class="item-bottom"><span class="date-text '+(date?'':'empty-date')+'">'+escapeHtml(date)+'</span><div class="item-actions"><button class="action-history" onclick="addToPast(event,this)">加入过往</button><button class="action-delete" onclick="deleteTask(event,this)">删除</button></div></div>';document.getElementById('itemsList').prepend(card);input.value='';document.getElementById('newTaskDate').value='';closeSheets();showSnack('已加入事项')}
+  function openFullNewTask(){const title=document.getElementById('newTaskTitle').value||'写下事项';closeSheets();document.getElementById('detailTitle').textContent=title;document.getElementById('detailDate').textContent=document.getElementById('newTaskDate').value||'';document.getElementById('detailBody').childNodes[0].textContent=' ';document.getElementById('detailPage').classList.add('show');document.getElementById('bottomNav').style.display='none'}
+  function showSnack(text){document.getElementById('snackbarText').textContent=text;const s=document.getElementById('snackbar');s.classList.add('show');clearTimeout(snackTimer);snackTimer=setTimeout(hideSnack,2300)}
+  function hideSnack(){document.getElementById('snackbar').classList.remove('show')}
+  function openTimeModal(){document.getElementById('timeModal').classList.add('show')}
+  function closeTimeModal(){document.getElementById('timeModal').classList.remove('show')}
+  function saveTime(){const h=document.getElementById('hourCurrent').textContent,m=document.getElementById('minuteCurrent').textContent;document.getElementById('detailReminder').textContent='8月24日 '+h+':'+m+'　声音 · 振动';closeTimeModal();showSnack('提醒已设置')}
+  function cycleHour(){let h=(parseInt(document.getElementById('hourCurrent').textContent,10)+1)%24;updateHour(h)}
+  function updateHour(h){document.getElementById('hourCurrent').textContent=String(h).padStart(2,'0');document.getElementById('hourPrev').textContent=String((h+23)%24).padStart(2,'0');document.getElementById('hourNext').textContent=String((h+1)%24).padStart(2,'0')}
+  function cycleMinute(){let m=(parseInt(document.getElementById('minuteCurrent').textContent,10)+5)%60;updateMinute(m)}
+  function updateMinute(m){document.getElementById('minuteCurrent').textContent=String(m).padStart(2,'0');document.getElementById('minutePrev').textContent=String((m+55)%60).padStart(2,'0');document.getElementById('minuteNext').textContent=String((m+5)%60).padStart(2,'0')}
+  function initTime(){updateHour(18);updateMinute(50)}
+  function pastLongPress(e,el){cancelLongPress();longPressTimer=setTimeout(()=>{document.getElementById('selectionMenu').classList.add('show')},540)}
+  function cancelLongPress(){clearTimeout(longPressTimer)}
+  function convertPastSelection(){document.getElementById('selectionMenu').classList.remove('show');switchView('tasks',document.querySelector('[data-view="tasks"]'));openSheet('quickAdd');document.getElementById('newTaskTitle').value='核对新增参考文献';showSnack('已将所选文字填入事项')}
+  function searchPast(){const q=document.getElementById('pastSearch').value.trim();if(q.length>1)showSnack('已定位包含“'+q+'”的内容')}
+  function openNoteEditor(title,body){document.getElementById('noteEditorTitle').textContent=title;document.getElementById('noteEditorBody').innerText=body;document.getElementById('noteEditor').classList.add('show');document.getElementById('bottomNav').style.display='none'}
+  function closeNoteEditor(){document.getElementById('noteEditor').classList.remove('show');document.getElementById('bottomNav').style.display='flex'}
+  function changeTextScale(v){document.documentElement.style.setProperty('--text-scale',v/100)}
+  function setDensity(mode,btn){btn.parentElement.querySelectorAll('.segment').forEach(s=>s.classList.remove('active'));btn.classList.add('active');if(mode==='compact'){document.documentElement.style.setProperty('--card-gap','9px');document.documentElement.style.setProperty('--card-pad','13px')}else{document.documentElement.style.setProperty('--card-gap','14px');document.documentElement.style.setProperty('--card-pad','18px')}}
+  function escapeHtml(str){return str.replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
+  initTime();
+</script>
+</body>
+</html>

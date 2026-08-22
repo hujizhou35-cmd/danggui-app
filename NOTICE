@@ -1,0 +1,14 @@
+Danggui / 当归
+Copyright 2026 Danggui contributors
+
+Source code in this repository is licensed under the Apache License 2.0
+unless a file states otherwise.
+
+The Danggui name, app icon, launch artwork, and related brand assets are not
+licensed under the Apache License 2.0. All rights in those brand assets are
+reserved. See TRADEMARKS.md for permitted use.
+
+Bundled fonts and third-party components retain their respective licenses.
+The in-app Open-source licenses page exposes Flutter's generated license
+registry. A verified summary of direct runtime dependencies and the bundled
+font is maintained in THIRD_PARTY_NOTICES.md.
