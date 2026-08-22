@@ -10,6 +10,18 @@ fi
 api_level="$1"
 evidence_dir="${RUNNER_TEMP:?RUNNER_TEMP is not set}/danggui-emulator-api-${api_level}"
 mkdir -p "${evidence_dir}"
+[[ -e "${evidence_dir}/before.json" ]] ||
+  printf '%s\n' '{"status":"not-captured","phase":"before-overlay-install"}' \
+    > "${evidence_dir}/before.json"
+[[ -e "${evidence_dir}/after.json" ]] ||
+  printf '%s\n' '{"status":"not-captured","phase":"after-overlay-install"}' \
+    > "${evidence_dir}/after.json"
+[[ -e "${evidence_dir}/notification-before.txt" ]] ||
+  printf '%s\n' 'not captured' > "${evidence_dir}/notification-before.txt"
+[[ -e "${evidence_dir}/notification-after.txt" ]] ||
+  printf '%s\n' 'not captured' > "${evidence_dir}/notification-after.txt"
+[[ -e "${evidence_dir}/notification-shade.png" ]] ||
+  : > "${evidence_dir}/notification-shade.png"
 
 run_flutter_test() {
   local attempt="$1"
@@ -79,13 +91,14 @@ if (( test_status == 124 )) &&
   fi
 
   if (( recovery_ok == 1 )); then
-    package_path="$(
+    package_listing="$(
       timeout --signal=TERM --kill-after=5s 20s \
-        adb -s emulator-5554 shell pm path com.danggui.memo 2>/dev/null
+        adb -s emulator-5554 shell pm list packages \
+          com.danggui.memo 2>/dev/null
     )"
     package_query_status=$?
     if (( package_query_status != 0 )) ||
-       [[ -n "${package_path//[[:space:]]/}" ]]; then
+       [[ -n "${package_listing//[[:space:]]/}" ]]; then
       recovery_ok=0
     fi
   fi
@@ -94,13 +107,14 @@ if (( test_status == 124 )) &&
     timeout --signal=TERM --kill-after=5s 30s \
       adb -s emulator-5554 uninstall com.danggui.memo \
       >/dev/null 2>&1 || true
-    clean_package_path="$(
+    clean_package_listing="$(
       timeout --signal=TERM --kill-after=5s 20s \
-        adb -s emulator-5554 shell pm path com.danggui.memo 2>/dev/null
+        adb -s emulator-5554 shell pm list packages \
+          com.danggui.memo 2>/dev/null
     )"
     clean_package_query_status=$?
     if (( clean_package_query_status != 0 )) ||
-       [[ -n "${clean_package_path//[[:space:]]/}" ]]; then
+       [[ -n "${clean_package_listing//[[:space:]]/}" ]]; then
       recovery_ok=0
     fi
   fi
@@ -114,7 +128,8 @@ if (( test_status == 124 )) &&
 fi
 
 if (( test_status == 0 )); then
-  exit 0
+  bash integration_test/run_android_release_acceptance.sh "${api_level}"
+  exit $?
 fi
 
 # Capture evidence while android-emulator-runner still owns a live AVD. Every
@@ -128,5 +143,12 @@ adb shell dumpsys package com.danggui.memo \
   > "${evidence_dir}/package.txt" 2>&1 || true
 timeout --signal=TERM --kill-after=5s 30s adb logcat -d -v threadtime \
   > "${evidence_dir}/logcat.txt" 2>&1 || true
+adb shell dumpsys alarm > "${evidence_dir}/alarm-final.txt" 2>&1 || true
+adb shell dumpsys notification --noredact \
+  > "${evidence_dir}/notification-final.txt" 2>&1 || true
+if [[ ! -s "${evidence_dir}/notification-shade.png" ]]; then
+  timeout --signal=TERM --kill-after=5s 30s adb exec-out screencap -p \
+    > "${evidence_dir}/notification-shade.png" 2>/dev/null || true
+fi
 
 exit "${test_status}"
