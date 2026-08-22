@@ -87,7 +87,9 @@ jobs:
         run: flutter analyze --fatal-infos
 
       - name: Test
-        run: flutter test --reporter expanded
+        # Keep Argon2id backup checks and large-dataset performance gates from
+        # competing across test isolates so the release signal is repeatable.
+        run: flutter test --reporter expanded --concurrency=1
 
       - name: Upload Golden failure evidence
         if: failure()
