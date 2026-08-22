@@ -313,29 +313,7 @@ jobs:
             -no-boot-anim -camera-back none -camera-front none
           disable-animations: true
           disable-spellchecker: true
-          script: |
-            set +e
-            timeout --signal=TERM --kill-after=30s 25m \
-              flutter test --no-pub integration_test/app_cold_start_test.dart \
-              -d emulator-5554 --reporter expanded
-            test_status=$?
-            if (( test_status == 0 )); then
-              exit 0
-            fi
-
-            # Collect evidence before android-emulator-runner terminates the AVD.
-            evidence_dir="${RUNNER_TEMP}/danggui-emulator-api-${{ matrix.api-level }}"
-            mkdir -p "${evidence_dir}"
-            adb devices -l > "${evidence_dir}/adb-devices.txt" 2>&1
-            adb shell pidof com.danggui.memo \
-              > "${evidence_dir}/app-pid.txt" 2>&1
-            adb shell dumpsys activity activities \
-              > "${evidence_dir}/activity.txt" 2>&1
-            adb shell dumpsys package com.danggui.memo \
-              > "${evidence_dir}/package.txt" 2>&1
-            adb logcat -d -v threadtime \
-              > "${evidence_dir}/logcat.txt" 2>&1
-            exit "${test_status}"
+          script: bash integration_test/run_android_emulator_smoke.sh "${{ matrix.api-level }}"
 
       - name: Upload emulator failure evidence
         if: failure()

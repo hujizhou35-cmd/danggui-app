@@ -99,25 +99,50 @@ if ($LASTEXITCODE -ne 0) {
     throw "apkanalyzer manifest print failed: $($mergedManifest -join [Environment]::NewLine)"
 }
 $mergedManifestText = $mergedManifest -join "`n"
-foreach ($attribute in @(
-    'android:allowBackup="false"',
-    'android:usesCleartextTraffic="false"',
-    'android:screenOrientation="portrait"'
-)) {
-    if ($mergedManifestText -notmatch [regex]::Escape($attribute)) {
-        throw "Merged APK manifest is missing $attribute."
+try {
+    [xml]$mergedManifestXml = $mergedManifestText
+}
+catch {
+    throw "apkanalyzer returned malformed merged XML: $($_.Exception.Message)"
+}
+$androidNamespace = "http://schemas.android.com/apk/res/android"
+$applicationElement = $mergedManifestXml.manifest.application
+if (-not $applicationElement) {
+    throw "Merged APK manifest has no application element."
+}
+foreach ($attribute in @("allowBackup", "usesCleartextTraffic")) {
+    if ($applicationElement.GetAttribute($attribute, $androidNamespace) -ne "false") {
+        throw "Merged APK application must set android:$attribute=`"false`"."
     }
+}
+$mainActivity =
+    @($applicationElement.activity) |
+    Where-Object {
+        $_.GetAttribute("name", $androidNamespace).EndsWith(".MainActivity")
+    } |
+    Select-Object -First 1
+if (-not $mainActivity) {
+    throw "Merged APK manifest has no MainActivity."
+}
+$orientation = $mainActivity.GetAttribute("screenOrientation", $androidNamespace)
+if ($orientation -notin @("portrait", "1")) {
+    throw "Merged APK MainActivity must remain portrait-only; apkanalyzer reported '$orientation'."
 }
 foreach ($receiver in @(
     "ScheduledNotificationReceiver",
     "ScheduledNotificationBootReceiver",
     "ActionBroadcastReceiver"
 )) {
-    $receiverPattern =
-        '(?s)<receiver(?=[^>]*' +
-        [regex]::Escape($receiver) +
-        ')(?=[^>]*android:exported="false")[^>]*>'
-    if ($mergedManifestText -notmatch $receiverPattern) {
+    $receiverElement =
+        @($applicationElement.receiver) |
+        Where-Object {
+            $_.GetAttribute("name", $androidNamespace).EndsWith(".$receiver")
+        } |
+        Select-Object -First 1
+    if (
+        -not $receiverElement -or
+        $receiverElement.GetAttribute("exported", $androidNamespace) -ne "false"
+    ) {
         throw "Merged APK receiver $receiver must exist and remain non-exported."
     }
 }

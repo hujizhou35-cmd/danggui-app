@@ -80,26 +80,58 @@ for field in application-id version-name version-code min-sdk target-sdk debugga
   fi
 done
 
-merged_manifest="$(${apkanalyzer} manifest print "${apk}")"
-for attribute in \
-  'android:allowBackup="false"' \
-  'android:usesCleartextTraffic="false"' \
-  'android:screenOrientation="portrait"'; do
-  if ! grep -Fq "${attribute}" <<<"${merged_manifest}"; then
-    echo "Merged APK manifest is missing ${attribute}." >&2
-    exit 1
-  fi
-done
-for receiver in \
-  ScheduledNotificationReceiver \
-  ScheduledNotificationBootReceiver \
-  ActionBroadcastReceiver; do
-  receiver_element="$(grep -E "<receiver[^>]*${receiver}" <<<"${merged_manifest}" || true)"
-  if [[ -z "${receiver_element}" || "${receiver_element}" != *'android:exported="false"'* ]]; then
-    echo "Merged APK receiver ${receiver} must exist and remain non-exported." >&2
-    exit 1
-  fi
-done
+merged_manifest_file="$(mktemp)"
+trap 'rm -f "${merged_manifest_file}"' EXIT
+"${apkanalyzer}" manifest print "${apk}" > "${merged_manifest_file}"
+python3 - "${merged_manifest_file}" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+android = "{http://schemas.android.com/apk/res/android}"
+root = ET.parse(sys.argv[1]).getroot()
+application = root.find("application")
+if application is None:
+    raise SystemExit("Merged APK manifest has no application element.")
+
+for attribute in ("allowBackup", "usesCleartextTraffic"):
+    if application.get(android + attribute) != "false":
+        raise SystemExit(
+            f'Merged APK application must set android:{attribute}="false".'
+        )
+
+main_activity = next(
+    (
+        activity
+        for activity in application.findall("activity")
+        if (activity.get(android + "name") or "").endswith(".MainActivity")
+    ),
+    None,
+)
+if main_activity is None:
+    raise SystemExit("Merged APK manifest has no MainActivity.")
+orientation = main_activity.get(android + "screenOrientation")
+if orientation not in {"portrait", "1"}:
+    raise SystemExit(
+        "Merged APK MainActivity must remain portrait-only; "
+        f"apkanalyzer reported {orientation!r}."
+    )
+
+required_receivers = {
+    "ScheduledNotificationReceiver",
+    "ScheduledNotificationBootReceiver",
+    "ActionBroadcastReceiver",
+}
+receivers = {
+    (receiver.get(android + "name") or "").rsplit(".", 1)[-1]: receiver
+    for receiver in application.findall("receiver")
+}
+for receiver_name in required_receivers:
+    receiver = receivers.get(receiver_name)
+    if receiver is None or receiver.get(android + "exported") != "false":
+        raise SystemExit(
+            f"Merged APK receiver {receiver_name} must exist and remain non-exported."
+        )
+PY
 
 signature_report="$(${apksigner} verify --verbose --print-certs "${apk}")"
 printf '%s\n' "${signature_report}"
