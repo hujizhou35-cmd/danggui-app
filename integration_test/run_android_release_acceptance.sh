@@ -316,12 +316,20 @@ if (( uninstall_status != 0 )) &&
   echo 'Could not establish a fresh package state.' >&2
   exit "${uninstall_status}"
 fi
+bounded_adb shell pm path android \
+  > "${evidence_dir}/package-manager-health.txt" 2>&1
+grep -Fq 'package:' "${evidence_dir}/package-manager-health.txt"
 set +e
-package_path="$(bounded_adb shell pm path "${package_name}" 2>/dev/null)"
+package_listing="$(
+  bounded_adb shell pm list packages "${package_name}" \
+    2> "${evidence_dir}/fresh-package-query.stderr"
+)"
 package_query_status=$?
 set -e
+printf '%s\n' "${package_listing}" \
+  > "${evidence_dir}/fresh-package-query.txt"
 if (( package_query_status != 0 )) ||
-   [[ -n "${package_path//[[:space:]]/}" ]]; then
+   [[ -n "${package_listing//[[:space:]]/}" ]]; then
   echo 'Package Manager could not prove that the app package is absent.' >&2
   exit 1
 fi

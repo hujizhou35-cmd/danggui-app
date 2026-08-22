@@ -83,6 +83,10 @@ run_case() {
             return 0
             ;;
           *" pm path com.danggui.memo "*)
+            printf "%s\n" "forbidden-target-path-query" >> "${EVENT_LOG}"
+            return 91
+            ;;
+          *" pm list packages com.danggui.memo "*)
             printf "%s\n" "target-package-query" >> "${EVENT_LOG}"
             case "${SCENARIO}" in
               clean|retry-failure|acceptance-failure)

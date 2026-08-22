@@ -91,13 +91,14 @@ if (( test_status == 124 )) &&
   fi
 
   if (( recovery_ok == 1 )); then
-    package_path="$(
+    package_listing="$(
       timeout --signal=TERM --kill-after=5s 20s \
-        adb -s emulator-5554 shell pm path com.danggui.memo 2>/dev/null
+        adb -s emulator-5554 shell pm list packages \
+          com.danggui.memo 2>/dev/null
     )"
     package_query_status=$?
     if (( package_query_status != 0 )) ||
-       [[ -n "${package_path//[[:space:]]/}" ]]; then
+       [[ -n "${package_listing//[[:space:]]/}" ]]; then
       recovery_ok=0
     fi
   fi
@@ -106,13 +107,14 @@ if (( test_status == 124 )) &&
     timeout --signal=TERM --kill-after=5s 30s \
       adb -s emulator-5554 uninstall com.danggui.memo \
       >/dev/null 2>&1 || true
-    clean_package_path="$(
+    clean_package_listing="$(
       timeout --signal=TERM --kill-after=5s 20s \
-        adb -s emulator-5554 shell pm path com.danggui.memo 2>/dev/null
+        adb -s emulator-5554 shell pm list packages \
+          com.danggui.memo 2>/dev/null
     )"
     clean_package_query_status=$?
     if (( clean_package_query_status != 0 )) ||
-       [[ -n "${clean_package_path//[[:space:]]/}" ]]; then
+       [[ -n "${clean_package_listing//[[:space:]]/}" ]]; then
       recovery_ok=0
     fi
   fi
