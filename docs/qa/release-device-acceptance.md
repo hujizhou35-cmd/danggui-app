@@ -9,12 +9,12 @@
 - `before.json`、`after.json`：dataset、事项/正文/提醒/注册、笔记及文件夹、过往连续文档/事件/部件/锚点、非默认设置均逐字段一致；`PRAGMA quick_check` 为 `ok`，`foreign_key_check` 为空；事项卡实际渲染包含提醒时间与“提醒”语义。
 - `initial-install.log`、`overlay-install.log`、`package-*.txt`、`overlay-debug-apk.sha256`、`overlay-apk-signature.txt`：明确记录同签名 `adb install --no-streaming -r -t` 覆盖边界。
 - `permission-policy.json`、`permission-dialog.xml`、`notification-appop*.txt`：API 36 由应用发起 `POST_NOTIFICATIONS` 请求，CI 识别真实系统权限弹窗并点击允许；API 24 明确记录运行时权限不适用且验收代码未发起权限请求。
-- `alarm-*.txt`、`alarm-contract.json`、`notification-before.txt`、`notification-after.txt`、`notification-timing.json`：数据库中只有一个提醒，证据记录其平台通知 ID 与计划时刻；覆盖安装后它进入系统 AlarmManager，且未提前、并在设备时钟和主机单调时钟的双重硬上限内成为真实系统通知。
+- `alarm-*.txt`、`alarm-contract.json`、`notification-before.txt`、`notification-after.txt`、`notification-timing.json`：数据库中只有一个提醒，证据记录其平台通知 ID 与计划时刻；覆盖后启动生产入口并执行正常协调，随后证明它存在于系统 AlarmManager，且未提前、并在设备时钟和主机单调时钟的双重硬上限内成为真实系统通知。证据不把 Alarm 的恢复来源归因于应用协调器或插件安装广播中的任一方。
 - `notification-shade.png`：展开通知栏后的系统截图；`logcat-final.txt` 和 `script-exit-status.txt` 保留最终诊断。
 
 自动化采用 debug 同签名覆盖，以便通过应用沙盒导出结构化证据。正式发布 APK 的 SHA-256 与证书仍须在下方实体机记录中逐项填写。
 
-Flutter 设备测试结束会强制停止应用并清除未触发的系统 Alarm。为避免把测试宿主副作用误判为产品失败，显式覆盖安装先验证 `MY_PACKAGE_REPLACED` 后闹钟恢复；随后 verify 测试保持运行并等待主机证据信号，主机在应用仍存活时完成 Alarm、通知栏、截图和 UI XML 取证，再允许测试正常退出。自动化不把 force-stop 后的 Alarm 当作产品状态。
+Flutter 设备测试结束会强制停止应用并清除未触发的系统 Alarm；默认还会卸载应用。seed/verify 均显式使用 `--no-uninstall` 保留包与数据库，但不把 seed 结束后的 force-stop 状态或覆盖安装本身解释为闹钟已恢复。覆盖后由 verify 启动真实 `main()` 并执行正常协调流程；脚本只在此后验证 Alarm 已存在，不区分它由插件安装广播还是应用流程恢复。verify 随后保持运行并等待主机证据信号，主机在应用仍存活时完成 Alarm、通知栏、截图和 UI XML 取证，再允许测试正常退出。
 
 ## 代表性实体机人工验收（未签署）
 

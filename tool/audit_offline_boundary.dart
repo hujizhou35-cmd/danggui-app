@@ -864,6 +864,18 @@ final class _Audit {
       );
     }
 
+    const acceptancePath = 'integration_test/run_android_release_acceptance.sh';
+    final acceptance = _requiredText(acceptancePath);
+    if (acceptance != null) {
+      final noUninstallCount = '--no-uninstall'.allMatches(acceptance).length;
+      _expect(
+        noUninstallCount >= 3,
+        'release acceptance keeps seed and verify packages installed',
+        '$acceptancePath must pass --no-uninstall to every seed and verify '
+            'integration-test path',
+      );
+    }
+
     for (final splitContract in <String>[
       '[armeabi-v7a]=1001',
       '[arm64-v8a]=2001',

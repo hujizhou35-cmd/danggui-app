@@ -110,7 +110,8 @@ run_flutter_logged() {
   set +e
   timeout --signal=TERM --kill-after=30s 12m \
     flutter test --no-pub "${target}" -d emulator-5554 \
-      --reporter expanded --dart-define="${acceptance_define}" 2>&1 |
+      --no-uninstall --reporter expanded \
+      --dart-define="${acceptance_define}" 2>&1 |
     tee "${evidence_dir}/${label}.log"
   statuses=("${PIPESTATUS[@]}")
   set -e
@@ -128,7 +129,7 @@ start_verify_logged() {
     timeout --signal=TERM --kill-after=30s 20m \
       flutter test --no-pub \
         integration_test/release_acceptance_verify_test.dart \
-        -d emulator-5554 --reporter expanded \
+        -d emulator-5554 --no-uninstall --reporter expanded \
         --dart-define="${acceptance_define}" 2>&1 |
       tee "${evidence_dir}/verify.log"
   ) &
@@ -194,7 +195,7 @@ run_seed_with_permission_contract() {
     timeout --signal=TERM --kill-after=30s 12m \
       flutter test --no-pub \
         integration_test/release_acceptance_seed_test.dart \
-        -d emulator-5554 --reporter expanded \
+        -d emulator-5554 --no-uninstall --reporter expanded \
         --dart-define="${acceptance_define}" 2>&1 |
       tee "${evidence_dir}/seed.log"
   ) &
@@ -439,8 +440,8 @@ fi
 install_apk_logged overlay-install -r -t "${build_apk}"
 bounded_adb shell dumpsys package "${package_name}" \
   > "${evidence_dir}/package-after-explicit-overlay.txt"
-capture_alarm_when_scheduled \
-  "${evidence_dir}/alarm-after-explicit-overlay.txt"
+bounded_adb shell dumpsys alarm \
+  > "${evidence_dir}/alarm-after-explicit-overlay.txt"
 platform_notification_id="$(
   jq -er '.notificationRegistration.platformNotificationId' "${before_json}"
 )"
@@ -448,10 +449,6 @@ platform_notification_id="$(
 scheduled_micros="$(jq -er '.task.reminderScheduledAtUtcMicros' "${before_json}")"
 [[ "${scheduled_micros}" =~ ^[0-9]+$ ]]
 scheduled_seconds=$(( scheduled_micros / 1000000 ))
-printf '%s\n' \
-  "{\"platformNotificationId\":${platform_notification_id},\"scheduledEpochSeconds\":${scheduled_seconds},\"solePersistedReminder\":true,\"alarmDump\":\"alarm-after-explicit-overlay.txt\"}" \
-  > "${evidence_dir}/alarm-contract.json"
-jq -e . "${evidence_dir}/alarm-contract.json" >/dev/null
 
 start_verify_logged
 wait_for_verify_evidence "${after_json}"
@@ -476,6 +473,10 @@ fi
 bounded_adb shell dumpsys package "${package_name}" \
   > "${evidence_dir}/package-after-verify.txt"
 capture_alarm_when_scheduled "${evidence_dir}/alarm-after-verify.txt"
+printf '%s\n' \
+  "{\"platformNotificationId\":${platform_notification_id},\"scheduledEpochSeconds\":${scheduled_seconds},\"solePersistedReminder\":true,\"observedAfterVerifyProductionStartup\":true,\"recoverySourceAttributed\":false,\"alarmDump\":\"alarm-after-verify.txt\",\"overlayPreLaunchDump\":\"alarm-after-explicit-overlay.txt\"}" \
+  > "${evidence_dir}/alarm-contract.json"
+jq -e . "${evidence_dir}/alarm-contract.json" >/dev/null
 sha256sum "${evidence_dir}/alarm-after-explicit-overlay.txt" \
   "${evidence_dir}/alarm-after-verify.txt" \
   > "${evidence_dir}/alarm-dumps.sha256"
