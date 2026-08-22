@@ -1,0 +1,28 @@
+* text=auto
+
+# Cross-platform build and CI entry points must stay LF even when authored on
+# Windows. Batch files remain native to cmd.exe.
+*.sh text eol=lf
+gradlew text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.dart text eol=lf
+*.kts text eol=lf
+*.swift text eol=lf
+*.xml text eol=lf
+*.plist text eol=lf
+*.md text eol=lf
+*.ps1 text eol=lf
+*.bat text eol=crlf
+
+# Binary assets and tool wrappers must never be newline-normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.otf binary
+*.ttf binary
+*.jar binary
+*.zip binary
+*.jks binary
+*.keystore binary

@@ -1,0 +1,72 @@
+# Flutter and Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+.pub-cache/
+build/
+coverage/
+doc/api/
+*.iml
+
+# IDE and operating system
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Android local and signing files
+android/.gradle/
+android/local.properties
+android/key.properties
+android/keystore.properties
+*.jks
+*.keystore
+*.pfx
+*.clixml
+*.apk
+*.aab
+
+# Apple local and signing files
+ios/Flutter/ephemeral/
+ios/Flutter/flutter_export_environment.sh
+ios/Pods/
+ios/.symlinks/
+*.p8
+*.p12
+*.mobileprovision
+*.xcarchive
+*.ipa
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.secret
+.release-secrets/
+
+# Local user data and backups
+*.dgbak
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-journal
+*.sqlite-journal
+*.sqlite3-journal
+*.dgbak.partial
+*.zip.partial
+
+# Test and tool output
+test-results/
+screenshots/actual/
+screenshots/diff/
+dist/
+*.hprof
+*.log

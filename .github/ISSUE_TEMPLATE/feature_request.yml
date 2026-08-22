@@ -1,0 +1,28 @@
+name: Feature request / 功能建议
+description: Suggest an improvement that preserves the local-first product boundary. 提议符合本地优先边界的改进。
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem / 用户问题
+      description: Describe the problem before proposing an interface or dependency. 先描述问题，再描述方案。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior / 建议行为
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Product boundaries / 产品边界
+      options:
+        - label: The proposal works without an account or remote data upload. 方案无需账号或远程上传数据。
+          required: true
+        - label: The proposal does not require analytics, ads, or runtime AI. 方案不依赖分析、广告或运行时 AI。
+          required: true

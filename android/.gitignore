@@ -1,0 +1,14 @@
+# Keep gradlew, gradlew.bat and gradle/wrapper/gradle-wrapper.jar under version
+# control so local and CI builds use the same reviewed Gradle distribution.
+/.gradle
+/captures/
+/local.properties
+GeneratedPluginRegistrant.java
+.cxx/
+
+# Remember to never publicly share your keystore.
+# See https://flutter.dev/to/reference-keystore
+key.properties
+keystore.properties
+**/*.keystore
+**/*.jks

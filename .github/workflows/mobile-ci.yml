@@ -1,0 +1,312 @@
+name: Mobile CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.47.1
+  JAVA_VERSION: "21"
+  ANDROID_COMPILE_SDK: "36"
+  ANDROID_BUILD_TOOLS: 36.0.0
+  ANDROID_NDK_VERSION: 28.2.13676358
+
+jobs:
+  android-linux:
+    name: Analyze, test, APK and AAB
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Normalize executable bits from Windows-authored commits
+        run: chmod +x android/gradlew tool/*.sh
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install locked Android SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager \
+            "platforms;android-${ANDROID_COMPILE_SDK}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "platform-tools" \
+            "ndk;${ANDROID_NDK_VERSION}" \
+            "cmake;3.22.1"
+
+      - name: Disable tool analytics
+        shell: bash
+        run: |
+          flutter config --no-analytics
+          dart --disable-analytics
+
+      - name: Resolve dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Enforce offline-only boundary
+        run: dart run tool/audit_offline_boundary.dart
+
+      - name: Analyze
+        run: flutter analyze --fatal-infos
+
+      - name: Test
+        run: flutter test --reporter expanded
+
+      - name: Configure release signing or explicit debug fallback
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_EXPECTED_CERT_SHA256: ${{ secrets.ANDROID_EXPECTED_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+
+          required=(
+            ANDROID_KEYSTORE_BASE64
+            ANDROID_KEYSTORE_PASSWORD
+            ANDROID_KEY_ALIAS
+            ANDROID_KEY_PASSWORD
+          )
+          provided=0
+          for name in "${required[@]}"; do
+            if [[ -n "${!name:-}" ]]; then
+              provided=$((provided + 1))
+            fi
+          done
+
+          if (( provided > 0 && provided < ${#required[@]} )); then
+            echo "Release signing secrets are only partially configured." >&2
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* && provided -ne ${#required[@]} ]]; then
+            echo "Version tags require all release signing secrets; debug fallback is forbidden." >&2
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* && -z "${ANDROID_EXPECTED_CERT_SHA256:-}" ]]; then
+            echo "Version tags require ANDROID_EXPECTED_CERT_SHA256." >&2
+            exit 1
+          fi
+
+          if (( provided == ${#required[@]} )); then
+            keystore_path="${RUNNER_TEMP}/danggui-release.jks"
+            printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${keystore_path}"
+            chmod 600 "${keystore_path}"
+            {
+              echo "DANGGUI_KEYSTORE_PATH=${keystore_path}"
+              echo "DANGGUI_KEYSTORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}"
+              echo "DANGGUI_KEY_ALIAS=${ANDROID_KEY_ALIAS}"
+              echo "DANGGUI_KEY_PASSWORD=${ANDROID_KEY_PASSWORD}"
+              echo "DANGGUI_EXPECTED_CERT_SHA256=${ANDROID_EXPECTED_CERT_SHA256}"
+              echo "ANDROID_SIGNING_MODE=release"
+            } >> "${GITHUB_ENV}"
+          else
+            echo "ANDROID_SIGNING_MODE=debug-fallback" >> "${GITHUB_ENV}"
+            echo "No release signing secrets supplied; CI artifacts will use the debug key."
+          fi
+
+      - name: Build universal and split APKs
+        run: |
+          flutter build apk --release
+          flutter build apk --release --split-per-abi
+
+      - name: Build app bundle
+        run: flutter build appbundle --release
+
+      - name: Stage and verify Android artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/android
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            "dist/android/danggui-android-universal-${ANDROID_SIGNING_MODE}.apk"
+
+          declare -A split_version_codes=(
+            [armeabi-v7a]=1001
+            [arm64-v8a]=2001
+            [x86_64]=4001
+          )
+          for abi in armeabi-v7a arm64-v8a x86_64; do
+            source="build/app/outputs/flutter-apk/app-${abi}-release.apk"
+            if [[ ! -f "${source}" ]]; then
+              echo "Expected split APK was not generated: ${source}" >&2
+              exit 1
+            fi
+            cp "${source}" "dist/android/danggui-android-${abi}-${ANDROID_SIGNING_MODE}.apk"
+          done
+
+          cp build/app/outputs/bundle/release/app-release.aab \
+            "dist/android/danggui-android-${ANDROID_SIGNING_MODE}.aab"
+
+          bash tool/verify_android_artifacts.sh \
+            "dist/android/danggui-android-universal-${ANDROID_SIGNING_MODE}.apk" \
+            "dist/android/danggui-android-${ANDROID_SIGNING_MODE}.aab" \
+            1
+          for abi in armeabi-v7a arm64-v8a x86_64; do
+            bash tool/verify_android_artifacts.sh \
+              "dist/android/danggui-android-${abi}-${ANDROID_SIGNING_MODE}.apk" \
+              "" \
+              "${split_version_codes[$abi]}"
+          done
+
+          (
+            cd dist/android
+            sha256sum ./*.apk ./*.aab > SHA256SUMS
+            printf '%s\n' "${ANDROID_SIGNING_MODE}" > SIGNING_MODE.txt
+            flutter --version > TOOLCHAIN.txt
+          )
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: danggui-android-${{ github.sha }}
+          path: dist/android/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary signing material
+        if: always()
+        shell: bash
+        run: rm -f "${RUNNER_TEMP}/danggui-release.jks"
+
+  android-emulator-smoke:
+    name: Android cold-start smoke (API ${{ matrix.api-level }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        api-level: [24, 36]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Normalize executable bits from Windows-authored commits
+        run: chmod +x android/gradlew
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install locked Android build SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager \
+            "platforms;android-${ANDROID_COMPILE_SDK}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "platform-tools" \
+            "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Configure toolchain and resolve dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter config --no-analytics
+          dart --disable-analytics
+          flutter pub get --enforce-lockfile
+
+      # KVM setup recommended by ReactiveCircus for hardware-accelerated Linux runners.
+      - name: Enable KVM group permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run production cold-start smoke on API ${{ matrix.api-level }}
+        # ReactiveCircus/android-emulator-runner v2.38.0, pinned to its immutable commit.
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: default
+          arch: x86_64
+          profile: pixel_7_pro
+          emulator-port: 5554
+          emulator-boot-timeout: 600
+          emulator-options: >-
+            -no-window -gpu swiftshader_indirect -no-snapshot -noaudio
+            -no-boot-anim -camera-back none -camera-front none
+          disable-animations: true
+          disable-spellchecker: true
+          script: >-
+            timeout --signal=TERM --kill-after=30s 25m
+            flutter test --no-pub integration_test/app_cold_start_test.dart
+            -d emulator-5554 --reporter expanded
+
+  ios-unsigned:
+    name: Unsigned iOS source build
+    runs-on: macos-26
+    timeout-minutes: 60
+    needs: [android-linux, android-emulator-smoke]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Configure toolchain
+        shell: bash
+        run: |
+          flutter config --no-analytics --enable-swift-package-manager
+          dart --disable-analytics
+          xcodebuild -version
+          flutter --version
+
+      - name: Resolve dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Build unsigned iOS app
+        run: bash tool/build_ios_unsigned.sh
+
+      - name: Upload unsigned iOS build evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: danggui-ios-unsigned-${{ github.sha }}
+          path: dist/ios/
+          if-no-files-found: error
+          retention-days: 14
