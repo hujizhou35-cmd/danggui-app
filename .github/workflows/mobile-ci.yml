@@ -51,7 +51,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager \
+          sdkmanager_bin="${ANDROID_SDK_ROOT:?ANDROID_SDK_ROOT is not set}/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "${sdkmanager_bin}" ]]; then
+            echo "sdkmanager not executable: ${sdkmanager_bin}" >&2
+            exit 1
+          fi
+          "${sdkmanager_bin}" \
             "platforms;android-${ANDROID_COMPILE_SDK}" \
             "build-tools;${ANDROID_BUILD_TOOLS}" \
             "platform-tools" \
@@ -229,7 +234,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager \
+          sdkmanager_bin="${ANDROID_SDK_ROOT:?ANDROID_SDK_ROOT is not set}/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "${sdkmanager_bin}" ]]; then
+            echo "sdkmanager not executable: ${sdkmanager_bin}" >&2
+            exit 1
+          fi
+          "${sdkmanager_bin}" \
             "platforms;android-${ANDROID_COMPILE_SDK}" \
             "build-tools;${ANDROID_BUILD_TOOLS}" \
             "platform-tools" \
