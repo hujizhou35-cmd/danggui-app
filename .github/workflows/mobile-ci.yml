@@ -229,9 +229,9 @@ jobs:
         run: rm -f "${RUNNER_TEMP}/danggui-release.jks"
 
   android-emulator-smoke:
-    name: Android cold-start smoke (API ${{ matrix.api-level }})
+    name: Android release acceptance (API ${{ matrix.api-level }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -304,7 +304,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run production cold-start smoke on API ${{ matrix.api-level }}
+      - name: Run cold-start and release acceptance on API ${{ matrix.api-level }}
         # ReactiveCircus/android-emulator-runner v2.38.0, pinned to its immutable commit.
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
@@ -321,14 +321,14 @@ jobs:
           disable-spellchecker: true
           script: bash integration_test/run_android_emulator_smoke.sh "${{ matrix.api-level }}"
 
-      - name: Upload emulator failure evidence
-        if: failure()
+      - name: Upload emulator acceptance evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: danggui-emulator-api-${{ matrix.api-level }}-failure-${{ github.sha }}
+          name: danggui-emulator-api-${{ matrix.api-level }}-acceptance-${{ github.sha }}
           path: ${{ runner.temp }}/danggui-emulator-api-${{ matrix.api-level }}/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
 
   ios-unsigned:
     name: Unsigned iOS source build

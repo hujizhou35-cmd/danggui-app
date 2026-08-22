@@ -10,6 +10,18 @@ fi
 api_level="$1"
 evidence_dir="${RUNNER_TEMP:?RUNNER_TEMP is not set}/danggui-emulator-api-${api_level}"
 mkdir -p "${evidence_dir}"
+[[ -e "${evidence_dir}/before.json" ]] ||
+  printf '%s\n' '{"status":"not-captured","phase":"before-overlay-install"}' \
+    > "${evidence_dir}/before.json"
+[[ -e "${evidence_dir}/after.json" ]] ||
+  printf '%s\n' '{"status":"not-captured","phase":"after-overlay-install"}' \
+    > "${evidence_dir}/after.json"
+[[ -e "${evidence_dir}/notification-before.txt" ]] ||
+  printf '%s\n' 'not captured' > "${evidence_dir}/notification-before.txt"
+[[ -e "${evidence_dir}/notification-after.txt" ]] ||
+  printf '%s\n' 'not captured' > "${evidence_dir}/notification-after.txt"
+[[ -e "${evidence_dir}/notification-shade.png" ]] ||
+  : > "${evidence_dir}/notification-shade.png"
 
 run_flutter_test() {
   local attempt="$1"
@@ -114,7 +126,8 @@ if (( test_status == 124 )) &&
 fi
 
 if (( test_status == 0 )); then
-  exit 0
+  bash integration_test/run_android_release_acceptance.sh "${api_level}"
+  exit $?
 fi
 
 # Capture evidence while android-emulator-runner still owns a live AVD. Every
@@ -128,5 +141,12 @@ adb shell dumpsys package com.danggui.memo \
   > "${evidence_dir}/package.txt" 2>&1 || true
 timeout --signal=TERM --kill-after=5s 30s adb logcat -d -v threadtime \
   > "${evidence_dir}/logcat.txt" 2>&1 || true
+adb shell dumpsys alarm > "${evidence_dir}/alarm-final.txt" 2>&1 || true
+adb shell dumpsys notification --noredact \
+  > "${evidence_dir}/notification-final.txt" 2>&1 || true
+if [[ ! -s "${evidence_dir}/notification-shade.png" ]]; then
+  timeout --signal=TERM --kill-after=5s 30s adb exec-out screencap -p \
+    > "${evidence_dir}/notification-shade.png" 2>/dev/null || true
+fi
 
 exit "${test_status}"
