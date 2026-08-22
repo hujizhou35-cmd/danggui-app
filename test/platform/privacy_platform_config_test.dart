@@ -88,6 +88,16 @@ void main() {
       ),
     );
 
+    final shellArtifactVerifier = File(
+      _join(fixture.path, 'tool/verify_android_artifacts.sh'),
+    );
+    shellArtifactVerifier.writeAsStringSync(
+      shellArtifactVerifier.readAsStringSync().replaceFirst(
+        'V[[:digit:].]+ Signer:',
+        'V2 Signer:',
+      ),
+    );
+
     File(_join(fixture.path, 'lib/network_probe.dart'))
       ..createSync(recursive: true)
       ..writeAsStringSync(
@@ -115,6 +125,7 @@ void main() {
     expect(failures, contains('exclude Application Support/danggui'));
     expect(failures, contains('this-device-only Keychain class'));
     expect(failures, contains('iCloud-synchronizable secure-storage option'));
+    expect(failures, contains('old and Build Tools 36 certificate output'));
   });
 }
 
