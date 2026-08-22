@@ -840,6 +840,7 @@ final class _Audit {
       'dart run tool/audit_offline_boundary.dart',
       'flutter analyze --fatal-infos',
       'flutter test --reporter expanded',
+      'bash tool/verify_android_artifacts.sh --self-test',
       'bash tool/verify_android_artifacts.sh',
       'bash tool/build_ios_unsigned.sh',
     ]) {
@@ -890,6 +891,19 @@ final class _Audit {
       "sed -e 's/^[[:space:]]*//'",
       'shell APK verification must whitelist the complete permission output',
     );
+    for (final certificateParserContract in <String>[
+      'Signer #[[:digit:]]+',
+      'V[[:digit:].]+ Signer:',
+      'apksigner must report exactly one APK signer.',
+      'apksigner did not report a certificate SHA-256 digest.',
+    ]) {
+      _expectContains(
+        'tool/verify_android_artifacts.sh',
+        _requiredText('tool/verify_android_artifacts.sh') ?? '',
+        certificateParserContract,
+        'shell APK verification must support old and Build Tools 36 certificate output and reject a missing digest',
+      );
+    }
     _expectContains(
       'tool/verify_android_artifacts.ps1',
       _requiredText('tool/verify_android_artifacts.ps1') ?? '',

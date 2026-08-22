@@ -77,6 +77,9 @@ jobs:
       - name: Enforce offline-only boundary
         run: dart run tool/audit_offline_boundary.dart
 
+      - name: Test Android certificate report parser
+        run: bash tool/verify_android_artifacts.sh --self-test
+
       - name: Analyze
         run: flutter analyze --fatal-infos
 
