@@ -26,6 +26,8 @@ jobs:
     name: Analyze, test, APK and AAB
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    environment:
+      name: ${{ github.event_name == 'pull_request' && 'ci' || 'android-release' }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,7 +83,7 @@ jobs:
       - name: Test
         run: flutter test --reporter expanded
 
-      - name: Configure release signing or explicit debug fallback
+      - name: Configure protected release signing or explicit debug fallback
         shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -104,6 +106,16 @@ jobs:
               provided=$((provided + 1))
             fi
           done
+
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            if (( provided != 0 )); then
+              echo "Pull-request jobs must not receive Android signing secrets." >&2
+              exit 1
+            fi
+            echo "ANDROID_SIGNING_MODE=debug-fallback" >> "${GITHUB_ENV}"
+            echo "Pull-request artifacts use the debug key; release secrets remain environment-isolated."
+            exit 0
+          fi
 
           if (( provided > 0 && provided < ${#required[@]} )); then
             echo "Release signing secrets are only partially configured." >&2
