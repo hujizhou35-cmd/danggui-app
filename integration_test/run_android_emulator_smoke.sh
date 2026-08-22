@@ -41,65 +41,75 @@ if (( test_status == 124 )) &&
    grep -Fq 'Installing build/app/outputs/flutter-apk/app-debug.apk' \
      "${evidence_dir}/first-attempt.log" &&
    grep -Fq 'No tests ran.' "${evidence_dir}/first-attempt.log"; then
-  package_path="$(
-    timeout --signal=TERM --kill-after=5s 20s \
-      adb -s emulator-5554 shell pm path com.danggui.memo 2>/dev/null
-  )"
-  package_query_status=$?
-  if (( package_query_status == 0 )) &&
-     [[ -z "${package_path//[[:space:]]/}" ]]; then
-    echo 'First attempt timed out during installation before the package became present; performing one bounded ADB recovery.'
-    recovery_ok=1
-    timeout --signal=TERM --kill-after=5s 20s adb kill-server \
+  echo 'First attempt timed out during installation; performing one bounded ADB recovery before checking package state.'
+  recovery_ok=1
+  timeout --signal=TERM --kill-after=5s 20s adb kill-server \
+    >/dev/null 2>&1 || recovery_ok=0
+  if (( recovery_ok == 1 )); then
+    timeout --signal=TERM --kill-after=5s 20s adb start-server \
       >/dev/null 2>&1 || recovery_ok=0
-    if (( recovery_ok == 1 )); then
-      timeout --signal=TERM --kill-after=5s 20s adb start-server \
-        >/dev/null 2>&1 || recovery_ok=0
-    fi
-    if (( recovery_ok == 1 )); then
-      timeout --signal=TERM --kill-after=5s 60s \
-        adb -s emulator-5554 wait-for-device \
-        >/dev/null 2>&1 || recovery_ok=0
-    fi
-    if (( recovery_ok == 1 )); then
-      boot_completed="$(
-        timeout --signal=TERM --kill-after=5s 20s \
-          adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null
-      )"
-      boot_query_status=$?
-      boot_completed="${boot_completed//$'\r'/}"
-      boot_completed="${boot_completed//[[:space:]]/}"
-      if (( boot_query_status != 0 )) || [[ "${boot_completed}" != '1' ]]; then
-        recovery_ok=0
-      fi
-    fi
-    if (( recovery_ok == 1 )); then
+  fi
+  if (( recovery_ok == 1 )); then
+    timeout --signal=TERM --kill-after=5s 60s \
+      adb -s emulator-5554 wait-for-device \
+      >/dev/null 2>&1 || recovery_ok=0
+  fi
+  if (( recovery_ok == 1 )); then
+    boot_completed="$(
       timeout --signal=TERM --kill-after=5s 20s \
-        adb -s emulator-5554 shell pm path android 2>/dev/null |
-        grep -Fq 'package:' || recovery_ok=0
+        adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null
+    )"
+    boot_query_status=$?
+    boot_completed="${boot_completed//$'\r'/}"
+    boot_completed="${boot_completed//[[:space:]]/}"
+    if (( boot_query_status != 0 )) || [[ "${boot_completed}" != '1' ]]; then
+      recovery_ok=0
     fi
+  fi
+  if (( recovery_ok == 1 )); then
+    system_package_path="$(
+      timeout --signal=TERM --kill-after=5s 20s \
+        adb -s emulator-5554 shell pm path android 2>/dev/null
+    )"
+    system_package_query_status=$?
+    if (( system_package_query_status != 0 )) ||
+       [[ "${system_package_path}" != *'package:'* ]]; then
+      recovery_ok=0
+    fi
+  fi
 
-    if (( recovery_ok == 1 )); then
-      timeout --signal=TERM --kill-after=5s 30s \
-        adb -s emulator-5554 uninstall com.danggui.memo \
-        >/dev/null 2>&1 || true
-      clean_package_path="$(
-        timeout --signal=TERM --kill-after=5s 20s \
-          adb -s emulator-5554 shell pm path com.danggui.memo 2>/dev/null
-      )"
-      clean_package_query_status=$?
-      if (( clean_package_query_status != 0 )) ||
-         [[ -n "${clean_package_path//[[:space:]]/}" ]]; then
-        recovery_ok=0
-      fi
+  if (( recovery_ok == 1 )); then
+    package_path="$(
+      timeout --signal=TERM --kill-after=5s 20s \
+        adb -s emulator-5554 shell pm path com.danggui.memo 2>/dev/null
+    )"
+    package_query_status=$?
+    if (( package_query_status != 0 )) ||
+       [[ -n "${package_path//[[:space:]]/}" ]]; then
+      recovery_ok=0
     fi
+  fi
 
-    if (( recovery_ok == 1 )); then
-      run_flutter_test retry-after-adb-recovery
-      test_status=$?
-    else
-      echo 'ADB recovery could not prove a healthy clean device; refusing to retry.' >&2
+  if (( recovery_ok == 1 )); then
+    timeout --signal=TERM --kill-after=5s 30s \
+      adb -s emulator-5554 uninstall com.danggui.memo \
+      >/dev/null 2>&1 || true
+    clean_package_path="$(
+      timeout --signal=TERM --kill-after=5s 20s \
+        adb -s emulator-5554 shell pm path com.danggui.memo 2>/dev/null
+    )"
+    clean_package_query_status=$?
+    if (( clean_package_query_status != 0 )) ||
+       [[ -n "${clean_package_path//[[:space:]]/}" ]]; then
+      recovery_ok=0
     fi
+  fi
+
+  if (( recovery_ok == 1 )); then
+    run_flutter_test retry-after-adb-recovery
+    test_status=$?
+  else
+    echo 'ADB recovery could not prove a healthy clean device with the app absent; refusing to retry.' >&2
   fi
 fi
 
