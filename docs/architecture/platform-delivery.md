@@ -93,9 +93,9 @@ CI Artifact 只用于构建审计和维护者验收，不自动等同于公开�
 
 ## Android 模拟器冷启动门禁
 
-`android-emulator-smoke` 在独立的 `ubuntu-24.04` 作业中使用 Flutter `3.47.1`，并以 API 24/36、x86_64 组成两项矩阵。每项从全新 CI 环境启动 Android Emulator，调用生产 `main()`，因而会经过真实数据库、插件注册、启动协调与路由过程，而不是只 `pumpWidget` 一个隔离页面。
+`android-emulator-smoke` 在独立的 `ubuntu-24.04` 作业中使用 Flutter `3.47.1`，并以 API 24/36、x86_64 组成两项矩阵。每项从全新 CI 环境启动 Android Emulator，调用生产 `main()`，因而会经过真实数据库、插件注册、启动协调与路由过程，而不是只 `pumpWidget` 一个隔离页面。Flutter 的设备测试宿主需要通过设备本机 VM Service 建立调试连接，因此该作业只在一次性的 CI checkout 中临时为 Debug 清单加入 `INTERNET`，不提交该清单、不参与 Release 构建；仓库内 main/debug/profile 清单和最终受审计 APK 仍全部不含网络权限。
 
-烟测不依赖系统语言的固定文案：它从运行时本地化对象与导航模型取标签，验证事项、过往、笔记、设置四个主区域以及设置内的离线帮助文档都可达。启动和路由等待全部有上限，禁止无界 `pumpAndSettle`；任一超时、未处理 Flutter 异常或矩阵项失败都会使工作流失败，下游 iOS 构建也不会运行。单个矩阵作业最长 45 分钟，模拟器启动最长 600 秒，烟测命令本身最长 25 分钟；任一超时都以非零状态失败。
+烟测不依赖系统语言的固定文案：它从运行时本地化对象与导航模型取标签，验证事项、过往、笔记、设置四个主区域以及设置内的离线帮助文档都可达。启动和路由等待全部有上限，禁止无界 `pumpAndSettle`；API 24/36 即使一项失败也会各自跑完，任一超时、未处理 Flutter 异常或矩阵项失败都会使工作流失败，下游 iOS 构建也不会运行。单个矩阵作业最长 45 分钟，模拟器启动最长 600 秒，烟测命令本身最长 25 分钟；任一超时都以非零状态失败。失败时 CI 会额外保存 `adb devices`、应用进程、Activity、Package 与 `logcat` 证据，避免无诊断的长时间等待。
 
 模拟器由 [ReactiveCircus/android-emulator-runner v2.38.0](https://github.com/ReactiveCircus/android-emulator-runner/releases/tag/v2.38.0) 启动，工作流锁定其不可变提交 `a421e43855164a8197daf9d8d40fe71c6996bb0d`；Linux KVM 权限设置按该项目的官方建议配置。该烟测是真实应用启动门禁，但不替代发布检查表中的覆盖升级、系统通知 UI 与数据保留人工验收。
 

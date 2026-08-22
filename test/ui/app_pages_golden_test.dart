@@ -11,6 +11,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'golden_test_support.dart';
+
 void main() {
   setUpAll(() async {
     final displayFont = FontLoader('DangguiDisplay')
@@ -108,7 +110,7 @@ void main() {
     expect(tester.takeException(), isNull);
     await expectLater(
       find.byKey(appKey),
-      matchesGoldenFile('goldens/full_tasks_page.png'),
+      matchesGoldenFile(reviewedPlatformGolden('full_tasks_page.png')),
     );
 
     await tester.tap(find.text('设置').last);
@@ -117,7 +119,7 @@ void main() {
     expect(tester.takeException(), isNull);
     await expectLater(
       find.byKey(appKey),
-      matchesGoldenFile('goldens/full_settings_page.png'),
+      matchesGoldenFile(reviewedPlatformGolden('full_settings_page.png')),
     );
 
     await tester.scrollUntilVisible(
@@ -135,7 +137,7 @@ void main() {
     expect(tester.takeException(), isNull);
     await expectLater(
       find.byKey(appKey),
-      matchesGoldenFile('goldens/full_help_page.png'),
+      matchesGoldenFile(reviewedPlatformGolden('full_help_page.png')),
     );
   });
 }

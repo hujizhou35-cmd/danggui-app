@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'golden_test_support.dart';
+
 void main() {
   setUpAll(() async {
     final displayFont = FontLoader('DangguiDisplay')
@@ -134,7 +136,9 @@ void main() {
 
     await expectLater(
       find.byKey(galleryKey),
-      matchesGoldenFile('goldens/task_cards_and_navigation.png'),
+      matchesGoldenFile(
+        reviewedPlatformGolden('task_cards_and_navigation.png'),
+      ),
     );
   });
 
@@ -229,7 +233,7 @@ void main() {
 
     await expectLater(
       find.byKey(galleryKey),
-      matchesGoldenFile('goldens/settings_and_toolbar.png'),
+      matchesGoldenFile(reviewedPlatformGolden('settings_and_toolbar.png')),
     );
   });
 }

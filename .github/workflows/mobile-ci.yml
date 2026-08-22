@@ -92,31 +92,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Render complete Linux Golden candidate set
-        if: failure()
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! find test -path '*/failures/*.png' -print -quit | grep -q .; then
-            echo 'No Golden comparison failures were produced; skipping candidate rendering.'
-            exit 0
-          fi
-          flutter test --no-pub --update-goldens --concurrency=1 \
-            test/ui/component_gallery_golden_test.dart \
-            test/ui/app_pages_golden_test.dart
-          candidate_dir="${RUNNER_TEMP}/danggui-linux-golden-candidates"
-          mkdir -p "${candidate_dir}"
-          cp test/ui/goldens/*.png "${candidate_dir}/"
-
-      - name: Upload complete Linux Golden candidates
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: danggui-linux-golden-candidates-${{ github.sha }}
-          path: ${{ runner.temp }}/danggui-linux-golden-candidates/
-          if-no-files-found: ignore
-          retention-days: 7
-
       - name: Configure protected release signing or explicit debug fallback
         shell: bash
         env:
@@ -252,7 +227,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         api-level: [24, 36]
     steps:
@@ -299,6 +274,20 @@ jobs:
           dart --disable-analytics
           flutter pub get --enforce-lockfile
 
+      - name: Enable emulator-only Flutter VM service transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Flutter's device test host needs a loopback VM-service connection.
+          # This manifest exists only in the ephemeral emulator checkout; every
+          # committed app variant and every verified release artifact remains
+          # free of INTERNET permission.
+          printf '%s\n' \
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">' \
+            '    <uses-permission android:name="android.permission.INTERNET"/>' \
+            '</manifest>' \
+            > android/app/src/debug/AndroidManifest.xml
+
       # KVM setup recommended by ReactiveCircus for hardware-accelerated Linux runners.
       - name: Enable KVM group permissions
         shell: bash
@@ -328,6 +317,32 @@ jobs:
             timeout --signal=TERM --kill-after=30s 25m
             flutter test --no-pub integration_test/app_cold_start_test.dart
             -d emulator-5554 --reporter expanded
+
+      - name: Capture emulator failure evidence
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          evidence_dir="${RUNNER_TEMP}/danggui-emulator-api-${{ matrix.api-level }}"
+          mkdir -p "${evidence_dir}"
+          adb devices -l > "${evidence_dir}/adb-devices.txt" 2>&1
+          adb shell pidof com.danggui.memo \
+            > "${evidence_dir}/app-pid.txt" 2>&1
+          adb shell dumpsys activity activities \
+            > "${evidence_dir}/activity.txt" 2>&1
+          adb shell dumpsys package com.danggui.memo \
+            > "${evidence_dir}/package.txt" 2>&1
+          adb logcat -d -v threadtime \
+            > "${evidence_dir}/logcat.txt" 2>&1
+
+      - name: Upload emulator failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: danggui-emulator-api-${{ matrix.api-level }}-failure-${{ github.sha }}
+          path: ${{ runner.temp }}/danggui-emulator-api-${{ matrix.api-level }}/
+          if-no-files-found: error
+          retention-days: 7
 
   ios-unsigned:
     name: Unsigned iOS source build
