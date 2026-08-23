@@ -98,6 +98,7 @@ Future<void> _exerciseProductionEditors(WidgetTester tester) async {
   final pastMarker = 'Past editor IME marker $runToken';
 
   final taskListContext = tester.element(find.byType(TasksPage));
+  final providerContainer = ProviderScope.containerOf(taskListContext);
   final taskL10n = AppLocalizations.of(taskListContext);
   final addTask = find.bySemanticsLabel(taskL10n.addTask).hitTestable();
   expect(addTask, findsAtLeastNWidgets(1));
@@ -152,11 +153,39 @@ Future<void> _exerciseProductionEditors(WidgetTester tester) async {
     timeout: const Duration(seconds: 15),
   );
 
-  final taskCard = find.bySemanticsLabel(taskTitle).hitTestable();
+  await _waitForCondition(
+    tester,
+    () =>
+        providerContainer
+            .read(appStoreProvider)
+            .value
+            ?.tasks
+            .any((task) => task.title == taskTitle && task.body == taskBody) ??
+        false,
+    phase: 'saved task state',
+    timeout: const Duration(seconds: 12),
+  );
+  final savedTask = providerContainer
+      .read(appStoreProvider)
+      .requireValue
+      .tasks
+      .singleWhere((task) => task.title == taskTitle);
+  final taskCardRoot = find.byKey(ValueKey<String>(savedTask.id));
+  await _waitFor(
+    tester,
+    taskCardRoot,
+    phase: 'saved task card mounted',
+    timeout: const Duration(seconds: 12),
+  );
+  await tester.ensureVisible(taskCardRoot);
+  await tester.pump(const Duration(milliseconds: 250));
+  final taskCard = find
+      .descendant(of: taskCardRoot, matching: find.byType(SketchCard))
+      .hitTestable();
   await _waitFor(
     tester,
     taskCard,
-    phase: 'saved task card',
+    phase: 'saved task card interaction',
     timeout: const Duration(seconds: 12),
   );
   await tester.tap(taskCard);
@@ -222,11 +251,39 @@ Future<void> _exerciseProductionEditors(WidgetTester tester) async {
     timeout: const Duration(seconds: 15),
   );
 
-  final noteCard = find.bySemanticsLabel(noteTitle).hitTestable();
+  await _waitForCondition(
+    tester,
+    () =>
+        providerContainer
+            .read(appStoreProvider)
+            .value
+            ?.notes
+            .any((note) => note.title == noteTitle && note.body == noteBody) ??
+        false,
+    phase: 'saved note state',
+    timeout: const Duration(seconds: 12),
+  );
+  final savedNote = providerContainer
+      .read(appStoreProvider)
+      .requireValue
+      .notes
+      .singleWhere((note) => note.title == noteTitle);
+  final noteCardRoot = find.byKey(ValueKey<String>(savedNote.id));
+  await _waitFor(
+    tester,
+    noteCardRoot,
+    phase: 'saved note card mounted',
+    timeout: const Duration(seconds: 12),
+  );
+  await tester.ensureVisible(noteCardRoot);
+  await tester.pump(const Duration(milliseconds: 250));
+  final noteCard = find
+      .descendant(of: noteCardRoot, matching: find.byType(SketchCard))
+      .hitTestable();
   await _waitFor(
     tester,
     noteCard,
-    phase: 'saved note card',
+    phase: 'saved note card interaction',
     timeout: const Duration(seconds: 12),
   );
   await tester.tap(noteCard);
@@ -249,9 +306,6 @@ Future<void> _exerciseProductionEditors(WidgetTester tester) async {
 
   await _openDestination(tester, index: 1, page: find.byType(PastPage));
   final pastEditor = find.byKey(const Key('past-continuous-document-editor'));
-  final providerContainer = ProviderScope.containerOf(
-    tester.element(find.byType(PastPage)),
-  );
   final existingPastText = _textFieldValue(tester, pastEditor);
   final updatedPastText = existingPastText.isEmpty
       ? pastMarker
