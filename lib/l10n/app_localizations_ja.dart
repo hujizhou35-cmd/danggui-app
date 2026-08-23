@@ -112,6 +112,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get moreSettings => '詳細設定';
 
   @override
+  String get moreSettingsWithReminder => '詳細設定（計画と通知）';
+
+  @override
   String get cancel => 'キャンセル';
 
   @override
@@ -350,6 +353,18 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get reminderExpired => '時刻が過ぎているため、遅れて通知しません。';
+
+  @override
+  String get reminderStatusPermissionDenied => '権限が制限されています。通知時刻は保存済みです';
+
+  @override
+  String get reminderStatusTaskClosed => '事項が閉じられ、通知は一時停止中です';
+
+  @override
+  String get reminderStatusPaused => '通知は一時停止中です';
+
+  @override
+  String get openNotificationSettings => '通知設定を開く';
 
   @override
   String get backupCreated => 'バックアップを作成しました';

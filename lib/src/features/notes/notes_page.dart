@@ -10,6 +10,7 @@ import '../../application/app_store.dart';
 import '../../core/theme/theme.dart';
 import '../../services/export/portable_export_service.dart';
 import '../../ui/components/components.dart';
+import '../tasks/task_creation_sheet.dart';
 
 class NotesPage extends ConsumerStatefulWidget {
   const NotesPage({super.key});
@@ -380,54 +381,25 @@ class _NotesPageState extends ConsumerState<NotesPage> {
     final notes = _selectedNotes(state);
     if (notes.length != 1) return;
     final note = notes.single;
-    final titleController = TextEditingController(text: note.title);
-    final bodyController = TextEditingController(text: note.body);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        final l10n = AppLocalizations.of(context);
-        return AlertDialog(
-          title: Text(l10n.convertToTask),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                TextField(
-                  controller: titleController,
-                  maxLength: 160,
-                  decoration: InputDecoration(hintText: l10n.taskTitleHint),
-                ),
-                TextField(
-                  controller: bodyController,
-                  minLines: 3,
-                  maxLines: 8,
-                  decoration: InputDecoration(hintText: l10n.bodyHint),
-                ),
-              ],
-            ),
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(l10n.cancel),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(l10n.save),
-            ),
-          ],
-        );
-      },
+    final result = await showTaskCreationSheet(
+      context,
+      initialTitle: note.title,
+      initialBody: note.body,
     );
-    final title = titleController.text.trim();
-    final body = bodyController.text;
-    titleController.dispose();
-    bodyController.dispose();
-    if (confirmed != true || title.isEmpty || !mounted) return;
-    await ref
+    if (result == null || !mounted) return;
+    final taskId = await ref
         .read(appStoreProvider.notifier)
-        .createTask(title: title, body: body);
-    if (mounted) setState(_selectedIds.clear);
+        .createTask(
+          title: result.title,
+          body: result.body,
+          dueDate: result.dueDate,
+        );
+    if (!mounted) return;
+    setState(_selectedIds.clear);
+    if (result.openDetails) {
+      await settleTaskCreationKeyboard(context: context);
+      if (mounted) await context.push('/tasks/$taskId');
+    }
   }
 
   Future<void> _createNote() async {

@@ -29,6 +29,8 @@ readonly after_json="${evidence_dir}/after.json"
 readonly notification_before="${evidence_dir}/notification-before.txt"
 readonly notification_after="${evidence_dir}/notification-after.txt"
 readonly notification_screenshot="${evidence_dir}/notification-shade.png"
+readonly notification_click_json="${evidence_dir}/notification-click.json"
+readonly snooze_callback_json="${evidence_dir}/snooze-callback.json"
 readonly workflow_phase="${evidence_dir}/workflow-phase.json"
 readonly script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -42,6 +44,10 @@ printf '%s\n' '{"status":"not-captured","phase":"after-overlay-install"}' > "${a
 printf '%s\n' 'not captured' > "${notification_before}"
 printf '%s\n' 'not captured' > "${notification_after}"
 : > "${notification_screenshot}"
+printf '%s\n' '{"status":"not-captured","phase":"notification-content-click"}' \
+  > "${notification_click_json}"
+printf '%s\n' '{"status":"not-captured","phase":"notification-action-callbacks"}' \
+  > "${snooze_callback_json}"
 printf '%s\n' '{"status":"running","phase":"release-acceptance"}' \
   > "${workflow_phase}"
 rm -f -- "${evidence_dir}/infrastructure-classification.json" \
@@ -678,9 +684,123 @@ bounded_adb exec-out cat /sdcard/danggui-notification-shade.xml \
 grep -Fq "${expected_title}" "${evidence_dir}/notification-shade.xml"
 bounded_adb shell dumpsys alarm > "${evidence_dir}/alarm-after-notification.txt"
 
+# Tap the exact title node of the notification whose content was already
+# validated above. Parsing XML avoids language-, density-, and API-specific
+# coordinates while still exercising a genuine SystemUI notification click.
+notification_click_partial="${notification_click_json}.partial"
+notification_tap="$({
+  python3 - "${evidence_dir}/notification-shade.xml" "${expected_title}" \
+    "${notification_click_partial}" <<'PY'
+import json
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+xml_path, expected_title, evidence_path = sys.argv[1:]
+bounds_pattern = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
+matches = []
+for node in ET.parse(xml_path).getroot().iter("node"):
+    if node.attrib.get("text") != expected_title:
+        continue
+    match = bounds_pattern.match(node.attrib.get("bounds", ""))
+    if match is None:
+        continue
+    left, top, right, bottom = map(int, match.groups())
+    if right <= left or bottom <= top:
+        continue
+    matches.append((left, top, right, bottom))
+
+if not matches:
+    raise SystemExit("No exact notification-title node with usable bounds was found.")
+left, top, right, bottom = matches[0]
+tap_x = (left + right) // 2
+tap_y = (top + bottom) // 2
+with open(evidence_path, "w", encoding="utf-8") as output:
+    json.dump(
+        {
+            "status": "title-node-resolved",
+            "expectedTitle": expected_title,
+            "exactTitleNodeCount": len(matches),
+            "selectedBounds": [left, top, right, bottom],
+            "tapX": tap_x,
+            "tapY": tap_y,
+        },
+        output,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    output.write("\n")
+print(f"{tap_x} {tap_y}")
+PY
+} 2> "${evidence_dir}/notification-click-parse.stderr")"
+read -r notification_tap_x notification_tap_y <<< "${notification_tap}"
+[[ "${notification_tap_x}" =~ ^[0-9]+$ ]]
+[[ "${notification_tap_y}" =~ ^[0-9]+$ ]]
+bounded_adb shell input tap "${notification_tap_x}" "${notification_tap_y}" \
+  > "${evidence_dir}/notification-click-tap.log" 2>&1
+
+notification_click_deadline=$(( SECONDS + 30 ))
+notification_app_resumed=0
+notification_shade_collapsed=0
+while (( SECONDS < notification_click_deadline )); do
+  bounded_adb shell dumpsys activity activities \
+    > "${evidence_dir}/notification-click-activity.txt"
+  bounded_adb shell dumpsys window \
+    > "${evidence_dir}/notification-click-window.txt"
+  if grep -Eq \
+       '(mResumedActivity|topResumedActivity).*com\.danggui\.memo' \
+       "${evidence_dir}/notification-click-activity.txt"; then
+    notification_app_resumed=1
+  fi
+  if grep -Eq 'mCurrentFocus=.*com\.danggui\.memo' \
+       "${evidence_dir}/notification-click-window.txt"; then
+    notification_shade_collapsed=1
+  fi
+  if (( notification_app_resumed == 1 && notification_shade_collapsed == 1 )); then
+    break
+  fi
+  sleep 1
+done
+if (( notification_app_resumed != 1 || notification_shade_collapsed != 1 )); then
+  echo 'The exact notification click did not return Danggui to the foreground.' >&2
+  exit 1
+fi
+jq \
+  --argjson apiLevel "${api_level}" \
+  '. + {
+    status: "passed",
+    phase: "notification-content-click",
+    apiLevel: $apiLevel,
+    exactTitleMatched: true,
+    tapIssuedThroughSystemUi: true,
+    appResumed: true,
+    systemUiCollapsed: true
+  }' "${notification_click_partial}" > "${notification_click_json}"
+rm -f -- "${notification_click_partial}"
+jq -e \
+  --argjson api "${api_level}" '
+    .status == "passed" and .apiLevel == $api and
+    .exactTitleMatched == true and .tapIssuedThroughSystemUi == true and
+    .appResumed == true and .systemUiCollapsed == true
+  ' "${notification_click_json}" >/dev/null
+
 bounded_adb shell run-as "${package_name}" touch \
   "${app_evidence_path}/${host_signal_name}"
 finish_verify_logged
+extract_app_evidence snooze-callback.json "${snooze_callback_json}"
+jq -e \
+  --argjson api "${api_level}" '
+    .phase == "production-notification-action-callbacks" and
+    .apiLevel == $api and
+    .scope.productionCoordinator == true and
+    .scope.productionDatabase == true and
+    .scope.nativeNotificationGateway == true and
+    .scope.systemNotificationPreviouslyObserved == true and
+    .scope.systemUiActionClickClaimed == false and
+    [.actions[].minutes] == [10, 30, 60] and
+    ([.actions[].assertions[]] | all)
+  ' "${snooze_callback_json}" >/dev/null
+capture_alarm_when_scheduled "${evidence_dir}/alarm-after-snooze-callback.txt"
 
 printf '%s\n' 'release acceptance passed' \
   > "${evidence_dir}/acceptance-result.txt"

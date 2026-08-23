@@ -232,7 +232,7 @@ enforce_result() {
      [[ -s "${evidence_dir}/workflow-phase.json" ]] &&
      jq -e --argjson expectedAttempt "${expected_attempt}" '
        type == "object" and .status == "passed" and
-       .phase == "release-acceptance-complete" and
+       .phase == "release-binary-smoke-complete" and
        .exitStatus == 0 and .attempt == $expectedAttempt
      ' "${evidence_dir}/workflow-phase.json" >/dev/null; then
     phase_valid='true'

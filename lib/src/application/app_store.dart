@@ -1,37 +1,19 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../data/data_support.dart';
 import '../data/database.dart';
+import '../data/database_provider.dart';
 import '../data/repositories/core_repositories.dart';
 import '../domain/models.dart';
+import '../services/notifications/notification_coordinator.dart';
 import 'app_state.dart';
 
-final databaseFileProvider = FutureProvider<File>((ref) async {
-  final directory = await getApplicationSupportDirectory();
-  return File(p.join(directory.path, 'danggui', 'danggui.sqlite'));
-});
-
-final databaseProvider = FutureProvider<DangguiDatabase>((ref) async {
-  final file = await ref.watch(databaseFileProvider.future);
-  final database = DangguiDatabase.open(file);
-  ref.onDispose(database.close);
-  final quickCheck = await database.quickCheck();
-  if (quickCheck.length != 1 || quickCheck.single.toLowerCase() != 'ok') {
-    throw StateError('SQLite quick_check failed: ${quickCheck.join(', ')}');
-  }
-  final foreignKeys = await database.foreignKeyCheck();
-  if (foreignKeys.isNotEmpty) {
-    throw StateError('SQLite foreign_key_check failed: $foreignKeys');
-  }
-  return database;
-});
+export '../data/database_provider.dart';
 
 final appStoreProvider =
     AsyncNotifierProvider<AppStoreController, DangguiAppState>(
@@ -50,6 +32,27 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
   Future<void> refresh() async {
     final database = await ref.read(databaseProvider.future);
     state = AsyncData(await _readState(database));
+  }
+
+  Future<void> _completeTaskMutation(bool notificationJobQueued) async {
+    if (notificationJobQueued) {
+      try {
+        // The SQLite transaction is already committed. Await the durable
+        // outbox drain so an old platform alarm cannot survive a user-visible
+        // edit, close, archive, or delete operation.
+        await ref.read(notificationCoordinatorProvider).reconcile();
+      } on Object catch (error, stackTrace) {
+        // Platform/plugin failures must never roll back or make an editor
+        // report that its local data was not saved. The durable job remains
+        // pending for foreground/startup reconciliation.
+        if (kDebugMode) {
+          debugPrint('Notification outbox drain failed: $error');
+          debugPrintStack(stackTrace: stackTrace);
+        }
+      }
+    }
+    // Reconciliation may update the persisted permission/expiry state.
+    await refresh();
   }
 
   void setSearchQuery(String value) {
@@ -121,6 +124,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
     final documentId = _uuid.v4();
     final now = DateTime.now().toUtc();
     final nowMicros = utcMicros(now);
+    var notificationJobQueued = false;
     final semanticHash = await sha256Hex(<String, Object?>{
       'title': cleanTitle,
       'dueDate': _isoDate(dueDate),
@@ -191,9 +195,10 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         nowMicros: nowMicros,
       );
       if (reminderAt != null) {
-        await _writeReminder(
+        notificationJobQueued = await _writeReminder(
           database,
           taskId: taskId,
+          taskStatus: TaskStatus.active,
           reminderAt: reminderAt,
           soundEnabled: resolvedSound ?? true,
           vibrationEnabled: resolvedVibration ?? true,
@@ -201,17 +206,21 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         );
       }
     });
-    await refresh();
+    await _completeTaskMutation(notificationJobQueued);
     return taskId;
   }
 
-  Future<void> updateTask(TaskViewModel task) async {
+  Future<void> updateTask(
+    TaskViewModel task, {
+    bool updateReminder = true,
+  }) async {
     final cleanTitle = task.title.trim();
     if (cleanTitle.isEmpty) {
       throw const FormatException('Task title must not be empty.');
     }
     final database = await ref.read(databaseProvider.future);
     final nowMicros = utcMicros(DateTime.now());
+    var notificationJobQueued = false;
     final semanticHash = await sha256Hex(<String, Object?>{
       'title': cleanTitle,
       'dueDate': _isoDate(task.dueDate),
@@ -221,12 +230,21 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
     await database.transaction(() async {
       final row = await database
           .customSelect(
-            'SELECT document_id FROM tasks WHERE id = ?',
+            'SELECT document_id, status, title, plan_text FROM tasks '
+            'WHERE id = ?',
             variables: <Variable<Object>>[Variable.withString(task.id)],
           )
           .getSingleOrNull();
       if (row == null) throw StateError('Task no longer exists.');
       final documentId = row.read<String>('document_id');
+      final persistedTaskStatus = _enumByName(
+        TaskStatus.values,
+        row.read<String>('status'),
+        TaskStatus.active,
+      );
+      final notificationContentChanged =
+          row.read<String>('title') != cleanTitle ||
+          row.read<String>('plan_text') != task.plan;
       await _snapshotDocument(database, documentId, nowMicros);
       await database.customStatement(
         'UPDATE tasks SET title = ?, due_local_date = ?, plan_text = ?, '
@@ -247,17 +265,45 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         text: task.body,
         nowMicros: nowMicros,
       );
-      if (task.reminderAt == null) {
-        await _cancelReminder(database, task.id, nowMicros);
-      } else {
-        await _writeReminder(
-          database,
-          taskId: task.id,
-          reminderAt: task.reminderAt!,
-          soundEnabled: task.soundEnabled,
-          vibrationEnabled: task.vibrationEnabled,
-          nowMicros: nowMicros,
+      if (updateReminder) {
+        if (task.reminderAt == null) {
+          notificationJobQueued = await _cancelReminder(
+            database,
+            task.id,
+            nowMicros,
+          );
+        } else {
+          notificationJobQueued = await _writeReminder(
+            database,
+            taskId: task.id,
+            taskStatus: persistedTaskStatus,
+            reminderAt: task.reminderAt!,
+            soundEnabled: task.soundEnabled,
+            vibrationEnabled: task.vibrationEnabled,
+            nowMicros: nowMicros,
+          );
+        }
+      } else if (notificationContentChanged) {
+        final reminderChanged = await database.customUpdate(
+          'UPDATE reminders SET schedule_revision = schedule_revision + 1, '
+          'updated_at_utc = ?, row_version = row_version + 1 '
+          'WHERE task_id = ? AND status = ? AND scheduled_at_utc > ?',
+          variables: <Variable<Object>>[
+            Variable.withInt(nowMicros),
+            Variable.withString(task.id),
+            Variable.withString(ReminderStatus.scheduled.name),
+            Variable.withInt(nowMicros),
+          ],
+          updates: <TableInfo<Table, Object?>>{database.reminders},
         );
+        if (reminderChanged > 0) {
+          notificationJobQueued = await _queueReminderJob(
+            database,
+            taskId: task.id,
+            kind: PlatformJobKind.refreshReminderLocale,
+            nowMicros: nowMicros,
+          );
+        }
       }
       await _upsertSearch(
         database,
@@ -270,13 +316,14 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         nowMicros: nowMicros,
       );
     });
-    await refresh();
+    await _completeTaskMutation(notificationJobQueued);
   }
 
   Future<void> setTaskActive(String taskId, bool active) async {
     final database = await ref.read(databaseProvider.future);
     final now = DateTime.now();
     final nowMicros = utcMicros(now);
+    var notificationJobQueued = false;
     await database.transaction(() async {
       if (!active) {
         await database.customStatement(
@@ -295,23 +342,27 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
             TaskStatus.active.name,
           ],
         );
-        await database.customStatement(
+        final reminderChanged = await database.customUpdate(
           'UPDATE reminders SET status = ?, pause_reason = ?, '
           'schedule_revision = schedule_revision + 1, updated_at_utc = ?, '
-          'row_version = row_version + 1 WHERE task_id = ?',
-          <Object?>[
-            ReminderStatus.paused.name,
-            ReminderPauseReason.taskClosed.name,
-            nowMicros,
-            taskId,
+          'row_version = row_version + 1 WHERE task_id = ? AND status <> ?',
+          variables: <Variable<Object>>[
+            Variable.withString(ReminderStatus.paused.name),
+            Variable.withString(ReminderPauseReason.taskClosed.name),
+            Variable.withInt(nowMicros),
+            Variable.withString(taskId),
+            Variable.withString(ReminderStatus.cancelled.name),
           ],
+          updates: <TableInfo<Table, Object?>>{database.reminders},
         );
-        await _queueReminderJob(
-          database,
-          taskId: taskId,
-          kind: PlatformJobKind.cancelReminder,
-          nowMicros: nowMicros,
-        );
+        if (reminderChanged > 0) {
+          notificationJobQueued = await _queueReminderJob(
+            database,
+            taskId: taskId,
+            kind: PlatformJobKind.cancelReminder,
+            nowMicros: nowMicros,
+          );
+        }
       } else {
         await database.customStatement(
           'UPDATE tasks SET status = ?, closed_at_utc = NULL, '
@@ -325,34 +376,41 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
             TaskStatus.completionPending.name,
           ],
         );
-        await database.customStatement(
+        final reminderChanged = await database.customUpdate(
           'UPDATE reminders SET status = CASE WHEN scheduled_at_utc > ? '
           'THEN ? ELSE ? END, pause_reason = NULL, '
           'schedule_revision = schedule_revision + 1, updated_at_utc = ?, '
-          'row_version = row_version + 1 WHERE task_id = ?',
-          <Object?>[
-            nowMicros,
-            ReminderStatus.scheduled.name,
-            ReminderStatus.expired.name,
-            nowMicros,
-            taskId,
+          'row_version = row_version + 1 WHERE task_id = ? AND status = ? '
+          'AND pause_reason = ?',
+          variables: <Variable<Object>>[
+            Variable.withInt(nowMicros),
+            Variable.withString(ReminderStatus.scheduled.name),
+            Variable.withString(ReminderStatus.expired.name),
+            Variable.withInt(nowMicros),
+            Variable.withString(taskId),
+            Variable.withString(ReminderStatus.paused.name),
+            Variable.withString(ReminderPauseReason.taskClosed.name),
           ],
+          updates: <TableInfo<Table, Object?>>{database.reminders},
         );
-        await _queueReminderJob(
-          database,
-          taskId: taskId,
-          kind: PlatformJobKind.scheduleReminder,
-          nowMicros: nowMicros,
-          onlyIfFuture: true,
-        );
+        if (reminderChanged > 0) {
+          notificationJobQueued = await _queueReminderJob(
+            database,
+            taskId: taskId,
+            kind: PlatformJobKind.scheduleReminder,
+            nowMicros: nowMicros,
+            onlyIfFuture: true,
+          );
+        }
       }
     });
-    await refresh();
+    await _completeTaskMutation(notificationJobQueued);
   }
 
   Future<void> addTaskToPast(String taskId) async {
     final database = await ref.read(databaseProvider.future);
     final nowMicros = utcMicros(DateTime.now());
+    var notificationJobQueued = false;
     await database.transaction(() async {
       final task = await database
           .customSelect(
@@ -621,19 +679,24 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         'row_version = row_version + 1 WHERE id = ?',
         <Object?>[TaskStatus.archived.name, nowMicros, nowMicros, taskId],
       );
-      await _cancelReminder(database, taskId, nowMicros);
+      notificationJobQueued = await _cancelReminder(
+        database,
+        taskId,
+        nowMicros,
+      );
       await database.customStatement(
         'DELETE FROM search_records WHERE scope = ? AND entity_id = ?',
         <Object?>[SearchScope.task.name, taskId],
       );
     });
-    await refresh();
+    await _completeTaskMutation(notificationJobQueued);
   }
 
   Future<void> deleteTask(String taskId) async {
     final database = await ref.read(databaseProvider.future);
     final nowMicros = utcMicros(DateTime.now());
     final purgeMicros = nowMicros + const Duration(days: 30).inMicroseconds;
+    var notificationJobQueued = false;
     await database.transaction(() async {
       final task = await database
           .customSelect(
@@ -666,18 +729,23 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           await sha256Hex(snapshot),
         ],
       );
-      await _cancelReminder(database, taskId, nowMicros);
+      notificationJobQueued = await _pauseReminderForTrash(
+        database,
+        taskId,
+        nowMicros,
+      );
       await database.customStatement(
         'DELETE FROM search_records WHERE scope = ? AND entity_id = ?',
         <Object?>[SearchScope.task.name, taskId],
       );
     });
-    await refresh();
+    await _completeTaskMutation(notificationJobQueued);
   }
 
   Future<void> restoreTask(String taskId) async {
     final database = await ref.read(databaseProvider.future);
     final nowMicros = utcMicros(DateTime.now());
+    var notificationJobQueued = false;
     await database.transaction(() async {
       final trash = await database
           .customSelect(
@@ -706,8 +774,77 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         'DELETE FROM trash_entries WHERE id = ?',
         <Object?>[trash.read<String>('id')],
       );
+      final reminder = await database
+          .customSelect(
+            'SELECT id, status, pause_reason, scheduled_at_utc, '
+            'schedule_revision FROM reminders WHERE task_id = ?',
+            variables: <Variable<Object>>[Variable.withString(taskId)],
+          )
+          .getSingleOrNull();
+      if (reminder != null &&
+          reminder.read<String>('status') == ReminderStatus.paused.name &&
+          reminder.readNullable<String>('pause_reason') ==
+              ReminderPauseReason.user.name) {
+        final shouldSchedule =
+            restoredStatus == TaskStatus.active &&
+            reminder.read<int>('scheduled_at_utc') > nowMicros;
+        final reminderStatus = shouldSchedule
+            ? ReminderStatus.scheduled
+            : restoredStatus == TaskStatus.completionPending
+            ? ReminderStatus.paused
+            : ReminderStatus.expired;
+        final pauseReason = restoredStatus == TaskStatus.completionPending
+            ? ReminderPauseReason.taskClosed.name
+            : null;
+        await database.customStatement(
+          'UPDATE reminders SET status = ?, pause_reason = ?, '
+          'schedule_revision = schedule_revision + 1, updated_at_utc = ?, '
+          'row_version = row_version + 1 WHERE id = ?',
+          <Object?>[
+            reminderStatus.name,
+            pauseReason,
+            nowMicros,
+            reminder.read<String>('id'),
+          ],
+        );
+        if (shouldSchedule) {
+          notificationJobQueued = await _queueReminderJob(
+            database,
+            taskId: taskId,
+            kind: PlatformJobKind.scheduleReminder,
+            nowMicros: nowMicros,
+          );
+        }
+      }
+      final restoredTask = await database
+          .customSelect(
+            'SELECT document_id, title, plan_text, due_local_date FROM tasks '
+            'WHERE id = ?',
+            variables: <Variable<Object>>[Variable.withString(taskId)],
+          )
+          .getSingle();
+      final documentId = restoredTask.read<String>('document_id');
+      final bodyRows = await database
+          .customSelect(
+            'SELECT plain_text FROM document_blocks WHERE document_id = ? '
+            'ORDER BY sort_rank, id',
+            variables: <Variable<Object>>[Variable.withString(documentId)],
+          )
+          .get();
+      await _upsertSearch(
+        database,
+        scope: SearchScope.task,
+        entityId: taskId,
+        documentId: documentId,
+        title: restoredTask.read<String>('title'),
+        body:
+            '${restoredTask.read<String>('plan_text')}\n'
+            '${bodyRows.map((row) => row.read<String>('plain_text')).join('\n')}',
+        dateKey: restoredTask.readNullable<String>('due_local_date') ?? '',
+        nowMicros: nowMicros,
+      );
     });
-    await refresh();
+    await _completeTaskMutation(notificationJobQueued);
   }
 
   Future<String> createNote({
@@ -1126,37 +1263,74 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
   Future<void> saveSettings(AppSettingsModel settings) async {
     final database = await ref.read(databaseProvider.future);
     final nowMicros = utcMicros(DateTime.now());
-    await database.customStatement(
-      'UPDATE app_settings SET locale_mode = ?, font_mode = ?, '
-      'text_scale_percent = ?, density = ?, default_sound_enabled = ?, '
-      'default_vibration_enabled = ?, default_snooze_minutes = ?, '
-      'auto_backup_enabled = ?, auto_backup_hour_local = ?, '
-      'auto_backup_minute_local = ?, backup_encryption_enabled = ?, '
-      'help_seen_version = ?, updated_at_utc = ?, row_version = row_version + 1 '
-      'WHERE id = 1',
-      <Object?>[
-        settings.localeMode.name,
-        settings.fontMode.name,
-        settings.textScalePercent,
-        settings.density.name,
-        settings.defaultSoundEnabled ? 1 : 0,
-        settings.defaultVibrationEnabled ? 1 : 0,
-        settings.defaultSnoozeMinutes,
-        settings.autoBackupEnabled ? 1 : 0,
-        settings.autoBackupHourLocal,
-        settings.autoBackupMinuteLocal,
-        settings.backupEncryptionEnabled ? 1 : 0,
-        settings.helpSeenVersion,
-        nowMicros,
-      ],
-    );
-    await refresh();
+    var notificationJobQueued = false;
+    await database.transaction(() async {
+      final previous = await database
+          .customSelect('SELECT locale_mode FROM app_settings WHERE id = 1')
+          .getSingle();
+      await database.customStatement(
+        'UPDATE app_settings SET locale_mode = ?, font_mode = ?, '
+        'text_scale_percent = ?, density = ?, default_sound_enabled = ?, '
+        'default_vibration_enabled = ?, default_snooze_minutes = ?, '
+        'auto_backup_enabled = ?, auto_backup_hour_local = ?, '
+        'auto_backup_minute_local = ?, backup_encryption_enabled = ?, '
+        'help_seen_version = ?, updated_at_utc = ?, '
+        'row_version = row_version + 1 WHERE id = 1',
+        <Object?>[
+          settings.localeMode.name,
+          settings.fontMode.name,
+          settings.textScalePercent,
+          settings.density.name,
+          settings.defaultSoundEnabled ? 1 : 0,
+          settings.defaultVibrationEnabled ? 1 : 0,
+          settings.defaultSnoozeMinutes,
+          settings.autoBackupEnabled ? 1 : 0,
+          settings.autoBackupHourLocal,
+          settings.autoBackupMinuteLocal,
+          settings.backupEncryptionEnabled ? 1 : 0,
+          settings.helpSeenVersion,
+          nowMicros,
+        ],
+      );
+      if (previous.read<String>('locale_mode') != settings.localeMode.name) {
+        final reminders = await database
+            .customSelect(
+              'SELECT task_id FROM reminders WHERE status = ? '
+              'AND scheduled_at_utc > ?',
+              variables: <Variable<Object>>[
+                Variable.withString(ReminderStatus.scheduled.name),
+                Variable.withInt(nowMicros),
+              ],
+            )
+            .get();
+        for (final reminder in reminders) {
+          final taskId = reminder.read<String>('task_id');
+          await database.customStatement(
+            'UPDATE reminders SET schedule_revision = schedule_revision + 1, '
+            'updated_at_utc = ?, row_version = row_version + 1 '
+            'WHERE task_id = ?',
+            <Object?>[nowMicros, taskId],
+          );
+          notificationJobQueued =
+              await _queueReminderJob(
+                database,
+                taskId: taskId,
+                kind: PlatformJobKind.refreshReminderLocale,
+                nowMicros: nowMicros,
+              ) ||
+              notificationJobQueued;
+        }
+      }
+    });
+    await _completeTaskMutation(notificationJobQueued);
   }
 
   Future<DangguiAppState> _readState(DangguiDatabase database) async {
     final taskRows = await database
         .customSelect(
-          'SELECT t.*, r.scheduled_at_utc, r.sound_enabled, r.vibration_enabled '
+          'SELECT t.*, r.scheduled_at_utc, r.sound_enabled, '
+          'r.vibration_enabled, r.status AS reminder_status, '
+          'r.pause_reason AS reminder_pause_reason '
           'FROM tasks t LEFT JOIN reminders r ON r.task_id = t.id '
           'AND r.status <> ? '
           'WHERE t.status IN (?, ?) '
@@ -1189,6 +1363,14 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           body: taskBodies[row.read<String>('document_id')] ?? '',
           soundEnabled: row.readNullable<bool>('sound_enabled') ?? true,
           vibrationEnabled: row.readNullable<bool>('vibration_enabled') ?? true,
+          reminderStatus: _nullableEnumByName(
+            ReminderStatus.values,
+            row.readNullable<String>('reminder_status'),
+          ),
+          reminderPauseReason: _nullableEnumByName(
+            ReminderPauseReason.values,
+            row.readNullable<String>('reminder_pause_reason'),
+          ),
         ),
     ];
 
@@ -1324,9 +1506,10 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
     };
   }
 
-  Future<void> _writeReminder(
+  Future<bool> _writeReminder(
     DangguiDatabase database, {
     required String taskId,
+    required TaskStatus taskStatus,
     required DateTime reminderAt,
     required bool soundEnabled,
     required bool vibrationEnabled,
@@ -1342,15 +1525,25 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
     final id = existing?.read<String>('id') ?? _uuid.v4();
     final revision = (existing?.read<int>('schedule_revision') ?? 0) + 1;
     final local = reminderAt.toLocal();
+    final isTaskClosed = taskStatus == TaskStatus.completionPending;
+    final isFuture = utcMicros(reminderAt) > nowMicros;
     final keepsPermissionDenied =
+        !isTaskClosed &&
         existing?.read<String>('status') ==
             ReminderStatus.permissionDenied.name &&
-        reminderAt.isAfter(DateTime.now());
-    final status = reminderAt.isAfter(DateTime.now())
+        isFuture;
+    final status = isTaskClosed
+        ? ReminderStatus.paused
+        : isFuture
         ? (keepsPermissionDenied
               ? ReminderStatus.permissionDenied
               : ReminderStatus.scheduled)
         : ReminderStatus.expired;
+    final pauseReason = isTaskClosed
+        ? ReminderPauseReason.taskClosed
+        : keepsPermissionDenied
+        ? ReminderPauseReason.permissionDenied
+        : null;
     await database.customStatement(
       'INSERT INTO reminders '
       '(id, task_id, scheduled_local_date_time, scheduled_zone_id, '
@@ -1377,27 +1570,26 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         soundEnabled ? 1 : 0,
         vibrationEnabled ? 1 : 0,
         status.name,
-        keepsPermissionDenied
-            ? ReminderPauseReason.permissionDenied.name
-            : null,
+        pauseReason?.name,
         revision,
         nowMicros,
         nowMicros,
       ],
     );
-    if (reminderAt.isAfter(DateTime.now())) {
-      await _queueReminderJob(
+    if (isTaskClosed || isFuture) {
+      return _queueReminderJob(
         database,
         taskId: taskId,
-        kind: keepsPermissionDenied
+        kind: isTaskClosed || keepsPermissionDenied
             ? PlatformJobKind.cancelReminder
             : PlatformJobKind.scheduleReminder,
         nowMicros: nowMicros,
       );
     }
+    return false;
   }
 
-  Future<void> _cancelReminder(
+  Future<bool> _cancelReminder(
     DangguiDatabase database,
     String taskId,
     int nowMicros,
@@ -1415,16 +1607,44 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       updates: <TableInfo<Table, Object?>>{database.reminders},
     );
     if (changed > 0) {
-      await _queueReminderJob(
+      return _queueReminderJob(
         database,
         taskId: taskId,
         kind: PlatformJobKind.cancelReminder,
         nowMicros: nowMicros,
       );
     }
+    return false;
   }
 
-  Future<void> _queueReminderJob(
+  Future<bool> _pauseReminderForTrash(
+    DangguiDatabase database,
+    String taskId,
+    int nowMicros,
+  ) async {
+    final changed = await database.customUpdate(
+      'UPDATE reminders SET status = ?, pause_reason = ?, '
+      'schedule_revision = schedule_revision + 1, updated_at_utc = ?, '
+      'row_version = row_version + 1 WHERE task_id = ? AND status <> ?',
+      variables: <Variable<Object>>[
+        Variable.withString(ReminderStatus.paused.name),
+        Variable.withString(ReminderPauseReason.user.name),
+        Variable.withInt(nowMicros),
+        Variable.withString(taskId),
+        Variable.withString(ReminderStatus.cancelled.name),
+      ],
+      updates: <TableInfo<Table, Object?>>{database.reminders},
+    );
+    if (changed == 0) return false;
+    return _queueReminderJob(
+      database,
+      taskId: taskId,
+      kind: PlatformJobKind.cancelReminder,
+      nowMicros: nowMicros,
+    );
+  }
+
+  Future<bool> _queueReminderJob(
     DangguiDatabase database, {
     required String taskId,
     required PlatformJobKind kind,
@@ -1438,9 +1658,9 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           variables: <Variable<Object>>[Variable.withString(taskId)],
         )
         .getSingleOrNull();
-    if (reminder == null) return;
+    if (reminder == null) return false;
     if (onlyIfFuture && reminder.read<int>('scheduled_at_utc') <= nowMicros) {
-      return;
+      return false;
     }
     final reminderId = reminder.read<String>('id');
     final revision = reminder.read<int>('schedule_revision');
@@ -1463,6 +1683,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         nowMicros,
       ],
     );
+    return true;
   }
 
   Future<void> _replaceDocumentText(
@@ -1623,6 +1844,14 @@ T _enumByName<T extends Enum>(List<T> values, String name, T fallback) {
     if (value.name == name) return value;
   }
   return fallback;
+}
+
+T? _nullableEnumByName<T extends Enum>(List<T> values, String? name) {
+  if (name == null) return null;
+  for (final value in values) {
+    if (value.name == name) return value;
+  }
+  return null;
 }
 
 String? _isoDate(DateTime? value) {

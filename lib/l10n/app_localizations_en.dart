@@ -112,6 +112,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get moreSettings => 'More settings';
 
   @override
+  String get moreSettingsWithReminder => 'More settings (plan & reminder)';
+
+  @override
   String get cancel => 'Cancel';
 
   @override
@@ -356,6 +359,19 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get reminderExpired =>
       'That time has passed; no late alert will be sent.';
+
+  @override
+  String get reminderStatusPermissionDenied =>
+      'Permission restricted; reminder time saved';
+
+  @override
+  String get reminderStatusTaskClosed => 'Task closed; reminder paused';
+
+  @override
+  String get reminderStatusPaused => 'Reminder paused';
+
+  @override
+  String get openNotificationSettings => 'Open notification settings';
 
   @override
   String get backupCreated => 'Backup created';

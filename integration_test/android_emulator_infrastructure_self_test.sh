@@ -612,14 +612,14 @@ run_retry_gate_tests() {
   [[ ! -e "${evidence_dir}/attempt-1" ]]
 
   printf '%s\n' \
-    '{"status":"passed","phase":"release-acceptance-complete","attempt":1,"exitStatus":0}' \
+    '{"status":"passed","phase":"release-binary-smoke-complete","attempt":1,"exitStatus":0}' \
     > "${evidence_dir}/workflow-phase.json"
   RUNNER_TEMP="${case_root}" bash "${script_dir}/android_emulator_retry_gate.sh" \
     enforce 36 success false skipped >/dev/null
   jq -e '.finalStatus == "passed-primary" and
     .workflowPhaseValid == true' "${evidence_dir}/retry-decision.json" >/dev/null
   printf '%s\n' \
-    '{"status":"passed","phase":"release-acceptance-complete","attempt":2,"exitStatus":0}' \
+    '{"status":"passed","phase":"release-binary-smoke-complete","attempt":2,"exitStatus":0}' \
     > "${evidence_dir}/workflow-phase.json"
   RUNNER_TEMP="${case_root}" bash "${script_dir}/android_emulator_retry_gate.sh" \
     enforce 36 failure true success >/dev/null

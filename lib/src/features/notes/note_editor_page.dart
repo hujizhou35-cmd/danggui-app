@@ -11,6 +11,7 @@ import '../../application/app_state.dart';
 import '../../application/app_store.dart';
 import '../../services/export/portable_export_service.dart';
 import '../../ui/components/components.dart';
+import '../tasks/task_creation_sheet.dart';
 
 class NoteEditorPage extends ConsumerStatefulWidget {
   const NoteEditorPage({
@@ -39,6 +40,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   String? _folderId;
   var _pinned = false;
   var _allowPop = false;
+  var _closing = false;
   String? _loadedId;
   NoteViewModel? _noteTemplate;
   Timer? _autosaveTimer;
@@ -124,129 +126,111 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
         if (!didPop) await _saveAndClose();
       },
       child: Scaffold(
+        resizeToAvoidBottomInset: false,
         backgroundColor: Colors.transparent,
-        body: PaperBackground(
-          child: SafeArea(
-            child: Column(
-              children: <Widget>[
-                DangguiTopBar(
-                  leading: DangguiIconButton(
-                    icon: const Icon(Icons.arrow_back_rounded),
-                    semanticLabel: MaterialLocalizations.of(context)
-                        .backButtonTooltip,
-                    onPressed: _saveAndClose,
-                  ),
-                  actions: <Widget>[
-                    DangguiIconButton(
-                      icon: Icon(
-                        _pinned
-                            ? Icons.push_pin_rounded
-                            : Icons.push_pin_outlined,
-                      ),
-                      semanticLabel: _pinned ? l10n.unpin : l10n.pin,
-                      selected: _pinned,
-                      onPressed: () {
-                        setState(() => _pinned = !_pinned);
-                        _onDraftChanged();
-                      },
-                    ),
-                    PopupMenuButton<String>(
-                      onSelected: (value) => _handleMenu(value, currentNote),
-                      itemBuilder: (context) => <PopupMenuEntry<String>>[
-                        PopupMenuItem(value: 'copy', child: Text(l10n.copy)),
-                        PopupMenuItem(
-                          value: 'export',
-                          child: Text(l10n.export),
-                        ),
-                        PopupMenuItem(
-                          value: 'task',
-                          child: Text(l10n.convertToTask),
-                        ),
-                        PopupMenuItem(
-                          value: 'delete',
-                          child: Text(l10n.delete),
-                        ),
-                      ],
-                      child: DangguiIconButton(
-                        icon: const Icon(Icons.more_horiz_rounded),
-                        semanticLabel: MaterialLocalizations.of(context)
-                            .showMenuTooltip,
-                      ),
-                    ),
-                  ],
+        body: EditorPageFrame(
+          key: const Key('note-editor-page'),
+          topBar: DangguiTopBar(
+            key: const Key('note-editor-top-bar'),
+            leading: DangguiIconButton(
+              key: const Key('note-editor-back'),
+              icon: const Icon(Icons.arrow_back_rounded),
+              semanticLabel: MaterialLocalizations.of(context)
+                  .backButtonTooltip,
+              onPressed: _saveAndClose,
+            ),
+            actions: <Widget>[
+              DangguiIconButton(
+                key: const Key('note-editor-pin'),
+                icon: Icon(
+                  _pinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
                 ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(24, 4, 24, 90),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        TextField(
-                          controller: _titleController,
-                          minLines: 1,
-                          maxLines: 3,
-                          style: Theme.of(context).textTheme.titleLarge,
-                          decoration: InputDecoration(
-                            hintText: l10n.noteTitleHint,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        DropdownButtonFormField<String?>(
-                          initialValue: _folderId,
-                          decoration: InputDecoration(labelText: l10n.folders),
-                          items: <DropdownMenuItem<String?>>[
-                            DropdownMenuItem<String?>(
-                              value: null,
-                              child: Text(l10n.uncategorized),
-                            ),
-                            for (final folder
-                                in asyncState.requireValue.folders)
-                              DropdownMenuItem<String?>(
-                                value: folder.id,
-                                child: Text(folder.name),
-                              ),
-                          ],
-                          onChanged: (value) {
-                            setState(() => _folderId = value);
-                            _onDraftChanged();
-                          },
-                        ),
-                        const Divider(height: 26),
-                        TextField(
-                          controller: _bodyController,
-                          undoController: _bodyUndoController,
-                          minLines: 15,
-                          maxLines: null,
-                          keyboardType: TextInputType.multiline,
-                          style: Theme.of(context).textTheme.bodyLarge,
-                          decoration: InputDecoration(
-                            hintText: l10n.noteBodyHint,
-                          ),
-                          contextMenuBuilder: (context, editableTextState) {
-                            return AdaptiveTextSelectionToolbar.buttonItems(
-                              anchors: editableTextState.contextMenuAnchors,
-                              buttonItems: <ContextMenuButtonItem>[
-                                ...editableTextState.contextMenuButtonItems,
-                                ContextMenuButtonItem(
-                                  label: l10n.convertToTask,
-                                  onPressed: _convertSelectionToTask,
-                                ),
-                              ],
-                            );
-                          },
+                semanticLabel: _pinned ? l10n.unpin : l10n.pin,
+                selected: _pinned,
+                onPressed: () {
+                  setState(() => _pinned = !_pinned);
+                  _onDraftChanged();
+                },
+              ),
+              PopupMenuButton<String>(
+                key: const Key('note-editor-menu'),
+                onSelected: (value) => _handleMenu(value, currentNote),
+                itemBuilder: (context) => <PopupMenuEntry<String>>[
+                  PopupMenuItem(value: 'copy', child: Text(l10n.copy)),
+                  PopupMenuItem(value: 'export', child: Text(l10n.export)),
+                  PopupMenuItem(value: 'task', child: Text(l10n.convertToTask)),
+                  PopupMenuItem(value: 'delete', child: Text(l10n.delete)),
+                ],
+                child: DangguiIconButton(
+                  icon: const Icon(Icons.more_horiz_rounded),
+                  semanticLabel: MaterialLocalizations.of(context)
+                      .showMenuTooltip,
+                ),
+              ),
+            ],
+          ),
+          editor: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                TextField(
+                  key: const Key('note-editor-title'),
+                  controller: _titleController,
+                  minLines: 1,
+                  maxLines: 3,
+                  style: Theme.of(context).textTheme.titleLarge,
+                  decoration: InputDecoration(hintText: l10n.noteTitleHint),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String?>(
+                  key: const Key('note-editor-folder'),
+                  initialValue: _folderId,
+                  decoration: InputDecoration(labelText: l10n.folders),
+                  items: <DropdownMenuItem<String?>>[
+                    DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text(l10n.uncategorized),
+                    ),
+                    for (final folder in asyncState.requireValue.folders)
+                      DropdownMenuItem<String?>(
+                        value: folder.id,
+                        child: Text(folder.name),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    setState(() => _folderId = value);
+                    _onDraftChanged();
+                  },
+                ),
+                const Divider(height: 26),
+                TextField(
+                  key: const Key('note-editor-body'),
+                  controller: _bodyController,
+                  undoController: _bodyUndoController,
+                  minLines: 15,
+                  maxLines: null,
+                  keyboardType: TextInputType.multiline,
+                  style: Theme.of(context).textTheme.bodyLarge,
+                  decoration: InputDecoration(hintText: l10n.noteBodyHint),
+                  contextMenuBuilder: (context, editableTextState) {
+                    return AdaptiveTextSelectionToolbar.buttonItems(
+                      anchors: editableTextState.contextMenuAnchors,
+                      buttonItems: <ContextMenuButtonItem>[
+                        ...editableTextState.contextMenuButtonItems,
+                        ContextMenuButtonItem(
+                          label: l10n.convertToTask,
+                          onPressed: _convertSelectionToTask,
                         ),
                       ],
-                    ),
-                  ),
+                    );
+                  },
                 ),
               ],
             ),
           ),
-        ),
-        bottomNavigationBar: SafeArea(
-          top: false,
-          minimum: const EdgeInsets.fromLTRB(18, 0, 18, 10),
-          child: EditorToolbar(
+          toolbar: EditorToolbar(
+            key: const Key('note-editor-toolbar'),
             items: <EditorToolbarItem>[
               EditorToolbarItem(
                 icon: const Icon(Icons.format_list_bulleted_rounded),
@@ -385,7 +369,13 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   }
 
   Future<void> _saveAndClose() async {
-    if (!await _flushSave(interactive: true)) return;
+    if (_closing) return;
+    _closing = true;
+    FocusManager.instance.primaryFocus?.unfocus();
+    if (!await _flushSave(interactive: true)) {
+      _closing = false;
+      return;
+    }
     if (!mounted) return;
     setState(() => _allowPop = true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -444,78 +434,24 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
         ? lines.skip(1).join('\n')
         : _bodyController.text;
     if (initialTitle.isEmpty || !mounted) return;
-    final titleController = TextEditingController(text: initialTitle);
-    final bodyController = TextEditingController(text: initialBody);
-    DateTime? dueDate;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          final l10n = AppLocalizations.of(context);
-          return AlertDialog(
-            title: Text(l10n.convertToTask),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  TextField(
-                    controller: titleController,
-                    maxLength: 160,
-                    decoration: InputDecoration(hintText: l10n.taskTitleHint),
-                  ),
-                  TextField(
-                    controller: bodyController,
-                    minLines: 3,
-                    maxLines: 8,
-                    decoration: InputDecoration(hintText: l10n.bodyHint),
-                  ),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(l10n.dueDate),
-                    subtitle: Text(
-                      dueDate == null
-                          ? l10n.noDate
-                          : MaterialLocalizations.of(context)
-                                .formatMediumDate(dueDate!),
-                    ),
-                    onTap: () async {
-                      final now = DateTime.now();
-                      final value = await showDatePicker(
-                        context: context,
-                        initialDate: dueDate ?? now,
-                        firstDate: DateTime(now.year - 10),
-                        lastDate: DateTime(now.year + 20),
-                      );
-                      if (value != null) {
-                        setDialogState(() => dueDate = value);
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-            actions: <Widget>[
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: Text(l10n.cancel),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                child: Text(l10n.save),
-              ),
-            ],
-          );
-        },
-      ),
+    final result = await showTaskCreationSheet(
+      context,
+      initialTitle: initialTitle,
+      initialBody: initialBody,
     );
-    final title = titleController.text.trim();
-    final body = bodyController.text;
-    titleController.dispose();
-    bodyController.dispose();
-    if (confirmed != true || title.isEmpty || !mounted) return;
-    await ref
+    if (result == null || !mounted) return;
+    if (!await _flushSave(interactive: true) || !mounted) return;
+    final taskId = await ref
         .read(appStoreProvider.notifier)
-        .createTask(title: title, body: body, dueDate: dueDate);
+        .createTask(
+          title: result.title,
+          body: result.body,
+          dueDate: result.dueDate,
+        );
+    if (result.openDetails && mounted) {
+      await settleTaskCreationKeyboard(context: context);
+      if (mounted) await context.push('/tasks/$taskId');
+    }
   }
 
   Future<void> _handleMenu(String value, NoteViewModel note) async {

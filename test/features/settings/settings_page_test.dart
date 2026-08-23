@@ -46,6 +46,23 @@ void main() {
     expect(settings.autoBackupMinuteLocal, 35);
   });
 
+  testWidgets('shows the 1.1.0 product version without build metadata', (
+    tester,
+  ) async {
+    _setPhoneSize(tester);
+    await tester.pumpWidget(
+      _settingsApp(
+        container,
+        const SettingsPage(loadLatestBackupStatus: false),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await _scrollToText(tester, '关于当归', maximumDrags: 20);
+    expect(find.text('版本 1.1.0'), findsOneWidget);
+    expect(find.textContaining('1.1.0+2'), findsNothing);
+  });
+
   testWidgets('shows complete settings and exposes every locale choice', (
     tester,
   ) async {
@@ -578,10 +595,18 @@ Future<void> _openRestore(WidgetTester tester, {String label = '从备份恢复'
   await tester.pumpAndSettle();
 }
 
-Future<void> _scrollToText(WidgetTester tester, String text) async {
+Future<void> _scrollToText(
+  WidgetTester tester,
+  String text, {
+  int maximumDrags = 8,
+}) async {
   final target = find.text(text);
   final list = find.byKey(const PageStorageKey<String>('settings-list'));
-  for (var attempt = 0; target.evaluate().isEmpty && attempt < 8; attempt++) {
+  for (
+    var attempt = 0;
+    target.evaluate().isEmpty && attempt < maximumDrags;
+    attempt++
+  ) {
     await tester.drag(list, const Offset(0, -220));
     await tester.pump(const Duration(milliseconds: 100));
   }

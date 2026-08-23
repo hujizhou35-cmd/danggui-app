@@ -5,6 +5,8 @@ import flutter_local_notifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+  private var notificationSettingsChannel: FlutterMethodChannel?
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -49,5 +51,48 @@ import flutter_local_notifications
       GeneratedPluginRegistrant.register(with: registry)
     }
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+
+    let channel = FlutterMethodChannel(
+      name: "com.danggui.memo/settings",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "openNotificationSettings" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let settingsURLString: String
+      if #available(iOS 16.0, *) {
+        settingsURLString = UIApplication.openNotificationSettingsURLString
+      } else if #available(iOS 15.4, *) {
+        settingsURLString = UIApplicationOpenNotificationSettingsURLString
+      } else {
+        settingsURLString = UIApplication.openSettingsURLString
+      }
+      guard let url = URL(string: settingsURLString) else {
+        result(
+          FlutterError(
+            code: "settings_unavailable",
+            message: "The application settings URL is unavailable.",
+            details: nil
+          )
+        )
+        return
+      }
+      UIApplication.shared.open(url, options: [:]) { opened in
+        if opened {
+          result(nil)
+        } else {
+          result(
+            FlutterError(
+              code: "settings_unavailable",
+              message: "The operating system did not open application settings.",
+              details: nil
+            )
+          )
+        }
+      }
+    }
+    notificationSettingsChannel = channel
   }
 }

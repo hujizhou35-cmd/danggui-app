@@ -11,13 +11,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../application/app_store.dart';
+import '../../core/app_version.dart';
 import '../../data/database.dart';
 import 'portable_export_models.dart';
 
 export 'portable_export_models.dart';
 
 const _appId = 'com.danggui.memo';
-const _appVersion = '1.0.0+1';
 const _format = 'danggui-portable-export';
 const _formatVersion = 1;
 const _manifestPath = 'manifest.json';
@@ -67,7 +67,7 @@ final class PortableExportService {
       'format': _format,
       'formatVersion': _formatVersion,
       'appId': _appId,
-      'appVersion': _appVersion,
+      'appVersion': appTechnicalVersion,
       'databaseSchemaVersion': database.schemaVersion,
       'createdAtUtc': createdAt.toIso8601String(),
       'datasetId': snapshot.datasetId,
@@ -108,7 +108,7 @@ final class PortableExportService {
       'format': _format,
       'manifestVersion': _formatVersion,
       'appId': _appId,
-      'appVersion': _appVersion,
+      'appVersion': appTechnicalVersion,
       'databaseSchemaVersion': database.schemaVersion,
       'createdAtUtc': createdAt.toIso8601String(),
       'datasetId': snapshot.datasetId,

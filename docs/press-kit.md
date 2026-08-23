@@ -46,7 +46,7 @@
 
 ## Release 传播模板
 
-v1.0.0 当前对外状态统一写作“公开预发布”或“Pre-release”，不得写成“稳定版”“正式稳定发布”或笼统的“已全面验收”。官方页面为 [v1.0.0 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0)，对应提交 `b6dc50594abdb769080a738dd64550d26bc64d36`，标签工作流 [32609272408](https://github.com/hujizhou35-cmd/danggui-app/actions/runs/32609272408) 四个作业全部成功。Android 附件为正式 release 签名；公开页面的 16 个附件均已从下载端复算 SHA-256。CI Artifact、`debug-fallback` 包和 unsigned iOS `.app.zip` 均不能作为 Android 正式安装包传播。
+v1.1.0 当前对外状态统一写作“公开预发布”或“Pre-release”，不得写成“稳定版”“正式稳定发布”或笼统的“已全面验收”。官方页面为 [v1.1.0 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0)，真实标签、工作流、附件与实体机状态以 [v1.1.0 发布检查表](release/v1.1.0-release-checklist.md)为准。Android 附件必须来自受保护标签并使用与 v1.0.0 相同的正式签名；CI Artifact、`debug-fallback` 包、iOS 源码 ZIP 和 unsigned `.app.zip` 均不能作为 Android 正式安装包传播。v1.0.0 的历史提交与工作流证据仍保留在其独立检查表中。
 
 标题：`当归 v{version} · Android`
 

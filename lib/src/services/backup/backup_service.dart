@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../application/app_store.dart';
+import '../../core/app_version.dart';
 import '../../data/database.dart';
 import '../../domain/models.dart';
 import 'backup_codec.dart';
@@ -160,7 +161,7 @@ final class BackupService {
 
       final manifest = <String, Object?>{
         'appId': 'com.danggui.memo',
-        'appVersion': '1.0.0+1',
+        'appVersion': appTechnicalVersion,
         'createdAtUtc': startedAt.toIso8601String(),
         'datasetId': datasetId,
         'databaseSchemaVersion': database.schemaVersion,
@@ -536,7 +537,7 @@ final class BackupService {
         runId,
         kind,
         'started',
-        '1.0.0+1',
+        appTechnicalVersion,
         database.schemaVersion,
         now.microsecondsSinceEpoch,
       ],

@@ -1,6 +1,6 @@
 # 平台、签名与交付架构
 
-> v1.0.0 已作为[公开 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0)提供，仍不是稳定版。本页定义产物合同、已取得的自动化证据和仍待完成的实体机门禁。实时状态见 [v1.0.0 发布检查表](../release/v1.0.0-release-checklist.md)。
+> v1.1.0 计划以[公开 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0)交付，仍不是稳定版。本页定义产物合同、已取得的自动化证据和仍待完成的标签/实体机门禁。实时状态见 [v1.1.0 发布检查表](../release/v1.1.0-release-checklist.md)；v1.0.0 的历史证据继续保留在文末。
 
 ## 平台不变量
 
@@ -50,7 +50,7 @@ $env:DANGGUI_KEY_PASSWORD = "<strong-secret>"
 .\tool\build_android_release.ps1
 ```
 
-产物验证包括 APK 签名、AAB JAR 签名、最终权限和 SHA-256。正式发布时还应设置 `DANGGUI_EXPECTED_CERT_SHA256`，防止误用其他证书。
+产物验证包括 APK 签名与合并清单、AAB JAR 签名与 bundletool base manifest、最终权限和 SHA-256。正式发布时还应设置 `DANGGUI_EXPECTED_CERT_SHA256`，防止误用其他证书。
 
 ## GitHub Actions 签名环境
 
@@ -83,21 +83,23 @@ debug 回退包。仓库另以服务端 tag ruleset 限制 `v*` 的创建、更�
 
 CI 产出：
 
-- 通用 APK。
-- `armeabi-v7a`、`arm64-v8a`、`x86_64` 分架构 APK。
-- AAB。
-- `SHA256SUMS`、`SIGNING_MODE.txt` 和 `TOOLCHAIN.txt`。
+- 从 `pubspec.yaml` 的 `1.1.0+2` 派生的通用 APK/AAB（versionCode `2`）。
+- `armeabi-v7a`、`arm64-v8a`、`x86_64` 分架构 APK（versionCode 分别为 `1002`、`2002`、`4002`）。
+- `SHA256SUMS`、`SIGNING_MODE.txt`、`SIGNING_CERTIFICATE.txt`、`SIGNING_CERTIFICATE_SHA256.txt` 和工具链记录。
+- `danggui-ios-source-v1.1.0.zip`：由干净标签提交确定性打包的完整已跟踪 Flutter 跨平台源码、iOS/Xcode 工程、锁定依赖、资源、四语本地化、测试、许可证与构建说明。
 - macOS 上的 unsigned `Runner.app` 压缩包，仅作为 iOS 源码可构建证据，不是 IPA，不能安装到普通 iPhone。
 
-CI Artifact 只用于构建审计和维护者验收，不自动等同于公开正式包。只有从版本标签构建、满足下述全部门禁，并由维护者附加到本仓库 GitHub Release 的 `release` 产物，才可称为官方安装包。普通用户应优先选择 `danggui-android-universal-release.apk`；ABI 分包面向明确知道设备架构的用户，AAB 不应直接侧载。
+CI Artifact 只用于构建审计和维护者验收，不自动等同于公开正式包。`v*` 受保护标签必须等待 Android、API 24、API 36 与 unsigned iOS 四项作业全绿，随后发布作业从同一 run 下载产物、复算统一 `SHA256SUMS`，并创建或刷新 GitHub Pre-release；刷新时会替换并核对完整附件集合，且拒绝改写已经人工提升为 Stable 的 Release。只有该标签 run 中 `SIGNING_MODE.txt=release` 且通过下述全部门禁的包，才可称为官方安装包。普通用户应优先选择 `danggui-android-universal-release.apk`；ABI 分包面向明确知道设备架构的用户，AAB 不应直接侧载。
 
 ## Android 模拟器冷启动门禁
 
-`android-emulator-smoke` 在独立的 `ubuntu-24.04` 作业中使用 Flutter `3.47.1`，并以 API 24/36、x86_64 组成两项矩阵。每项从全新 CI 环境启动 Android Emulator，调用生产 `main()`，因而会经过真实数据库、插件注册、启动协调与路由过程，而不是只 `pumpWidget` 一个隔离页面。Flutter 的设备测试宿主需要通过设备本机 VM Service 建立调试连接，因此该作业只在一次性的 CI checkout 中临时为 Debug 清单加入 `INTERNET`，不提交该清单、不参与 Release 构建；仓库内 main/debug/profile 清单和最终受审计 APK 仍全部不含网络权限。
+`android-emulator-smoke` 在独立的 `ubuntu-24.04` 作业中使用 Flutter `3.47.1`，并以 API 24/36、x86_64 组成两项矩阵。它显式依赖 `android-linux`，每项先下载该上游作业以同一 commit SHA 命名的 Android Artifact 并复核 `SHA256SUMS`。作业随后分两阶段运行：Debug 插桩阶段从全新 CI 环境启动 Android Emulator、调用生产 `main()` 并完成可交互验收；Release 二进制阶段卸载测试包，原样安装下载的通用 Release-mode APK，以纯 ADB/UIAutomator 做独立烟测。Flutter 设备测试宿主需要通过设备本机 VM Service 建立调试连接，因此只有第一阶段会在一次性 checkout 中临时为 Debug 清单加入 `INTERNET`；该清单不提交、不参与上游 Release 构建，第二阶段运行的下载 APK 仍不含网络权限。
 
-烟测不依赖系统语言的固定文案：它从运行时本地化对象与导航模型取标签，验证事项、过往、笔记、设置四个主区域以及设置内的离线帮助文档都可达。启动和路由等待全部有上限，禁止无界 `pumpAndSettle`；API 24/36 即使一项失败也会各自跑完，未处理 Flutter 异常、矩阵项失败以及不符合下述恢复条件的超时都会使工作流失败，下游 iOS 构建也不会运行。单个矩阵作业最长 90 分钟，模拟器启动最长 600 秒；每次设备测试若未在 12 分钟内完成，则收到终止信号，最多再等待 30 秒后强制结束。只有首轮恰好以超时结束、日志确认 APK 已构建并进入安装阶段但尚无测试执行时，脚本才会先有界重启 ADB，再逐项验证设备启动状态与 Package Manager；恢复后的包列表查询必须成功且为空，以确认应用包当前尚未安装，执行清理后还必须由第二次成功的空列表查询再次确认，才会重试一次。应用已安装、状态未知、构建失败、普通测试失败或第二次失败均不会重试或转成成功。失败时 CI 会额外保存所有已发生的尝试日志（至多两次）、`adb devices`、应用进程、Activity、Package 与 `logcat` 证据，避免无诊断的长时间等待。
+Debug 插桩阶段不依赖系统语言的固定文案：它从运行时本地化对象与导航模型取标签，验证事项、过往、笔记、设置四个主区域以及设置内的离线帮助文档都可达。启动和路由等待全部有上限，禁止无界 `pumpAndSettle`；API 24/36 即使一项失败也会各自跑完，未处理 Flutter 异常、矩阵项失败以及不符合下述恢复条件的超时都会使工作流失败，下游 iOS 构建也不会运行。单个矩阵作业最长 90 分钟，模拟器启动最长 600 秒；每次设备测试若未在 12 分钟内完成，则收到终止信号，最多再等待 30 秒后强制结束。只有首轮恰好以超时结束、日志确认 Debug APK 已构建并进入安装阶段但尚无测试执行时，脚本才会先有界重启 ADB，再逐项验证设备启动状态与 Package Manager；恢复后的包列表查询必须成功且为空，以确认应用包当前尚未安装，执行清理后还必须由第二次成功的空列表查询再次确认，才会重试一次。应用已安装、状态未知、构建失败、普通测试失败或第二次失败均不会重试或转成成功。失败时 CI 会额外保存所有已发生的尝试日志（至多两次）、`adb devices`、应用进程、Activity、Package 与 `logcat` 证据，避免无诊断的长时间等待。
 
-模拟器由 [ReactiveCircus/android-emulator-runner v2.38.0](https://github.com/ReactiveCircus/android-emulator-runner/releases/tag/v2.38.0) 启动，工作流锁定其不可变提交 `a421e43855164a8197daf9d8d40fe71c6996bb0d`；Linux KVM 权限设置按该项目的官方建议配置。冷启动通过后，同一矩阵还会写入事项/提醒、笔记/文件夹、过往事件/锚点与非默认设置；seed/verify 设备测试均显式使用 Flutter `--no-uninstall`，避免测试宿主在阶段间删除应用数据；随后执行同签名 `adb install --no-streaming -r -t` 覆盖，启动生产入口并执行正常协调流程，再逐字段核对数据、SQLite `quick_check`/外键、卡片提醒文案、AlarmManager 与真实系统通知栏。Alarm 证据只断言它在 verify 生产启动后存在，不把恢复来源归因于应用协调器或插件的 `MY_PACKAGE_REPLACED` 广播。API 36 由应用自身发起通知权限请求并通过系统 UI 授权，API 24 明确验证无需运行时通知权限。该自动化证明 API 24/36 模拟器上的同版本覆盖与后续生产启动后的系统服务链路，不宣称测试宿主强停状态下无需重启即可送达、不宣称旧 schema 迁移，也不替代代表性实体机的 OEM、锁屏、声音和振动人工验收。
+模拟器由 [ReactiveCircus/android-emulator-runner v2.38.0](https://github.com/ReactiveCircus/android-emulator-runner/releases/tag/v2.38.0) 启动，工作流锁定其不可变提交 `a421e43855164a8197daf9d8d40fe71c6996bb0d`；Linux KVM 权限设置按该项目的官方建议配置。Debug 插桩冷启动通过后，同一矩阵还会写入事项/提醒、笔记/文件夹、过往事件/锚点与非默认设置；seed/verify 设备测试均显式使用 Flutter `--no-uninstall`，随后执行同签名 `adb install --no-streaming -r -t` 覆盖并核对数据、SQLite、AlarmManager 与真实系统通知栏。API 36 由应用自身发起通知权限请求并通过系统 UI 授权，API 24 明确验证无需运行时通知权限。该阶段证明 Debug 测试宿主中的交互和同版本覆盖链路，不能表述为发布 APK 验收。
+
+只有上述交互阶段全部成功，脚本才卸载 Debug 包并进入精确 Release 二进制烟测。它对下载 APK 重跑 ID、版本、SDK、`debuggable=false`、权限、签名和 manifest 校验，以不带 `-r/-t` 的命令安装，强停后通过 Launcher 冷启动，并以四语底栏语义完成“事项 → 笔记 → 设置 → 事项”。每步要求 Activity/Window 仍在前台，整个导航期间 PID 不变，最后扫描本次启动后的 logcat 是否存在当归 FATAL、ANR、进程死亡或 native fatal signal。该阶段不含 Flutter instrumentation，证明的是同一 run 的实际通用 Release-mode 字节；在 PR/普通分支它可能使用 `debug-fallback` 签名，只有受保护标签的 `SIGNING_MODE.txt=release` 才构成正式签名证据。两阶段都不宣称测试宿主强停状态下无需重启即可送达、不宣称旧 schema 迁移，也不替代代表性实体机的 OEM、锁屏、声音和振动人工验收。
 
 API 33+ 在每个 AVD attempt 的第一次 Flutter 构建、安装或启动之前执行独立的系统组件健康门禁，从而在应用尚未参与时建立纯基础设施归因。门禁先要求 Package Manager 成功且当归包列表为空，再解析系统实际选定的 PermissionController 包；随后对 SystemUI 快速设置面板与 PermissionController 的 `MANAGE_PERMISSIONS` 页面做两次、间隔 5 秒的有界响应采样，并记录 AVD 名、Android build/system image fingerprint、增量版本和 ABI。SystemUI 的每轮观察都会重新发出有界展开请求，避免把刚启动时被忽略的一次请求重复采样为十次失败。该探针本身不安装当归、不授予或撤销 `POST_NOTIFICATIONS`，也不点击任何 ANR 对话框。只有两次采样都能确认对应系统包的真实 UI 后，才运行冷启动烟测；随后的发布验收只严格复核当前 API 与 attempt 的健康证据，不会重跑或修复门禁。API 24 写入明确的 not-applicable 证据，不具备以下 SystemUI 重建资格。
 
@@ -117,13 +119,20 @@ API 33+ 在每个 AVD attempt 的第一次 Flutter 构建、安装或启动之�
 
 1. `SIGNING_MODE.txt` 为 `release`。
 2. `apksigner verify --verbose --print-certs` 通过，证书 SHA-256 与公开指纹一致。
-3. AAB 的 JAR 签名通过。
+3. AAB 的 JAR 签名/证书通过，且 bundletool 解析到的 ID、版本、SDK 和权限与 APK/发布合同一致。
 4. 最终 APK 不含 INTERNET 或精确闹钟权限。
-5. `flutter analyze --fatal-infos`、全部测试与 API 24/API 36 真实模拟器冷启动烟测通过。
-6. API 24/API 36 安装升级、提醒和数据保留验收通过。
-7. SHA-256 与 Release 页面一致。
+5. `flutter analyze --fatal-infos`、全部测试与 API 24/API 36 Debug 插桩交互验收通过。
+6. 两个 API 作业都对 `android-linux` 同一 SHA 的通用 Release-mode APK 完成全新安装、冷启动、包/版本、基础导航、稳定进程和无崩溃烟测。
+7. API 24/API 36 的同签名 Debug 覆盖、提醒和数据保留验收通过；这项不能冒充真实旧版本正式包升级。
+8. SHA-256 与 Release 页面一致。
 
 Debug 回退包必须保留 `debug-fallback` 文件名，禁止上传应用商店或标记为正式 Release。
+
+### v1.1.0 预发布合同
+
+标签 `v1.1.0` 必须与 `pubspec.yaml` 的产品版本一致，并从合并后的受保护 `main` 创建。标签发布资产包括五个 Android 包、统一校验和、正式证书 SHA-256、确定性 iOS 源码 ZIP 和 unsigned `.app.zip` 构建证据。iOS 两类压缩包都不是 IPA；源码构建步骤见 [iOS 源码包构建说明](ios-source-build.md)。
+
+v1.1.0 的稳定版门禁额外要求：用已公开的正式 v1.0.0 APK 在代表性 Android 实体机执行覆盖升级，确认既有事项、提醒、笔记、过往和设置完整保留，并复验编辑器键盘复位、默认当天、提醒状态与完整启动构图。在此签署前，v1.1.0 只能保持 Pre-release。
 
 ### v1.0.0 预发布证据
 

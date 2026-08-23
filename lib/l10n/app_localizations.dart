@@ -306,6 +306,12 @@ abstract class AppLocalizations {
   /// **'更多设置'**
   String get moreSettings;
 
+  /// No description provided for @moreSettingsWithReminder.
+  ///
+  /// In zh, this message translates to:
+  /// **'更多设置（计划与提醒）'**
+  String get moreSettingsWithReminder;
+
   /// No description provided for @cancel.
   ///
   /// In zh, this message translates to:
@@ -785,6 +791,30 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'提醒时间已过，不会补发。'**
   String get reminderExpired;
+
+  /// No description provided for @reminderStatusPermissionDenied.
+  ///
+  /// In zh, this message translates to:
+  /// **'权限受限，提醒时间已保留'**
+  String get reminderStatusPermissionDenied;
+
+  /// No description provided for @reminderStatusTaskClosed.
+  ///
+  /// In zh, this message translates to:
+  /// **'事项关闭，提醒已暂停'**
+  String get reminderStatusTaskClosed;
+
+  /// No description provided for @reminderStatusPaused.
+  ///
+  /// In zh, this message translates to:
+  /// **'提醒已暂停'**
+  String get reminderStatusPaused;
+
+  /// No description provided for @openNotificationSettings.
+  ///
+  /// In zh, this message translates to:
+  /// **'打开通知设置'**
+  String get openNotificationSettings;
 
   /// No description provided for @backupCreated.
   ///

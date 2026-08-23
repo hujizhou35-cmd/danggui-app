@@ -22,6 +22,7 @@ import 'features/tasks/task_detail_page.dart';
 import 'features/tasks/tasks_page.dart';
 import 'services/backup/automatic_backup_coordinator.dart';
 import 'services/notifications/notification_coordinator.dart';
+import 'ui/components/ime_inset_guard.dart';
 
 final rootNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'root');
 
@@ -140,6 +141,30 @@ class _DangguiAppState extends ConsumerState<DangguiApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && _startupReconciled) {
       unawaited(_reconcileAutomaticBackup(startup: false));
+      unawaited(_reconcileNotifications(refreshStore: true));
+    }
+  }
+
+  Future<void> _reconcileNotifications({required bool refreshStore}) async {
+    try {
+      await ref.read(notificationCoordinatorProvider).reconcile();
+    } on Object catch (error, stackTrace) {
+      // A platform permission query must never prevent the local app from
+      // starting or returning to the foreground. Durable jobs retry later.
+      if (kDebugMode) {
+        debugPrint('Notification reconciliation failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+    }
+    if (refreshStore && mounted) {
+      try {
+        await ref.read(appStoreProvider.notifier).refresh();
+      } on Object catch (error, stackTrace) {
+        if (kDebugMode) {
+          debugPrint('Notification state refresh failed: $error');
+          debugPrintStack(stackTrace: stackTrace);
+        }
+      }
     }
   }
 
@@ -163,13 +188,17 @@ class _DangguiAppState extends ConsumerState<DangguiApp>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<int>(notificationStateRevisionProvider, (previous, next) {
+      if (previous == null || previous == next) return;
+      unawaited(_refreshStoreAfterNotificationAction());
+    });
     final appState = ref.watch(appStoreProvider).value;
     if (appState != null) {
-      unawaited(ref.read(notificationCoordinatorProvider).reconcile());
       if (!_startupReconciled) {
         _startupReconciled = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
+            unawaited(_reconcileNotifications(refreshStore: true));
             unawaited(_reconcileAutomaticBackup(startup: true));
           }
         });
@@ -213,10 +242,21 @@ class _DangguiAppState extends ConsumerState<DangguiApp>
         final combined = (media.textScaler.scale(1) * userScale).clamp(.9, 2.0);
         return MediaQuery(
           data: media.copyWith(textScaler: TextScaler.linear(combined)),
-          child: child ?? const SizedBox.shrink(),
+          child: ImeInsetGuard(child: child ?? const SizedBox.shrink()),
         );
       },
     );
+  }
+
+  Future<void> _refreshStoreAfterNotificationAction() async {
+    try {
+      await ref.read(appStoreProvider.notifier).refresh();
+    } on Object catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('Notification action state refresh failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+    }
   }
 }
 

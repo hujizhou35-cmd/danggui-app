@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:danggui/src/core/app_version.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../tool/audit_offline_boundary.dart';
@@ -16,12 +17,52 @@ void main() {
     expect(report.failures, isEmpty, reason: report.failures.join('\n'));
     expect(report.checks.length, greaterThanOrEqualTo(50));
     expect(expectedApplicationId, 'com.danggui.memo');
-    expect(expectedVersion, '1.0.0+1');
+    final version = readReleaseVersion(repositoryRoot);
+    expect(version.name, '1.1.0');
+    expect(version.buildNumber, 2);
+    expect(version.technical, '1.1.0+2');
+    expect(appVersionName, version.name);
+    expect(appBuildNumber, version.buildNumber);
+    expect(appTechnicalVersion, version.technical);
     expect(expectedAndroidPermissions, <String>{
       'android.permission.POST_NOTIFICATIONS',
       'android.permission.RECEIVE_BOOT_COMPLETED',
       'android.permission.VIBRATE',
     });
+  });
+
+  test('iOS source delivery declares a complete tracked content manifest', () {
+    final script = File(
+      _join(repositoryRoot.path, 'tool/build_ios_source_zip.sh'),
+    ).readAsStringSync();
+
+    expect(script, contains('git archive'));
+    expect(script, contains('git ls-tree -r --name-only HEAD'));
+    expect(script, contains('archive_manifest'));
+    expect(script, contains('SOURCE_ARCHIVE_CONTENTS.txt'));
+    for (final requiredPath in <String>[
+      '.github/workflows/mobile-ci.yml',
+      'android/app/build.gradle.kts',
+      'integration_test/app_cold_start_test.dart',
+      'ios/Runner.xcodeproj/project.pbxproj',
+      'lib/main.dart',
+      'pubspec.lock',
+      'test/platform/privacy_platform_config_test.dart',
+    ]) {
+      expect(script, contains(requiredPath), reason: requiredPath);
+    }
+    for (final rejectedContent in <String>[
+      r'\.env',
+      'build(/|\$)',
+      'dist(/|\$)',
+      r'\.dart_tool',
+      'keystore\\.properties',
+      'mobileprovision',
+      'PRIVATE KEY',
+      'google-services\\.json',
+    ]) {
+      expect(script, contains(rejectedContent), reason: rejectedContent);
+    }
   });
 
   test('audit fails closed when release capabilities drift', () {
