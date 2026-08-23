@@ -64,6 +64,7 @@ run_health_case() {
       evidence_dir="${RUNNER_TEMP}/danggui-emulator-api-36"
       workflow_phase="${evidence_dir}/workflow-phase.json"
       event_log="${evidence_dir}/events.log"
+      systemui_read_count=0
       : > "${event_log}"
       printf "%s\n" "{\"status\":\"running\",\"phase\":\"self-test\"}" \
         > "${workflow_phase}"
@@ -76,6 +77,13 @@ run_health_case() {
           *" shell getprop ro.system.build.fingerprint "*) printf "%s\n" "aosp/test/system:fingerprint" ;;
           *" shell getprop ro.build.version.incremental "*) printf "%s\n" "123456" ;;
           *" shell getprop ro.product.cpu.abi "*) printf "%s\n" "x86_64" ;;
+          *" shell pm path android "*) printf "%s\n" "package:/system/framework/framework-res.apk" ;;
+          *" shell pm list packages com.danggui.memo "*)
+            [[ "${SCENARIO}" == "app-query-failure" ]] && return 1
+            [[ "${SCENARIO}" == "app-installed" ]] && \
+              printf "%s\n" "package:com.danggui.memo"
+            return 0
+            ;;
           *" shell pm path com.android.systemui "*)
             printf "%s\n" "package:/system_ext/priv-app/SystemUI/SystemUI.apk" ;;
           *" shell cmd package resolve-activity --brief -a android.intent.action.MANAGE_PERMISSIONS "*)
@@ -85,7 +93,7 @@ run_health_case() {
           *" shell pm list packages -e com.android.permissioncontroller "*)
             printf "%s\n" "package:com.android.permissioncontroller" ;;
           *" shell pidof com.android.systemui "*) printf "%s\n" "4242" ;;
-          *" shell cmd statusbar expand-notifications "*)
+          *" shell cmd statusbar expand-settings "*)
             [[ "${SCENARIO}" == "timeout" ]] && return 124
             [[ "${SCENARIO}" == "generic-failure" ]] && return 1
             return 0
@@ -94,8 +102,14 @@ run_health_case() {
             printf "%s\n" "Starting: Intent" "Status: ok" "Complete" ;;
           *" shell uiautomator dump "*) ;;
           *" exec-out cat /sdcard/danggui-system-ui"*)
-            if [[ "${SCENARIO}" == "systemui-anr" ]]; then
+            systemui_read_count=$(( systemui_read_count + 1 ))
+            if [[ "${SCENARIO}" == "systemui-anr" ||
+                  "${SCENARIO}" == "classifier-copy-failure" ]]; then
               printf "%s\n" "<hierarchy><node package=\"android\" text=\"System UI is not responding\" resource-id=\"android:id/aerr_close\"/><node package=\"android\" resource-id=\"android:id/aerr_wait\"/></hierarchy>"
+            elif [[ "${SCENARIO}" == "all-launcher" ]] ||
+                 { [[ "${SCENARIO}" == "launcher-then-systemui" ]] &&
+                   (( systemui_read_count <= 3 )); }; then
+              printf "%s\n" "<hierarchy><node package=\"com.android.launcher3\"/></hierarchy>"
             else
               printf "%s\n" "<hierarchy><node package=\"com.android.systemui\"/></hierarchy>"
             fi
@@ -110,6 +124,23 @@ run_health_case() {
           *" shell cmd statusbar collapse "*|*" shell input keyevent KEYCODE_HOME "*) ;;
           *) return 97 ;;
         esac
+      }
+
+      cp() {
+        if [[ "${SCENARIO}" == 'copy-failure' ]] ||
+           { [[ "${SCENARIO}" == 'classifier-copy-failure' ]] &&
+             [[ "$*" == *'system-ui-anr-1.xml'* ]]; }; then
+          return 1
+        fi
+        command cp "$@"
+      }
+
+      grep() {
+        if [[ "${SCENARIO}" == 'grep-failure' &&
+              "$*" == *'system-ui-health-1.xml'* ]]; then
+          return 2
+        fi
+        command grep "$@"
       }
       source "${REPOSITORY_ROOT}/integration_test/android_emulator_infrastructure.sh"
       set +e
@@ -138,11 +169,40 @@ run_health_case() {
       .postNotificationsChanged == false' \
       "${evidence_dir}/system-component-health.json" >/dev/null
     sample_count="$(grep -c \
-      'shell cmd statusbar expand-notifications' \
+      'shell cmd statusbar expand-settings' \
       "${evidence_dir}/events.log")"
     [[ "${sample_count}" == '2' ]]
+  elif [[ "${scenario}" == 'launcher-then-systemui' ]]; then
+    sample_count="$(grep -c 'shell cmd statusbar expand-settings' \
+      "${evidence_dir}/events.log")"
+    [[ "${sample_count}" == '5' ]]
+    [[ ! -e "${evidence_dir}/retry-on-fresh-avd.signal" ]]
+  elif [[ "${scenario}" == 'all-launcher' ]]; then
+    sample_count="$(grep -c 'shell cmd statusbar expand-settings' \
+      "${evidence_dir}/events.log")"
+    [[ "${sample_count}" == '10' ]]
+    jq -e '.reason == "bounded-ui-observation-exhausted" and
+      .component == "system-ui" and .phase == "system-component-health-gate" and
+      .appAbsentBeforeHealth == true and .observationPolls == 10 and
+      .allCommandsSucceeded == true' \
+      "${evidence_dir}/infrastructure-classification.json" >/dev/null
   elif [[ "${scenario}" == 'generic-failure' ]]; then
     jq -e '.status == "health-gate-failure" and
+      .retryEligible == false' \
+      "${evidence_dir}/infrastructure-classification.json" >/dev/null
+  elif [[ "${scenario}" == 'copy-failure' ]]; then
+    jq -e '.status == "health-gate-failure" and
+      .reason == "host-ui-evidence-copy-failed" and
+      .retryEligible == false' \
+      "${evidence_dir}/infrastructure-classification.json" >/dev/null
+  elif [[ "${scenario}" == 'classifier-copy-failure' ]]; then
+    jq -e '.status == "health-gate-failure" and
+      .reason == "anr-evidence-copy-failed" and
+      .retryEligible == false' \
+      "${evidence_dir}/infrastructure-classification.json" >/dev/null
+  elif [[ "${scenario}" == 'grep-failure' ]]; then
+    jq -e '.status == "health-gate-failure" and
+      .reason == "host-ui-evidence-read-failed" and
       .retryEligible == false' \
       "${evidence_dir}/infrastructure-classification.json" >/dev/null
   elif (( attempt == 2 )); then
@@ -363,13 +423,30 @@ write_retry_fixture() {
       attempt: $attempt,
       component: "system-ui",
       reason: "health-gate-anr-dialog",
+      evidenceFile: "system-ui-anr-1.xml",
       phase: "system-component-health-gate",
       exitStatus: 75,
       freshAvdRequired: true,
       retryEligible: $retryEligible,
+      appAbsentBeforeHealth: true,
       ordinaryProductFailure: false
     }' > "${evidence_dir}/infrastructure-classification.json"
+  printf '%s\n' '<hierarchy><node package="android" text="System UI is not responding"/></hierarchy>' \
+    > "${evidence_dir}/system-ui-anr-1.xml"
   printf '%s\n' 'attempt evidence' > "${evidence_dir}/seed.log"
+}
+
+write_observation_retry_fixture() {
+  local evidence_dir="$1"
+  mkdir -p "${evidence_dir}"
+  printf '%s\n' '75' > "${evidence_dir}/script-exit-status.txt"
+  printf '%s\n' 'DANGGUI_FRESH_AVD_RETRY_V1' \
+    > "${evidence_dir}/retry-on-fresh-avd.signal"
+  printf '%s\n' 'pre-product SystemUI observation exhausted' \
+    > "${evidence_dir}/system-ui-health-1.xml"
+  printf '%s\n' \
+    '{"status":"confirmed-infrastructure-failure","scope":"system-ui-permission-controller","apiLevel":36,"attempt":1,"component":"system-ui","reason":"bounded-ui-observation-exhausted","evidenceFile":"system-ui-health-1.xml","phase":"system-component-health-gate","exitStatus":75,"freshAvdRequired":true,"retryEligible":true,"ordinaryProductFailure":false,"appAbsentBeforeHealth":true,"observationPolls":10,"allCommandsSucceeded":true}' \
+    > "${evidence_dir}/infrastructure-classification.json"
 }
 
 write_permission_retry_fixture() {
@@ -381,8 +458,10 @@ write_permission_retry_fixture() {
   printf '%s\n' 'seed still running at ANR observation' \
     > "${evidence_dir}/seed.log"
   printf '%s\n' \
-    '{"status":"confirmed-infrastructure-failure","scope":"system-ui-permission-controller","apiLevel":36,"attempt":1,"component":"system-ui","reason":"permission-flow-anr-dialog","phase":"app-notification-permission-flow","exitStatus":75,"freshAvdRequired":true,"retryEligible":true,"ordinaryProductFailure":false,"packageAbsentBeforeSeed":true,"permissionPolicyPending":true,"dialogTapAbsent":true,"seedProcessAlive":true}' \
+    '{"status":"confirmed-infrastructure-failure","scope":"system-ui-permission-controller","apiLevel":36,"attempt":1,"component":"system-ui","reason":"permission-flow-anr-dialog","evidenceFile":"permission-dialog-system-ui-anr.xml","phase":"app-notification-permission-flow","exitStatus":75,"freshAvdRequired":true,"retryEligible":true,"ordinaryProductFailure":false,"packageAbsentBeforeSeed":true,"permissionPolicyPending":true,"dialogTapAbsent":true,"seedProcessAlive":true}' \
     > "${evidence_dir}/infrastructure-classification.json"
+  printf '%s\n' '<hierarchy><node package="android" text="System UI is not responding"/></hierarchy>' \
+    > "${evidence_dir}/permission-dialog-system-ui-anr.xml"
   printf '%s\n' \
     '{"leaderPid":4242,"processGroupId":4242,"independent":true}' \
     > "${evidence_dir}/seed-process-group.json"
@@ -422,6 +501,42 @@ run_retry_gate_tests() {
   [[ -s "${evidence_dir}/attempt-1/seed.log" ]]
   [[ -s "${evidence_dir}/retry-provenance.json" ]]
   [[ -s "${evidence_dir}/before.json" ]]
+
+  rm -rf -- "${evidence_dir}"
+  : > "${output_file}"
+  write_observation_retry_fixture "${evidence_dir}"
+  RUNNER_TEMP="${case_root}" GITHUB_OUTPUT="${output_file}" \
+    bash "${script_dir}/android_emulator_retry_gate.sh" prepare 36 \
+    >/dev/null
+  [[ "$(<"${output_file}")" == 'retry-authorized=true' ]]
+  [[ -s "${evidence_dir}/attempt-1/system-ui-health-1.xml" ]]
+
+  for tamper_filter in \
+    '.component = "permission-controller"' \
+    '.phase = "app-notification-permission-flow"' \
+    '.observationPolls = 9' \
+    '.appAbsentBeforeHealth = false' \
+    '.allCommandsSucceeded = false' \
+    '.evidenceFile = "../outside.xml"'; do
+    rm -rf -- "${evidence_dir}"
+    write_observation_retry_fixture "${evidence_dir}"
+    jq "${tamper_filter}" \
+      "${evidence_dir}/infrastructure-classification.json" \
+      > "${evidence_dir}/classification-tampered.json"
+    mv -- "${evidence_dir}/classification-tampered.json" \
+      "${evidence_dir}/infrastructure-classification.json"
+    assert_prepare_denied "${case_root}" "${output_file}"
+  done
+
+  rm -rf -- "${evidence_dir}"
+  write_observation_retry_fixture "${evidence_dir}"
+  rm -- "${evidence_dir}/system-ui-health-1.xml"
+  assert_prepare_denied "${case_root}" "${output_file}"
+
+  rm -rf -- "${evidence_dir}"
+  write_retry_fixture "${evidence_dir}" true 1
+  : > "${evidence_dir}/system-ui-anr-1.xml"
+  assert_prepare_denied "${case_root}" "${output_file}"
 
   rm -rf -- "${evidence_dir}"
   : > "${output_file}"
@@ -572,10 +687,18 @@ run_retry_gate_tests() {
 }
 
 run_health_case healthy 1 0 false
+run_health_case launcher-then-systemui 1 0 false
+run_health_case all-launcher 1 75 true
+run_health_case all-launcher 2 75 false
 run_health_case systemui-anr 1 75 true
 run_health_case permission-anr 1 75 true
 run_health_case timeout 1 75 true
 run_health_case generic-failure 1 1 false
+run_health_case copy-failure 1 1 false
+run_health_case classifier-copy-failure 1 1 false
+run_health_case grep-failure 1 1 false
+run_health_case app-installed 1 1 false
+run_health_case app-query-failure 1 1 false
 run_health_case timeout 2 75 false
 run_classifier_contract_tests
 run_product_failure_precedence_tests

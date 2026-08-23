@@ -32,6 +32,7 @@ prepare_retry() {
   local attempt_archive
   local path
   local classification_reason
+  local classification_evidence
   local expected_completion_partial
 
   deny_retry() {
@@ -80,7 +81,8 @@ prepare_retry() {
       .ordinaryProductFailure == false and
       (.reason == "health-gate-anr-dialog" or
        .reason == "permission-flow-anr-dialog" or
-       .reason == "bounded-command-timeout")
+       .reason == "bounded-command-timeout" or
+       .reason == "bounded-ui-observation-exhausted")
     ' "${classification}" >/dev/null; then
     echo 'Primary classification failed the strict retry contract.'
     deny_retry
@@ -94,7 +96,14 @@ prepare_retry() {
         .dialogTapAbsent == true and .seedProcessAlive == true
       elif (.reason == "health-gate-anr-dialog" or
             .reason == "bounded-command-timeout") then
-        .phase == "system-component-health-gate"
+        .phase == "system-component-health-gate" and
+        .appAbsentBeforeHealth == true
+      elif .reason == "bounded-ui-observation-exhausted" then
+        .phase == "system-component-health-gate" and
+        .component == "system-ui" and
+        .appAbsentBeforeHealth == true and
+        .observationPolls == 10 and
+        .allCommandsSucceeded == true
       else
         false
       end
@@ -104,6 +113,22 @@ prepare_retry() {
     return 0
   fi
   classification_reason="$(jq -r '.reason' "${classification}")"
+  classification_evidence="$(jq -r '.evidenceFile // empty' "${classification}")"
+  if [[ ! "${classification_evidence}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
+     [[ "${classification_evidence}" == '.' ]] ||
+     [[ "${classification_evidence}" == '..' ]] ||
+     [[ ! -e "${evidence_dir}/${classification_evidence}" ]]; then
+    echo 'Primary classification does not reference safe existing evidence.'
+    deny_retry
+    return 0
+  fi
+  if [[ "${classification_reason}" == 'health-gate-anr-dialog' ||
+        "${classification_reason}" == 'permission-flow-anr-dialog' ]] &&
+     [[ ! -s "${evidence_dir}/${classification_evidence}" ]]; then
+    echo 'Primary ANR classification evidence is empty.'
+    deny_retry
+    return 0
+  fi
   if [[ "${classification_reason}" == 'permission-flow-anr-dialog' ]]; then
     expected_completion_partial="${evidence_dir}/seed-natural-completion.json.partial.$(
       jq -r '.leaderPid // 0' "${evidence_dir}/seed-process-group.json" \

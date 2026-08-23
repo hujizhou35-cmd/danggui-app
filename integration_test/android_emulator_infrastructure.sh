@@ -196,9 +196,16 @@ danggui_write_infrastructure_classification() {
   local command_status="$5"
   local classification_path="${evidence_dir}/infrastructure-classification.json"
   local phase
+  local app_absent_before_health='false'
 
   phase="$(jq -r '.phase // "unknown"' "${workflow_phase}" 2>/dev/null || \
     printf '%s' 'unknown')"
+  if [[ "${phase}" == 'system-component-health-gate' &&
+        -e "${evidence_dir}/app-package-before-health.txt" &&
+        -z "$(tr -d '\r[:space:]' \
+          < "${evidence_dir}/app-package-before-health.txt")" ]]; then
+    app_absent_before_health='true'
+  fi
 
   jq -n \
     --argjson apiLevel "${api_level}" \
@@ -210,6 +217,7 @@ danggui_write_infrastructure_classification() {
     --arg phase "${phase}" \
     --argjson commandStatus "${command_status}" \
     --argjson exitStatus "${DANGGUI_INFRA_RETRY_EXIT_STATUS}" \
+    --argjson appAbsentBeforeHealth "${app_absent_before_health}" \
     '{
       status: "confirmed-infrastructure-failure",
       scope: "system-ui-permission-controller",
@@ -223,6 +231,7 @@ danggui_write_infrastructure_classification() {
       exitStatus: $exitStatus,
       freshAvdRequired: true,
       retryEligible: $retryEligible,
+      appAbsentBeforeHealth: $appAbsentBeforeHealth,
       ordinaryProductFailure: false
     }' > "${classification_path}"
 
@@ -297,6 +306,7 @@ danggui_classify_system_component_anr() {
   local reason="${3:-health-gate-anr-dialog}"
   local component=''
   local required_package_evidence=''
+  local copy_status
 
   danggui_xml_has_system_component_anr "${xml_path}" || return 1
   if grep -Eqi 'text="System UI (isn.t|is not) responding"' "${xml_path}"; then
@@ -315,7 +325,15 @@ danggui_classify_system_component_anr() {
   [[ -s "${required_package_evidence}" ]] || return 1
   grep -Fq 'package:' "${required_package_evidence}" || return 1
 
-  cp -- "${xml_path}" "${evidence_dir}/${evidence_name}"
+  if cp -- "${xml_path}" "${evidence_dir}/${evidence_name}"; then
+    :
+  else
+    copy_status=$?
+    danggui_mark_nonretryable_health_failure \
+      "${component}" 'anr-evidence-copy-failed' \
+      "$(basename -- "${xml_path}")" "${copy_status}"
+    return 2
+  fi
   danggui_mark_retryable_infrastructure_failure \
     "${component}" "${reason}" "${evidence_name}" 0
   return 0
@@ -422,8 +440,25 @@ danggui_capture_responsive_ui() {
   local host_xml="${evidence_dir}/${component}-health-${sample}.xml"
   local poll
   local command_status
+  local max_polls=10
+  local classification_path
+  local classification_partial
 
-  for poll in 1 2 3 4 5; do
+  for (( poll = 1; poll <= max_polls; poll += 1 )); do
+    # The just-booted SystemUI can acknowledge an expansion before its shade
+    # surface is attached. Re-issue the bounded action on every observation
+    # instead of repeatedly sampling an expansion request that was ignored.
+    if [[ "${component}" == 'system-ui' ]]; then
+      if danggui_health_command system-ui \
+        "system-ui-expand-${sample}-${poll}.log" \
+        shell cmd statusbar expand-settings; then
+        :
+      else
+        command_status=$?
+        return "${command_status}"
+      fi
+      sleep 1
+    fi
     if danggui_health_command "${component}" \
       "${component}-uiautomator-${sample}-${poll}.log" \
       shell uiautomator dump "${device_xml}"; then
@@ -435,8 +470,17 @@ danggui_capture_responsive_ui() {
     if danggui_health_command "${component}" \
       "${component}-ui-read-${sample}-${poll}.xml" \
       exec-out cat "${device_xml}"; then
-      cp -- "${evidence_dir}/${component}-ui-read-${sample}-${poll}.xml" \
-        "${host_xml}"
+      if cp -- "${evidence_dir}/${component}-ui-read-${sample}-${poll}.xml" \
+        "${host_xml}"; then
+        :
+      else
+        command_status=$?
+        danggui_mark_nonretryable_health_failure \
+          "${component}" 'host-ui-evidence-copy-failed' \
+          "${component}-ui-read-${sample}-${poll}.xml" \
+          "${command_status}"
+        return 1
+      fi
     else
       command_status=$?
       return "${command_status}"
@@ -445,12 +489,40 @@ danggui_capture_responsive_ui() {
     if danggui_classify_system_component_anr \
       "${host_xml}" "${component}-anr-${sample}.xml"; then
       return "${DANGGUI_INFRA_RETRY_EXIT_STATUS}"
+    else
+      command_status=$?
+      if (( command_status > 1 )); then
+        return 1
+      fi
     fi
     if grep -Fq "package=\"${expected_package}\"" "${host_xml}"; then
       return 0
+    else
+      command_status=$?
+      if (( command_status > 1 )); then
+        danggui_mark_nonretryable_health_failure \
+          "${component}" 'host-ui-evidence-read-failed' \
+          "${component}-health-${sample}.xml" "${command_status}"
+        return 1
+      fi
     fi
     sleep 1
   done
+
+  if [[ "${component}" == 'system-ui' ]]; then
+    danggui_mark_retryable_infrastructure_failure \
+      system-ui 'bounded-ui-observation-exhausted' \
+      "system-ui-health-${sample}.xml" 0
+    classification_path="${evidence_dir}/infrastructure-classification.json"
+    classification_partial="${classification_path}.partial"
+    jq --argjson observationPolls "${max_polls}" \
+      '. + {
+        observationPolls: $observationPolls,
+        allCommandsSucceeded: true
+      }' "${classification_path}" > "${classification_partial}"
+    mv -- "${classification_partial}" "${classification_path}"
+    return "${DANGGUI_INFRA_RETRY_EXIT_STATUS}"
+  fi
 
   danggui_mark_nonretryable_health_failure \
     "${component}" 'expected-system-ui-not-observed' \
@@ -482,6 +554,22 @@ danggui_run_system_component_health_gate() {
     shell getprop ro.build.version.incremental; then :; else status=$?; return "${status}"; fi
   if danggui_metadata_command emulator-cpu-abi.txt \
     shell getprop ro.product.cpu.abi; then :; else status=$?; return "${status}"; fi
+
+  # Every retryable pre-product health result is anchored to a healthy Package
+  # Manager and a successful, empty query for the Danggui package. This proves
+  # that no app build/install/launch has occurred in the current AVD attempt.
+  if danggui_metadata_command emulator-package-manager-health.txt \
+    shell pm path android; then :; else status=$?; return "${status}"; fi
+  danggui_expect_health_evidence emulator-package-manager \
+    emulator-package-manager-health.txt '^package:.+' || return $?
+  if danggui_metadata_command app-package-before-health.txt \
+    shell pm list packages com.danggui.memo; then :; else status=$?; return "${status}"; fi
+  if [[ -n "$(tr -d '\r[:space:]' \
+    < "${evidence_dir}/app-package-before-health.txt")" ]]; then
+    danggui_mark_nonretryable_health_failure emulator-package-manager \
+      'app-present-before-health-gate' app-package-before-health.txt 0
+    return 1
+  fi
 
   if danggui_health_command system-ui systemui-package-path.txt \
     shell pm path com.android.systemui; then :; else status=$?; return "${status}"; fi
@@ -544,9 +632,6 @@ danggui_run_system_component_health_gate() {
 
     if danggui_health_command system-ui "statusbar-collapse-${sample}.log" \
       shell cmd statusbar collapse; then :; else status=$?; return "${status}"; fi
-    if danggui_health_command system-ui "statusbar-expand-${sample}.log" \
-      shell cmd statusbar expand-notifications; then :; else status=$?; return "${status}"; fi
-    sleep 1
     if danggui_capture_responsive_ui system-ui "${sample}" \
       com.android.systemui; then :; else status=$?; return "${status}"; fi
     if danggui_health_command system-ui "statusbar-final-collapse-${sample}.log" \

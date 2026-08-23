@@ -987,6 +987,11 @@ final class _Audit {
         'permissionPolicyPending: true',
         'dialogTapAbsent: true',
         'seedProcessAlive: true',
+        r'appAbsentBeforeHealth: $appAbsentBeforeHealth',
+        "'bounded-ui-observation-exhausted'",
+        r'observationPolls: $observationPolls',
+        'allCommandsSucceeded: true',
+        'shell cmd statusbar expand-settings',
         'ordinaryProductFailure: false',
       ]) {
         _expectContains(
@@ -1010,6 +1015,25 @@ final class _Audit {
         'SystemUI health gate never pre-grants POST_NOTIFICATIONS',
         '$infrastructurePath must leave notification permission untouched',
       );
+      final observationLoop = infrastructure.indexOf(
+        'for (( poll = 1; poll <= max_polls; poll += 1 )); do',
+      );
+      final repeatedSystemUiExpansion = infrastructure.indexOf(
+        'shell cmd statusbar expand-settings',
+        observationLoop < 0 ? 0 : observationLoop,
+      );
+      final observationDump = infrastructure.indexOf(
+        'shell uiautomator dump',
+        observationLoop < 0 ? 0 : observationLoop,
+      );
+      _expect(
+        infrastructure.contains('local max_polls=10') &&
+            observationLoop >= 0 &&
+            repeatedSystemUiExpansion > observationLoop &&
+            observationDump > repeatedSystemUiExpansion,
+        'each bounded SystemUI observation reissues expansion before its dump',
+        '$infrastructurePath must retry exactly ten expand/dump observations',
+      );
     }
 
     const retryGatePath = 'integration_test/android_emulator_retry_gate.sh';
@@ -1029,6 +1053,14 @@ final class _Audit {
         'terminationSignalSent == "TERM"',
         'leaderExitStatus == 137',
         'terminationSignalSent == "KILL"',
+        '.reason == "bounded-ui-observation-exhausted"',
+        '.component == "system-ui"',
+        '.appAbsentBeforeHealth == true',
+        '.observationPolls == 10',
+        '.allCommandsSucceeded == true',
+        ".evidenceFile // empty",
+        'Primary classification does not reference safe existing evidence.',
+        'Primary ANR classification evidence is empty.',
       ]) {
         _expectContains(
           retryGatePath,
