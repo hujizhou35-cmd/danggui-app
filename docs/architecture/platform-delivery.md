@@ -99,6 +99,14 @@ CI Artifact 只用于构建审计和维护者验收，不自动等同于公开�
 
 模拟器由 [ReactiveCircus/android-emulator-runner v2.38.0](https://github.com/ReactiveCircus/android-emulator-runner/releases/tag/v2.38.0) 启动，工作流锁定其不可变提交 `a421e43855164a8197daf9d8d40fe71c6996bb0d`；Linux KVM 权限设置按该项目的官方建议配置。冷启动通过后，同一矩阵还会写入事项/提醒、笔记/文件夹、过往事件/锚点与非默认设置；seed/verify 设备测试均显式使用 Flutter `--no-uninstall`，避免测试宿主在阶段间删除应用数据；随后执行同签名 `adb install --no-streaming -r -t` 覆盖，启动生产入口并执行正常协调流程，再逐字段核对数据、SQLite `quick_check`/外键、卡片提醒文案、AlarmManager 与真实系统通知栏。Alarm 证据只断言它在 verify 生产启动后存在，不把恢复来源归因于应用协调器或插件的 `MY_PACKAGE_REPLACED` 广播。API 36 由应用自身发起通知权限请求并通过系统 UI 授权，API 24 明确验证无需运行时通知权限。该自动化证明 API 24/36 模拟器上的同版本覆盖与后续生产启动后的系统服务链路，不宣称测试宿主强停状态下无需重启即可送达、不宣称旧 schema 迁移，也不替代代表性实体机的 OEM、锁屏、声音和振动人工验收。
 
+API 33+ 在每个 AVD attempt 的第一次 Flutter 构建、安装或启动之前执行独立的系统组件健康门禁，从而在应用尚未参与时建立纯基础设施归因。门禁先解析系统实际选定的 PermissionController 包，再对 SystemUI 通知栏与 PermissionController 的 `MANAGE_PERMISSIONS` 页面做两次、间隔 5 秒的有界响应采样；同时记录 AVD 名、Android build/system image fingerprint、增量版本和 ABI。该探针本身不安装当归、不授予或撤销 `POST_NOTIFICATIONS`，也不点击任何 ANR 对话框。只有两次采样都能确认对应系统包的真实 UI 后，才运行冷启动烟测；随后的发布验收只严格复核当前 API 与 attempt 的健康证据，不会重跑或修复门禁。API 24 写入明确的 not-applicable 证据，不具备以下 SystemUI 重建资格。
+
+若 API 33+ 在健康门禁中出现明确的有界命令超时，或 UI 层级同时包含系统 `android` 包、`android:id/aerr_close`、`android:id/aerr_wait` 以及 “System UI/Permission Controller 无响应”标题，当前 action 会以专用状态失败关闭。权限流程内的 ANR 还必须同时证明：正在首轮 API 33+ 的通知权限阶段、seed 进程仍存活、seed 前包列表成功且为空、权限策略仍为 pending、CI 尚未点击允许按钮且日志没有产品测试失败标记。普通弹窗缺失、Flutter/数据库/37 项保留断言、AlarmManager 或通知失败都不能生成重建凭据；产品失败与系统 ANR 同时出现时以产品失败为准。
+
+工作流只静态声明两个相同不可变 SHA 的 emulator-runner action：首轮使用 `emulator-5554` 与唯一 attempt-1 AVD；仅当上述结构化凭据、专用退出码和一次性 token 全部一致时，才在 `emulator-5556` 上强制创建唯一 attempt-2 AVD，从冷启动和 fresh-package 边界重跑完整链路。第二轮不忽略失败、不能再次授权重试；最终 `always()` 门禁还会核对根目录 `workflow-phase.json` 的 passed 状态、退出码和 attempt，再恢复 required check 的真实结论。首轮系统证据归档在 artifact 的 `attempt-1/`，根目录始终代表最终一次验收，并含 `retry-decision.json`。这与前述“APK 安装流超时且包仍未安装”时在同一 AVD 内进行的一次 ADB 恢复不同，两种预算互不扩张。
+
+权限 seed pipeline 在独立进程组中运行，GNU `timeout --foreground`、`flutter test` 与 `tee` 保持在同一组；wrapper 以同目录临时文件加原子 rename 记录完整 `PIPESTATUS` 和自然完成状态。发现 ANR 后先留出短暂有界窗口，若自然完成 sidecar、未 rename 的 partial sidecar 或完整日志显示产品失败，则产品失败优先并撤销重试；强制清理后还会复核一次。只有对整个组执行有界 TERM/KILL、确认所有后代消失、leader 退出码与实际发送的终止信号对应、日志在静默窗口内不再增长，且 retry gate 独立复核进程组、终止与静默三份证据后，才保留 fresh-AVD 凭据；无法完整清理宿主进程时会使作业失败，不能依赖 emulator teardown 间接清理。
+
 ## iOS 后续签名边界
 
 当前不购买 Apple Developer Program，不保存 `.p8`、`.p12` 或 provisioning profile，也不上传 TestFlight。将来启用发布时，在不修改业务代码的前提下增加独立、人工审批的签名工作流；签名前重新确认 Bundle ID、证书主体、隐私清单、加密出口声明和中国大陆合规要求。

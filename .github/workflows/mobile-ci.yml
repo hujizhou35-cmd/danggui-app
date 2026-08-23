@@ -83,6 +83,9 @@ jobs:
       - name: Test Android emulator retry gate
         run: bash integration_test/run_android_emulator_smoke_self_test.sh
 
+      - name: Test Android emulator infrastructure gate
+        run: bash integration_test/android_emulator_infrastructure_self_test.sh
+
       - name: Analyze
         run: flutter analyze --fatal-infos
 
@@ -328,14 +331,21 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run cold-start and release acceptance on API ${{ matrix.api-level }}
+      - name: Run primary cold-start and release acceptance on API ${{ matrix.api-level }}
+        id: emulator-primary
+        continue-on-error: true
         # ReactiveCircus/android-emulator-runner v2.38.0, pinned to its immutable commit.
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        env:
+          ANDROID_SERIAL: emulator-5554
+          DANGGUI_EMULATOR_ATTEMPT: "1"
         with:
           api-level: ${{ matrix.api-level }}
           target: default
           arch: x86_64
           profile: pixel_7_pro
+          avd-name: danggui-api-${{ matrix.api-level }}-attempt-1
+          force-avd-creation: true
           emulator-port: 5554
           emulator-boot-timeout: 600
           emulator-options: >-
@@ -344,6 +354,54 @@ jobs:
           disable-animations: true
           disable-spellchecker: true
           script: bash integration_test/run_android_emulator_smoke.sh "${{ matrix.api-level }}"
+
+      - name: Classify primary emulator failure
+        id: fresh-avd-retry
+        if: always() && steps.emulator-primary.outcome == 'failure'
+        shell: bash
+        run: >-
+          bash integration_test/android_emulator_retry_gate.sh prepare
+          "${{ matrix.api-level }}"
+
+      - name: Run sole fresh-AVD retry on API ${{ matrix.api-level }}
+        id: emulator-retry
+        if: >-
+          always() &&
+          steps.fresh-avd-retry.outputs.retry-authorized == 'true'
+        # This is intentionally a second invocation of the same pinned action.
+        # Its unique AVD name and port, plus forced creation and no snapshots,
+        # make it a complete emulator rebuild rather than an in-place retry.
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        env:
+          ANDROID_SERIAL: emulator-5556
+          DANGGUI_EMULATOR_ATTEMPT: "2"
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: default
+          arch: x86_64
+          profile: pixel_7_pro
+          avd-name: danggui-api-${{ matrix.api-level }}-attempt-2
+          force-avd-creation: true
+          emulator-port: 5556
+          emulator-boot-timeout: 600
+          emulator-options: >-
+            -no-window -gpu swiftshader_indirect -no-snapshot -noaudio
+            -no-boot-anim -camera-back none -camera-front none
+          disable-animations: true
+          disable-spellchecker: true
+          script: bash integration_test/run_android_emulator_smoke.sh "${{ matrix.api-level }}"
+
+      - name: Enforce emulator acceptance result
+        if: always()
+        shell: bash
+        env:
+          PRIMARY_OUTCOME: ${{ steps.emulator-primary.outcome }}
+          RETRY_AUTHORIZED: ${{ steps.fresh-avd-retry.outputs.retry-authorized }}
+          RETRY_OUTCOME: ${{ steps.emulator-retry.outcome }}
+        run: >-
+          bash integration_test/android_emulator_retry_gate.sh enforce
+          "${{ matrix.api-level }}" "${PRIMARY_OUTCOME}"
+          "${RETRY_AUTHORIZED}" "${RETRY_OUTCOME}"
 
       - name: Upload emulator acceptance evidence
         if: always()
