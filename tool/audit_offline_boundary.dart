@@ -874,6 +874,17 @@ final class _Audit {
         '$acceptancePath must pass --no-uninstall to every seed and verify '
             'integration-test path',
       );
+      _expect(
+        !acceptance.contains('install_apk_logged initial-install'),
+        'release acceptance seed performs the only first app installation',
+        '$acceptancePath must not preinstall immediately before Flutter seed',
+      );
+      _expectContains(
+        acceptancePath,
+        acceptance,
+        r'\"packageAbsentBeforeSeed\":true',
+        'release evidence records the fresh-package boundary before seed',
+      );
     }
 
     for (final splitContract in <String>[

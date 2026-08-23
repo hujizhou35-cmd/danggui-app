@@ -296,8 +296,9 @@ bounded_adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
 bounded_adb shell svc power stayon true >/dev/null
 bounded_adb shell dumpsys power > "${evidence_dir}/power-before.txt"
 
-# Build and install the ordinary debug application first so API 33+ permission
-# can be granted to the real package before the seed test performs scheduling.
+# Build the ordinary debug application once and prove a fresh package state.
+# The seed integration test is then the only first installation, avoiding an
+# immediate redundant reinstall while still exercising the real application.
 # The workflow-only debug manifest supplies VM-service transport; no release
 # manifest or production permission is changed.
 timeout --signal=TERM --kill-after=30s 12m \
@@ -334,38 +335,25 @@ if (( package_query_status != 0 )) ||
   echo 'Package Manager could not prove that the app package is absent.' >&2
   exit 1
 fi
-install_apk_logged initial-install -t "${build_apk}"
-
 bounded_adb shell getprop ro.build.version.sdk \
   > "${evidence_dir}/device-api-level.txt"
 observed_api="$(tr -d '\r[:space:]' < "${evidence_dir}/device-api-level.txt")"
 [[ "${observed_api}" == "${api_level}" ]]
 if (( api_level >= 33 )); then
-  bounded_adb shell pm revoke "${package_name}" \
-    android.permission.POST_NOTIFICATIONS \
-    > "${evidence_dir}/notification-permission-initial-state.log" 2>&1
   printf '%s\n' \
-    "{\"apiLevel\":${api_level},\"status\":\"pending\",\"runtimePermissionApplicable\":true,\"grantPerformedByCi\":false,\"appPromptExpected\":true,\"appPromptInvokedByAcceptanceTest\":false,\"dialogHandledThroughSystemUi\":false}" \
+    "{\"apiLevel\":${api_level},\"status\":\"pending\",\"packageAbsentBeforeSeed\":true,\"runtimePermissionApplicable\":true,\"initialPermissionDeniedByAcceptanceTest\":false,\"grantPerformedByCi\":false,\"appPromptExpected\":true,\"appPromptInvokedByAcceptanceTest\":false,\"dialogHandledThroughSystemUi\":false}" \
     > "${evidence_dir}/permission-policy.json"
 else
   printf '%s\n' \
-    "{\"apiLevel\":${api_level},\"status\":\"completed\",\"runtimePermissionApplicable\":false,\"grantPerformedByCi\":false,\"appPromptExpected\":false,\"appPromptInvokedByAcceptanceTest\":false,\"dialogHandledThroughSystemUi\":false}" \
+    "{\"apiLevel\":${api_level},\"status\":\"completed\",\"packageAbsentBeforeSeed\":true,\"runtimePermissionApplicable\":false,\"initialPermissionDeniedByAcceptanceTest\":null,\"grantPerformedByCi\":false,\"appPromptExpected\":false,\"appPromptInvokedByAcceptanceTest\":false,\"dialogHandledThroughSystemUi\":false}" \
     > "${evidence_dir}/permission-policy.json"
 fi
-bounded_adb shell dumpsys package "${package_name}" \
-  > "${evidence_dir}/package-initial.txt"
-if (( api_level >= 33 )); then
-  grep -Eq 'android.permission.POST_NOTIFICATIONS: granted=false' \
-    "${evidence_dir}/package-initial.txt"
-fi
-bounded_adb shell cmd appops get "${package_name}" POST_NOTIFICATION \
-  > "${evidence_dir}/notification-appop.txt" 2>&1 || true
 jq -e . "${evidence_dir}/permission-policy.json" >/dev/null
 
 run_seed_with_permission_contract
 if (( api_level >= 33 )); then
   printf '%s\n' \
-    "{\"apiLevel\":${api_level},\"status\":\"completed\",\"runtimePermissionApplicable\":true,\"grantPerformedByCi\":false,\"appPromptExpected\":true,\"appPromptInvokedByAcceptanceTest\":true,\"dialogHandledThroughSystemUi\":true}" \
+    "{\"apiLevel\":${api_level},\"status\":\"completed\",\"packageAbsentBeforeSeed\":true,\"runtimePermissionApplicable\":true,\"initialPermissionDeniedByAcceptanceTest\":true,\"grantPerformedByCi\":false,\"appPromptExpected\":true,\"appPromptInvokedByAcceptanceTest\":true,\"dialogHandledThroughSystemUi\":true}" \
     > "${evidence_dir}/permission-policy.json"
 fi
 bounded_adb shell dumpsys package "${package_name}" \
