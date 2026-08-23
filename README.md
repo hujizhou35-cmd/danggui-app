@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img alt="状态：v1.0.0 首发准备" src="https://img.shields.io/badge/状态-v1.0.0%20首发准备-B5684C?style=flat-square" />
+  <img alt="状态：v1.0.0 公开预发布" src="https://img.shields.io/badge/状态-v1.0.0%20公开预发布-B5684C?style=flat-square" />
   <img alt="平台：Android 与 iOS 源码" src="https://img.shields.io/badge/平台-Android%20%7C%20iOS%20源码-6F8068?style=flat-square" />
   <img alt="隐私：离线优先" src="https://img.shields.io/badge/隐私-离线优先-81786F?style=flat-square" />
   <img alt="语言：中英日俄" src="https://img.shields.io/badge/语言-中%20%7C%20英%20%7C%20日%20%7C%20俄-D8CEC1?style=flat-square&labelColor=81786F" />
@@ -22,7 +22,7 @@
 </p>
 
 > [!IMPORTANT]
-> 当归已进入 v1.0.0 首发准备阶段。Android 安装包只有在签名、权限、校验和及发布门禁全部通过后才会上传；若 Releases 页面尚无 v1.0.0，当前交付仍是源码，不应把 CI 调试包视为正式安装包。iOS 本次只交付完整源码和无签名构建证据，不提供 IPA 或 TestFlight。
+> 当归 [v1.0.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0) 已公开为 **Pre-release（预发布版）**。Android 提供正式签名的安装包；iOS 只提供完整源码和无签名构建证据，不提供 IPA 或 TestFlight。本版本尚未完成实体机发布验收，请勿视为稳定版。
 
 ## 为什么是当归
 
@@ -44,12 +44,18 @@
 
 ## 下载与构建
 
-| 平台 | v1.0.0 首发交付 | 获取方式 |
+| 平台 | v1.0.0 预发布交付 | 获取方式 |
 | --- | --- | --- |
-| Android | 正式签名通用 APK、分架构 APK、AAB | 发布门禁通过后上传到 [GitHub Releases](https://github.com/hujizhou35-cmd/danggui-app/releases) |
+| Android | 正式签名通用 APK、分架构 APK、AAB | 从 [v1.0.0 预发布页](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0) 下载 |
 | iOS | 完整源码、Xcode 工程与无签名 `Runner.app` 构建证据 | 按[平台构建文档](docs/architecture/platform-delivery.md)自行编译；本次不提供 IPA/TestFlight |
 
-正式 Android Release 会同时公布 `SHA256SUMS` 和签名证书 SHA-256 指纹。推荐普通用户下载文件名带 `universal-release.apk` 的通用包；分架构 APK 面向了解设备 ABI 的用户，AAB 面向应用商店或受控分发。请只信任本仓库 Release 中文件名带 `release`、且签名和校验均通过的包。完整交付边界与验证步骤见 [平台、签名与交付架构](docs/architecture/platform-delivery.md)；当前发布状态见 [v1.0.0 发布检查表](docs/release/v1.0.0-release-checklist.md)。
+普通 Android 用户请下载 `danggui-android-universal-release.apk`；分架构 APK 面向了解设备 ABI 的用户，AAB 面向应用商店或受控分发。预发布页同时提供 `SHA256SUMS` 和签名证书 SHA-256 指纹，安装前应核对二者。完整交付边界与验证步骤见[平台、签名与交付架构](docs/architecture/platform-delivery.md)；当前发布状态见 [v1.0.0 发布检查表](docs/release/v1.0.0-release-checklist.md)。
+
+## 预发布验收状态
+
+自动验收已在 Android API 24 与 API 36 上完成同版本、同签名覆盖安装，验证六个数据域共 37 项数据保留断言、SQLite `quick_check` 与外键完整性、AlarmManager 调度、真实系统通知，以及 API 36 的真实通知权限流程。
+
+实体 Android 设备上的不同 OEM 行为、锁屏通知、声音、振动与稍后提醒（snooze），以及旧数据库 schema 的升级迁移仍未完成发布验收。因此 v1.0.0 保持 Pre-release，不是稳定版。
 
 ## 隐私承诺
 

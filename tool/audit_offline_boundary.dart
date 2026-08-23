@@ -842,6 +842,7 @@ final class _Audit {
       'flutter test --reporter expanded',
       'bash tool/verify_android_artifacts.sh --self-test',
       'bash integration_test/run_android_emulator_smoke_self_test.sh',
+      'bash integration_test/android_emulator_infrastructure_self_test.sh',
       'bash tool/verify_android_artifacts.sh',
       'bash tool/build_ios_unsigned.sh',
     ]) {
@@ -861,6 +862,48 @@ final class _Audit {
         smoke,
         'bash integration_test/run_android_release_acceptance.sh',
         'successful device smoke must continue into release acceptance',
+      );
+      _expectContains(
+        smokePath,
+        smoke,
+        r'${ANDROID_SERIAL:-emulator-5554}',
+        'emulator smoke must honor the action-selected device serial',
+      );
+      final healthGateIndex = smoke.indexOf(
+        '\ndanggui_run_system_component_health_gate\n',
+      );
+      final firstFlutterTestIndex = smoke.indexOf(
+        '\nrun_flutter_test first-attempt\n',
+      );
+      _expect(
+        healthGateIndex >= 0 && firstFlutterTestIndex > healthGateIndex,
+        'system-component health is established before any Flutter device run',
+        '$smokePath must run the health gate before its first Flutter build, '
+            'install, or launch',
+      );
+      _expectContains(
+        smokePath,
+        smoke,
+        'bounded_diagnostic_adb()',
+        'smoke failure diagnostics use a bounded ADB helper',
+      );
+      final diagnosticStart = smoke.indexOf('capture_smoke_failure_evidence()');
+      final diagnosticEnd = smoke.indexOf(
+        '\nrun_flutter_test()',
+        diagnosticStart < 0 ? 0 : diagnosticStart,
+      );
+      final diagnosticBlock =
+          diagnosticStart >= 0 && diagnosticEnd > diagnosticStart
+          ? smoke.substring(diagnosticStart, diagnosticEnd)
+          : '';
+      _expect(
+        diagnosticBlock.isNotEmpty &&
+            !RegExp(
+              r'^\s*adb(\s|$)',
+              multiLine: true,
+            ).hasMatch(diagnosticBlock),
+        'every post-preflight ADB diagnostic is independently bounded',
+        '$smokePath must not let an unbounded diagnostic mask exit status 75',
       );
     }
 
@@ -885,7 +928,256 @@ final class _Audit {
         r'\"packageAbsentBeforeSeed\":true',
         'release evidence records the fresh-package boundary before seed',
       );
+      _expect(
+        !RegExp(
+              r'^danggui_run_system_component_health_gate\s*$',
+              multiLine: true,
+            ).hasMatch(acceptance) &&
+            acceptance.contains('system-component-health.json') &&
+            acceptance.contains('.stableSamples == 2'),
+        'release acceptance validates the smoke preflight for this attempt',
+        '$acceptancePath must validate, not rerun or repair, the health gate',
+      );
+      _expectContains(
+        acceptancePath,
+        acceptance,
+        'danggui_classify_permission_flow_anr',
+        'permission-flow ANR classification must use the strict context gate',
+      );
+      for (final processContract in <String>[
+        'setsid bash -c',
+        'timeout --foreground',
+        'danggui_terminate_process_group',
+        'danggui_wait_for_seed_product_failure',
+        'seed-natural-completion.json',
+        'seed-log-quiescence.json',
+        r'${ANDROID_SERIAL:-emulator-5554}',
+      ]) {
+        _expectContains(
+          acceptancePath,
+          acceptance,
+          processContract,
+          'permission seed must be isolated and fully quiesced before retry',
+        );
+      }
+      _expect(
+        !acceptance.contains('aerr_close') && !acceptance.contains('aerr_wait'),
+        'permission dialog tapper cannot target Android ANR actions',
+        '$acceptancePath must delegate ANR recognition to the non-interactive '
+            'classifier',
+      );
+      _expect(
+        !RegExp(
+          r'pm\s+grant\s+[^\r\n]*POST_NOTIFICATIONS',
+          caseSensitive: false,
+        ).hasMatch(acceptance),
+        'release acceptance never pre-grants POST_NOTIFICATIONS',
+        '$acceptancePath must observe and handle the real app-initiated dialog',
+      );
     }
+
+    const infrastructurePath =
+        'integration_test/android_emulator_infrastructure.sh';
+    final infrastructure = _requiredText(infrastructurePath);
+    if (infrastructure != null) {
+      for (final contract in <String>[
+        '(( api_level >= 33 ))',
+        'stableSamples: 2',
+        'android.intent.action.MANAGE_PERMISSIONS',
+        'permissionPolicyPending: true',
+        'dialogTapAbsent: true',
+        'seedProcessAlive: true',
+        r'appAbsentBeforeHealth: $appAbsentBeforeHealth',
+        "'bounded-ui-observation-exhausted'",
+        r'observationPolls: $observationPolls',
+        'allCommandsSucceeded: true',
+        'shell cmd statusbar expand-settings',
+        'ordinaryProductFailure: false',
+      ]) {
+        _expectContains(
+          infrastructurePath,
+          infrastructure,
+          contract,
+          'SystemUI retry evidence must retain its strict context contract',
+        );
+      }
+      _expect(
+        !infrastructure.contains('shell input tap'),
+        'SystemUI health and ANR classifier never taps a dialog',
+        '$infrastructurePath may identify aerr_close/aerr_wait but must never '
+            'tap either action',
+      );
+      _expect(
+        !RegExp(
+          r'pm\s+grant\s+[^\r\n]*POST_NOTIFICATIONS',
+          caseSensitive: false,
+        ).hasMatch(infrastructure),
+        'SystemUI health gate never pre-grants POST_NOTIFICATIONS',
+        '$infrastructurePath must leave notification permission untouched',
+      );
+      final observationLoop = infrastructure.indexOf(
+        'for (( poll = 1; poll <= max_polls; poll += 1 )); do',
+      );
+      final repeatedSystemUiExpansion = infrastructure.indexOf(
+        'shell cmd statusbar expand-settings',
+        observationLoop < 0 ? 0 : observationLoop,
+      );
+      final observationDump = infrastructure.indexOf(
+        'shell uiautomator dump',
+        observationLoop < 0 ? 0 : observationLoop,
+      );
+      _expect(
+        infrastructure.contains('local max_polls=10') &&
+            observationLoop >= 0 &&
+            repeatedSystemUiExpansion > observationLoop &&
+            observationDump > repeatedSystemUiExpansion,
+        'each bounded SystemUI observation reissues expansion before its dump',
+        '$infrastructurePath must retry exactly ten expand/dump observations',
+      );
+    }
+
+    const retryGatePath = 'integration_test/android_emulator_retry_gate.sh';
+    final retryGate = _requiredText(retryGatePath);
+    if (retryGate != null) {
+      for (final contract in <String>[
+        '(( api_level < 33 ))',
+        '.attempt == 1',
+        '.ordinaryProductFailure == false',
+        r'.status == "passed"',
+        r'.phase == "release-acceptance-complete"',
+        r'.exitStatus == 0',
+        'seed-process-group-termination.json',
+        'seed-log-quiescence.json',
+        'expected_completion_partial',
+        'leaderExitStatus == 143',
+        'terminationSignalSent == "TERM"',
+        'leaderExitStatus == 137',
+        'terminationSignalSent == "KILL"',
+        '.reason == "bounded-ui-observation-exhausted"',
+        '.component == "system-ui"',
+        '.appAbsentBeforeHealth == true',
+        '.observationPolls == 10',
+        '.allCommandsSucceeded == true',
+        ".evidenceFile // empty",
+        'Primary classification does not reference safe existing evidence.',
+        'Primary ANR classification evidence is empty.',
+      ]) {
+        _expectContains(
+          retryGatePath,
+          retryGate,
+          contract,
+          'fresh-AVD orchestrator must fail closed on its evidence contract',
+        );
+      }
+    }
+
+    const pinnedEmulatorAction =
+        'reactivecircus/android-emulator-runner@'
+        'a421e43855164a8197daf9d8d40fe71c6996bb0d';
+    _expect(
+      pinnedEmulatorAction.allMatches(workflow).length == 2,
+      'CI has exactly two identically pinned emulator action invocations',
+      '$workflowPath must contain one primary and at most one fresh-AVD retry',
+    );
+    for (final contract in <String>[
+      r'avd-name: danggui-api-${{ matrix.api-level }}-attempt-1',
+      r'avd-name: danggui-api-${{ matrix.api-level }}-attempt-2',
+      'emulator-port: 5554',
+      'emulator-port: 5556',
+      'id: emulator-primary',
+      'id: emulator-retry',
+      'bash integration_test/android_emulator_retry_gate.sh enforce',
+    ]) {
+      _expectContains(
+        workflowPath,
+        workflow,
+        contract,
+        'CI must preserve the bounded two-AVD orchestration contract',
+      );
+    }
+    _expect(
+      'force-avd-creation: true'.allMatches(workflow).length == 2,
+      'both emulator attempts force unique fresh AVD creation',
+      '$workflowPath must force exactly the primary and sole retry AVD',
+    );
+    _expect(
+      'continue-on-error: true'.allMatches(workflow).length == 1,
+      'only the primary emulator action suppresses its immediate step result',
+      '$workflowPath must defer exactly the primary result to the final gate',
+    );
+    final primaryStepStart = workflow.indexOf('id: emulator-primary');
+    final primaryStepEnd = workflow.indexOf(
+      '- name: Classify primary emulator failure',
+      primaryStepStart < 0 ? 0 : primaryStepStart,
+    );
+    final primaryStep =
+        primaryStepStart >= 0 && primaryStepEnd > primaryStepStart
+        ? workflow.substring(primaryStepStart, primaryStepEnd)
+        : '';
+    _expect(
+      primaryStep.contains('continue-on-error: true'),
+      'primary emulator action delegates its result to the final gate',
+      'The emulator-primary step must use continue-on-error exactly once',
+    );
+    final retryStepStart = workflow.indexOf('id: emulator-retry');
+    final retryStepEnd = workflow.indexOf(
+      '- name: Enforce emulator acceptance result',
+      retryStepStart < 0 ? 0 : retryStepStart,
+    );
+    final retryStep = retryStepStart >= 0 && retryStepEnd > retryStepStart
+        ? workflow.substring(retryStepStart, retryStepEnd)
+        : '';
+    _expect(
+      retryStep.isNotEmpty && !retryStep.contains('continue-on-error'),
+      'sole fresh-AVD retry cannot suppress its own failure',
+      'The emulator-retry step must fail normally and be checked by the final '
+          'always gate',
+    );
+    _expectContains(
+      workflowPath,
+      workflow,
+      "steps.fresh-avd-retry.outputs.retry-authorized == 'true'",
+      'fresh AVD runs only after the strict classifier authorizes it',
+    );
+    final finalGateStart = workflow.indexOf(
+      '- name: Enforce emulator acceptance result',
+    );
+    final uploadStart = workflow.indexOf(
+      '- name: Upload emulator acceptance evidence',
+      finalGateStart < 0 ? 0 : finalGateStart,
+    );
+    final finalGate = finalGateStart >= 0 && uploadStart > finalGateStart
+        ? workflow.substring(finalGateStart, uploadStart)
+        : '';
+    _expect(
+      finalGate.contains('if: always()') &&
+          finalGate.contains(
+            'bash integration_test/android_emulator_retry_gate.sh enforce',
+          ),
+      'final always gate restores the required-check conclusion',
+      'The emulator job must enforce primary/retry outcomes even after failure',
+    );
+    final uploadBlock = uploadStart >= 0
+        ? workflow.substring(
+            uploadStart,
+            workflow.indexOf('\n  ios-unsigned:', uploadStart) > uploadStart
+                ? workflow.indexOf('\n  ios-unsigned:', uploadStart)
+                : workflow.length,
+          )
+        : '';
+    _expect(
+      uploadBlock.contains('if: always()'),
+      'emulator evidence uploads after every orchestrator outcome',
+      'The acceptance artifact step must remain guarded by always()',
+    );
+    _expect(
+      !RegExp(
+        r'pm\s+grant\s+[^\r\n]*POST_NOTIFICATIONS',
+        caseSensitive: false,
+      ).hasMatch(workflow),
+      'CI never bypasses the real POST_NOTIFICATIONS dialog',
+      '$workflowPath must not pre-grant notification permission',
+    );
 
     for (final splitContract in <String>[
       '[armeabi-v7a]=1001',

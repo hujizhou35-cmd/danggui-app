@@ -14,7 +14,7 @@
 </p>
 
 > [!IMPORTANT]
-> 当归は v1.0.0 の初回リリース準備段階です。Android パッケージは、署名・権限・チェックサム・すべてのリリースゲートに合格した後にのみ公開します。Releases ページに v1.0.0 がまだない場合、現在の提供物はソースコードであり、CI のデバッグ版は公式リリースではありません。iOS は完全なソースと未署名ビルドの証跡のみで、IPA/TestFlight は提供しません。
+> 当归 [v1.0.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0) は **Pre-release（公開プレリリース）**として公開されています。Android では正式署名済みインストールパッケージを提供します。iOS は完全なソースと未署名ビルドの証跡のみで、IPA/TestFlight は提供しません。実機でのリリース受け入れ試験は未完了のため、安定版ではありません。
 
 ## 静かでローカルファーストな記録アプリ
 
@@ -36,9 +36,15 @@
 
 | プラットフォーム | 提供内容 |
 | --- | --- |
-| Android | 全リリースゲート合格後、[GitHub Releases](https://github.com/hujizhou35-cmd/danggui-app/releases) に署名済みの汎用/ABI 別 APK と AAB を公開 |
+| Android | [v1.0.0 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0) から、正式署名済みの汎用/ABI 別 APK と AAB を提供 |
 | iOS | 完全なソース、Xcode プロジェクト、および未署名 `Runner.app` のビルド証跡。v1.0.0 では IPA/TestFlight を提供しない |
 
-公式 Android リリースには `SHA256SUMS` と署名証明書の SHA-256 フィンガープリントを添付します。通常はファイル名に `universal-release.apk` を含む APK を選択してください。詳細は[プラットフォーム配布ガイド](../architecture/platform-delivery.md)と [v1.0.0 リリースチェックリスト](../release/v1.0.0-release-checklist.md)をご覧ください。
+一般の Android ユーザーは `danggui-android-universal-release.apk` をダウンロードしてください。ABI 別 APK は端末の ABI が分かるユーザー向け、AAB はストアまたは管理配布向けです。Pre-release には `SHA256SUMS` と署名証明書の SHA-256 フィンガープリントも添付されているため、インストール前に両方を照合してください。詳細は[プラットフォーム配布ガイド](../architecture/platform-delivery.md)と [v1.0.0 リリースチェックリスト](../release/v1.0.0-release-checklist.md)をご覧ください。
+
+## Pre-release の受け入れ試験状況
+
+自動受け入れ試験では、Android API 24 と API 36 で同一バージョン・同一署名による上書きインストールを実行済みです。6 つのデータ領域にまたがる 37 項目の保持、SQLite の `quick_check` と外部キー整合性、AlarmManager のスケジュール、実際のシステム通知、および API 36 の実際の通知権限フローを検証しています。
+
+実機での OEM ごとの挙動、ロック画面通知、音、バイブレーション、スヌーズ、および旧データベース schema からのアップグレード移行は未検証です。そのため v1.0.0 は Pre-release のままであり、安定版ではありません。
 
 アプリはアカウントを要求せず、広告・分析・Firebase・AI・追跡 SDK を含みません。ユーザーデータはアプリのサンドボックスとユーザーが選択したローカルバックアップ先に保存され、Android は `INTERNET` 権限を要求しません。ソースコードは [Apache-2.0](../../LICENSE) で提供します。第三者ソフトウェアと同梱フォントには各ライセンスが適用されます（[THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md)）。名称、アイコン、起動画面などのブランド資産は Apache-2.0 の対象外で、権利を留保します（[ブランド説明](../../TRADEMARKS.md)）。

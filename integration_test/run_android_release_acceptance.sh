@@ -7,6 +7,12 @@ if (( $# != 1 )) || [[ ! "$1" =~ ^[0-9]+$ ]]; then
 fi
 
 readonly api_level="$1"
+readonly emulator_attempt="${DANGGUI_EMULATOR_ATTEMPT:-1}"
+if [[ ! "${emulator_attempt}" =~ ^[12]$ ]]; then
+  echo 'DANGGUI_EMULATOR_ATTEMPT must be 1 or 2.' >&2
+  exit 64
+fi
+readonly device_serial="${ANDROID_SERIAL:-emulator-5554}"
 readonly package_name='com.danggui.memo'
 readonly evidence_dir="${RUNNER_TEMP:?RUNNER_TEMP is not set}/danggui-emulator-api-${api_level}"
 readonly acceptance_define="DANGGUI_ACCEPTANCE_API_LEVEL=${api_level}"
@@ -24,6 +30,10 @@ readonly notification_before="${evidence_dir}/notification-before.txt"
 readonly notification_after="${evidence_dir}/notification-after.txt"
 readonly notification_screenshot="${evidence_dir}/notification-shade.png"
 readonly workflow_phase="${evidence_dir}/workflow-phase.json"
+readonly script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck source=integration_test/android_emulator_infrastructure.sh
+source "${script_dir}/android_emulator_infrastructure.sh"
 
 # These explicit placeholders make early, fail-closed exits diagnosable while
 # keeping the always-uploaded artifact contract stable.
@@ -34,9 +44,13 @@ printf '%s\n' 'not captured' > "${notification_after}"
 : > "${notification_screenshot}"
 printf '%s\n' '{"status":"running","phase":"release-acceptance"}' \
   > "${workflow_phase}"
+rm -f -- "${evidence_dir}/infrastructure-classification.json" \
+  "${evidence_dir}/retry-on-fresh-avd.signal" \
+  "${evidence_dir}/permission-dialog-action.json"
 
 bounded_adb() {
-  timeout --signal=TERM --kill-after=5s 45s adb -s emulator-5554 "$@"
+  timeout --signal=TERM --kill-after=5s 45s \
+    adb -s "${device_serial}" "$@"
 }
 
 capture_notification_dump() {
@@ -83,20 +97,22 @@ capture_exit_evidence() {
     bounded_adb shell wm dismiss-keyguard >/dev/null 2>&1
     bounded_adb shell cmd statusbar expand-notifications >/dev/null 2>&1
     timeout --signal=TERM --kill-after=5s 30s \
-      adb -s emulator-5554 exec-out screencap -p \
+      adb -s "${device_serial}" exec-out screencap -p \
       > "${notification_screenshot}" 2>/dev/null
   fi
   timeout --signal=TERM --kill-after=5s 30s \
-    adb -s emulator-5554 logcat -d -v threadtime \
+    adb -s "${device_serial}" logcat -d -v threadtime \
     > "${evidence_dir}/logcat-final.txt" 2>&1
   printf '%s\n' "${status}" > "${evidence_dir}/script-exit-status.txt"
   if (( status == 0 )); then
     printf '%s\n' \
-      '{"status":"passed","phase":"release-acceptance-complete","exitStatus":0}' \
+      "{\"status\":\"passed\",\"phase\":\"release-acceptance-complete\",\"attempt\":${emulator_attempt},\"exitStatus\":0}" \
       > "${workflow_phase}"
   else
+    failed_phase="$(jq -r '.phase // "release-acceptance"' \
+      "${workflow_phase}" 2>/dev/null || printf '%s' 'release-acceptance')"
     printf '%s\n' \
-      "{\"status\":\"failed\",\"phase\":\"release-acceptance\",\"exitStatus\":${status}}" \
+      "{\"status\":\"failed\",\"phase\":\"${failed_phase}\",\"attempt\":${emulator_attempt},\"exitStatus\":${status}}" \
       > "${workflow_phase}"
   fi
   exit "${status}"
@@ -109,7 +125,7 @@ run_flutter_logged() {
   local -a statuses
   set +e
   timeout --signal=TERM --kill-after=30s 12m \
-    flutter test --no-pub "${target}" -d emulator-5554 \
+    flutter test --no-pub "${target}" -d "${device_serial}" \
       --no-uninstall --reporter expanded \
       --dart-define="${acceptance_define}" 2>&1 |
     tee "${evidence_dir}/${label}.log"
@@ -129,7 +145,7 @@ start_verify_logged() {
     timeout --signal=TERM --kill-after=30s 20m \
       flutter test --no-pub \
         integration_test/release_acceptance_verify_test.dart \
-        -d emulator-5554 --no-uninstall --reporter expanded \
+        -d "${device_serial}" --no-uninstall --reporter expanded \
         --dart-define="${acceptance_define}" 2>&1 |
       tee "${evidence_dir}/verify.log"
   ) &
@@ -190,16 +206,51 @@ run_seed_with_permission_contract() {
   # API 33+ must exercise the app-initiated runtime request. The Flutter test
   # runs in the background while the host observes the real Permission
   # Controller dialog and taps its Allow button by bounds. No pm grant is used.
-  (
+  local natural_completion_path="${evidence_dir}/seed-natural-completion.json"
+  local natural_completion_partial_path
+  rm -f -- "${natural_completion_path}"
+  command -v setsid > "${evidence_dir}/setsid-path.txt"
+  setsid bash -c '
     set -o pipefail
-    timeout --signal=TERM --kill-after=30s 12m \
+    set +e
+    timeout --foreground --signal=TERM --kill-after=30s 12m \
       flutter test --no-pub \
         integration_test/release_acceptance_seed_test.dart \
-        -d emulator-5554 --no-uninstall --reporter expanded \
-        --dart-define="${acceptance_define}" 2>&1 |
-      tee "${evidence_dir}/seed.log"
-  ) &
+        -d "$1" --no-uninstall --reporter expanded \
+        --dart-define="$2" 2>&1 | tee "$3"
+    pipe_statuses=("${PIPESTATUS[@]}")
+    final_status="${pipe_statuses[0]}"
+    if (( final_status == 0 )); then
+      final_status="${pipe_statuses[1]}"
+    fi
+    completion_partial="${4}.partial.${BASHPID}"
+    printf "%s\n" \
+      "{\"status\":\"naturally-completed\",\"pipeStatuses\":[${pipe_statuses[0]},${pipe_statuses[1]}],\"timeoutStatus\":${pipe_statuses[0]},\"teeStatus\":${pipe_statuses[1]},\"finalStatus\":${final_status}}" \
+      > "${completion_partial}"
+    mv -- "${completion_partial}" "$4"
+    exit "${final_status}"
+  ' _ "${device_serial}" "${acceptance_define}" \
+    "${evidence_dir}/seed.log" "${natural_completion_path}" &
   local test_pid=$!
+  natural_completion_partial_path="${natural_completion_path}.partial.${test_pid}"
+  local test_pgid=''
+  local process_probe
+  for process_probe in 1 2 3 4 5; do
+    test_pgid="$(ps -o pgid= -p "${test_pid}" 2>/dev/null | tr -d '[:space:]')"
+    [[ -n "${test_pgid}" ]] && break
+    sleep 1
+  done
+  printf '%s\n' \
+    "{\"leaderPid\":${test_pid},\"processGroupId\":${test_pgid:-0},\"independent\":$([[ "${test_pgid}" == "${test_pid}" ]] && echo true || echo false)}" \
+    > "${evidence_dir}/seed-process-group.json"
+  if [[ "${test_pgid}" != "${test_pid}" ]]; then
+    kill -TERM "${test_pid}" 2>/dev/null || true
+    set +e
+    wait "${test_pid}"
+    set -e
+    echo 'Seed pipeline did not obtain an independent process group.' >&2
+    return 1
+  fi
   local dialog_handled=0
   local deadline=$(( SECONDS + 600 ))
   local dump_device_path='/sdcard/danggui-permission-dialog.xml'
@@ -207,12 +258,22 @@ run_seed_with_permission_contract() {
   local node
   local tap_x
   local tap_y
+  local infrastructure_anr=0
+  local seed_log_size_after_termination
+  local seed_log_size_after_quiet_period
+  local product_failure_status
 
   while kill -0 "${test_pid}" 2>/dev/null && (( SECONDS < deadline )); do
     if bounded_adb shell uiautomator dump "${dump_device_path}" \
          > "${evidence_dir}/permission-uiautomator.log" 2>&1 &&
        bounded_adb exec-out cat "${dump_device_path}" \
          > "${dump_host_path}" 2>/dev/null; then
+      if danggui_classify_permission_flow_anr \
+        "${dump_host_path}" 'permission-flow-system-component-anr.xml' \
+        "${test_pid}"; then
+        infrastructure_anr=1
+        break
+      fi
       node="$(
         grep -oE \
           '<node[^>]*resource-id="[^"]*permission_allow_button"[^>]*/>' \
@@ -235,6 +296,66 @@ run_seed_with_permission_contract() {
     sleep 2
   done
 
+  if (( infrastructure_anr == 1 )); then
+    # Give a naturally completing failing test a short opportunity to publish
+    # its atomic sidecar. Product/test failure always outranks coincident ANR.
+    if danggui_wait_for_seed_product_failure "${test_pid}" \
+      "${natural_completion_path}" "${evidence_dir}/seed.log" \
+      "${natural_completion_partial_path}" 3; then
+      product_failure_status="${DANGGUI_SEED_FAILURE_STATUS}"
+      danggui_revoke_retry_authorization \
+        'natural-or-delayed-product-failure'
+      if [[ "${DANGGUI_SEED_PROCESS_REAPED}" != 'true' ]]; then
+        danggui_terminate_process_group "${test_pgid}" "${test_pid}" \
+          "${evidence_dir}/seed-process-group-termination.json" || true
+      fi
+      printf '%s\n' \
+        "{\"status\":\"product-failure-precedence\",\"exitStatus\":${product_failure_status},\"retryRevoked\":true}" \
+        > "${evidence_dir}/seed-product-failure-precedence.json"
+      echo 'Product/test failure took precedence over coincident system ANR.' >&2
+      return "${product_failure_status}"
+    fi
+
+    # Stop the independent host process group (bash, timeout, flutter, tee)
+    # before authorizing another AVD. Never press either ANR action.
+    if ! danggui_terminate_process_group "${test_pgid}" "${test_pid}" \
+      "${evidence_dir}/seed-process-group-termination.json"; then
+      danggui_revoke_retry_authorization \
+        'seed-process-group-not-terminated'
+      echo 'Seed process group could not be fully terminated; retry revoked.' >&2
+      return 1
+    fi
+    seed_log_size_after_termination="$(wc -c < "${evidence_dir}/seed.log")"
+    sleep 2
+    seed_log_size_after_quiet_period="$(wc -c < "${evidence_dir}/seed.log")"
+    printf '%s\n' \
+      "{\"bytesAfterTermination\":${seed_log_size_after_termination},\"bytesAfterQuietPeriod\":${seed_log_size_after_quiet_period},\"unchanged\":$([[ "${seed_log_size_after_termination}" == "${seed_log_size_after_quiet_period}" ]] && echo true || echo false)}" \
+      > "${evidence_dir}/seed-log-quiescence.json"
+    if [[ "${seed_log_size_after_termination}" != \
+          "${seed_log_size_after_quiet_period}" ]]; then
+      danggui_revoke_retry_authorization 'seed-log-still-changing'
+      echo 'Seed log changed after process-group termination; retry revoked.' >&2
+      return 1
+    fi
+    # Close the TOCTOU window once more after the entire pipeline is gone and
+    # tee has flushed the complete log. A late natural sidecar or failure
+    # marker revokes the token and propagates an ordinary failure.
+    if danggui_probe_seed_product_failure \
+      "${natural_completion_path}" "${evidence_dir}/seed.log" \
+      "${natural_completion_partial_path}"; then
+      product_failure_status="${DANGGUI_SEED_FAILURE_STATUS}"
+      danggui_revoke_retry_authorization \
+        'post-termination-product-failure'
+      printf '%s\n' \
+        "{\"status\":\"product-failure-precedence\",\"exitStatus\":${product_failure_status},\"retryRevoked\":true,\"detectedAfterTermination\":true}" \
+        > "${evidence_dir}/seed-product-failure-precedence.json"
+      echo 'Late product/test failure revoked the fresh-AVD authorization.' >&2
+      return "${product_failure_status}"
+    fi
+    echo 'Confirmed SystemUI/PermissionController ANR; fresh AVD is required.' >&2
+    return "${DANGGUI_INFRA_RETRY_EXIT_STATUS}"
+  fi
+
   set +e
   wait "${test_pid}"
   local test_status=$?
@@ -255,7 +376,7 @@ install_apk_logged() {
   local -a statuses
   set +e
   timeout --signal=TERM --kill-after=10s 3m \
-    adb -s emulator-5554 install --no-streaming "$@" 2>&1 |
+    adb -s "${device_serial}" install --no-streaming "$@" 2>&1 |
     tee "${evidence_dir}/${label}.log"
   statuses=("${PIPESTATUS[@]}")
   set -e
@@ -296,6 +417,25 @@ bounded_adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
 bounded_adb shell svc power stayon true >/dev/null
 bounded_adb shell dumpsys power > "${evidence_dir}/power-before.txt"
 
+# The smoke wrapper must have completed the health gate before its very first
+# Flutter build/install/launch. Acceptance never reruns or repairs that gate;
+# it only validates evidence for this exact API and AVD attempt.
+if (( api_level >= 33 )); then
+  jq -e --argjson apiLevel "${api_level}" \
+    --argjson attempt "${emulator_attempt}" '
+      type == "object" and .status == "healthy" and
+      .apiLevel == $apiLevel and .attempt == $attempt and
+      .stableSamples == 2 and .postNotificationsChanged == false
+    ' "${evidence_dir}/system-component-health.json" >/dev/null
+else
+  jq -e --argjson apiLevel "${api_level}" \
+    --argjson attempt "${emulator_attempt}" '
+      type == "object" and .status == "not-applicable" and
+      .apiLevel == $apiLevel and .attempt == $attempt
+    ' "${evidence_dir}/system-component-health.json" >/dev/null
+fi
+danggui_set_acceptance_phase 'production-debug-build'
+
 # Build the ordinary debug application once and prove a fresh package state.
 # The seed integration test is then the only first installation, avoiding an
 # immediate redundant reinstall while still exercising the real application.
@@ -318,6 +458,7 @@ if (( uninstall_status != 0 )) &&
   echo 'Could not establish a fresh package state.' >&2
   exit "${uninstall_status}"
 fi
+danggui_set_acceptance_phase 'fresh-package-proof'
 bounded_adb shell pm path android \
   > "${evidence_dir}/package-manager-health.txt" 2>&1
 grep -Fq 'package:' "${evidence_dir}/package-manager-health.txt"
@@ -350,6 +491,7 @@ else
 fi
 jq -e . "${evidence_dir}/permission-policy.json" >/dev/null
 
+danggui_set_acceptance_phase 'app-notification-permission-flow'
 run_seed_with_permission_contract
 if (( api_level >= 33 )); then
   printf '%s\n' \
@@ -367,6 +509,7 @@ bounded_adb shell cmd appops get "${package_name}" POST_NOTIFICATION \
 jq -e '.status == "completed"' \
   "${evidence_dir}/permission-policy.json" >/dev/null
 extract_app_evidence before.json "${before_json}"
+danggui_set_acceptance_phase 'same-signature-overlay-and-retention'
 jq -e \
   --argjson api "${api_level}" \
   '.phase == "before-overlay-install" and .apiLevel == $api and
@@ -523,7 +666,8 @@ if ! bounded_adb shell cmd statusbar expand-notifications \
 fi
 sleep 2
 timeout --signal=TERM --kill-after=5s 30s \
-  adb -s emulator-5554 exec-out screencap -p > "${notification_screenshot}"
+  adb -s "${device_serial}" exec-out screencap -p \
+    > "${notification_screenshot}"
 [[ -s "${notification_screenshot}" ]]
 png_signature="$(od -An -t x1 -N8 "${notification_screenshot}" | tr -d ' \r\n')"
 [[ "${png_signature}" == '89504e470d0a1a0a' ]]

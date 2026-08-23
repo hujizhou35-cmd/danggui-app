@@ -36,6 +36,7 @@
 
 ## GitHub Social Preview
 
+- 仓库设置中的 Social Preview **尚未上传**；下列内容是待执行规范，不得写成已完成。
 - 对外上传文件：`docs/assets/brand/danggui-social-preview.jpg`，1280×640，必须小于 1 MB；同目录 PNG 保留为高分辨率母版。
 - 背景：暖纸色，可保留轻微纸张纹理但不影响文字。
 - 左侧：小当归图标，主体不被裁切，约占画面高度 52%。
@@ -45,7 +46,7 @@
 
 ## Release 传播模板
 
-v1.0.0 当前对外状态统一写作“首发准备”或“release candidate”。在正式 GitHub Release 页面、签名 APK 和 `SHA256SUMS` 均存在前，不写“已发布”“立即下载”，也不使用某个尚未创建的标签 URL。CI Artifact、`debug-fallback` 包和 unsigned iOS `.app.zip` 均不能作为正式安装包传播。
+v1.0.0 当前对外状态统一写作“公开预发布”或“Pre-release”，不得写成“稳定版”“正式稳定发布”或笼统的“已全面验收”。官方页面为 [v1.0.0 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0)，对应提交 `b6dc50594abdb769080a738dd64550d26bc64d36`，标签工作流 [32609272408](https://github.com/hujizhou35-cmd/danggui-app/actions/runs/32609272408) 四个作业全部成功。Android 附件为正式 release 签名；公开页面的 16 个附件均已从下载端复算 SHA-256。CI Artifact、`debug-fallback` 包和 unsigned iOS `.app.zip` 均不能作为 Android 正式安装包传播。
 
 标题：`当归 v{version} · Android`
 
@@ -57,7 +58,9 @@ v1.0.0 当前对外状态统一写作“首发准备”或“release candidate�
 4. SHA-256 文件和签名指纹的验证入口。
 5. 升级前备份提醒与已知限制。
 
-首次正式发布前不生成“立即下载”海报，避免传播不存在或未验收的安装包。发布后，下载按钮只指向本仓库 `/releases/latest`，不把容易过期的单个附件 URL 写入海报。
+当前可以分享上述固定标签 Pre-release 页面，并明确推荐 Android 用户下载 `danggui-android-universal-release.apk`。在代表性实体机完成 OEM、锁屏、声音、振动及 10/30/60 分钟稍后提醒验收并签署前，不生成“稳定版”或“立即下载”海报。`/releases/latest` 不用于当前预发布传播；未来转为稳定版后，下载按钮才可指向该入口。不要把容易过期的单个附件 URL 写入海报。
+
+模拟器证据的准确表述是：API 24/36 完成 37/37 项六域数据与系统链路验收，覆盖 SQLite 完整性、事项卡提醒文案、AlarmManager、真实系统通知和 API 36 真实权限弹窗。不得将其扩写为已完成旧 schema 迁移或代表性实体机验收。
 
 ## 使用边界
 
