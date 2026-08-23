@@ -664,10 +664,17 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
       return;
     }
     if (!mounted) return;
+    await _closeRouteAfterPopBarrier();
+  }
+
+  Future<void> _closeRouteAfterPopBarrier() async {
+    if (!mounted) return;
+    final editorRoute = ModalRoute.of(context);
     setState(() => _allowPop = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.pop();
-    });
+    await waitForEditorRoutePopBarrier();
+    if (mounted && (editorRoute == null || editorRoute.isCurrent)) {
+      context.pop();
+    }
   }
 
   DateTime _now() => widget.now?.call() ?? DateTime.now();
@@ -718,10 +725,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
         _autosaveTimer?.cancel();
         _pendingDraft = null;
         await ref.read(appStoreProvider.notifier).deleteTask(task.id);
-        if (mounted) {
-          setState(() => _allowPop = true);
-          context.pop();
-        }
+        await _closeRouteAfterPopBarrier();
     }
   }
 }

@@ -82,7 +82,8 @@ void main() {
       );
 
       await tester.tap(find.byIcon(Icons.arrow_back_rounded).hitTestable());
-      await _waitForFinder(tester, find.byType(TasksPage));
+      await _waitForAbsence(tester, find.byType(TaskDetailPage));
+      expect(find.byType(TasksPage).hitTestable(), findsOneWidget);
       final persisted = _task(container, taskId);
       expect(persisted.title, '重进仍保留的事项');
       expect(persisted.body, '可编辑的事项内容');
@@ -129,7 +130,8 @@ void main() {
       );
 
       await tester.tap(find.byKey(const Key('note-editor-back')));
-      await _waitForFinder(tester, find.byType(NotesPage));
+      await _waitForAbsence(tester, find.byType(NoteEditorPage));
+      expect(find.byType(NotesPage).hitTestable(), findsOneWidget);
       final persisted = _note(container, noteId);
       expect(persisted.title, '重进仍保留的笔记');
       expect(persisted.body, '现在可以正常编辑');
@@ -261,6 +263,20 @@ Future<void> _waitForFinder(WidgetTester tester, Finder finder) async {
     await tester.pump(const Duration(milliseconds: 100));
   }
   expect(finder, findsOneWidget);
+}
+
+Future<void> _waitForAbsence(WidgetTester tester, Finder finder) async {
+  for (
+    var attempt = 0;
+    attempt < 40 && finder.evaluate().isNotEmpty;
+    attempt++
+  ) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+  expect(finder, findsNothing);
 }
 
 Future<void> _waitForPastText(

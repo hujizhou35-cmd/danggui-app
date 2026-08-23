@@ -377,10 +377,17 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       return;
     }
     if (!mounted) return;
+    await _closeRouteAfterPopBarrier();
+  }
+
+  Future<void> _closeRouteAfterPopBarrier() async {
+    if (!mounted) return;
+    final editorRoute = ModalRoute.of(context);
     setState(() => _allowPop = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.pop();
-    });
+    await waitForEditorRoutePopBarrier();
+    if (mounted && (editorRoute == null || editorRoute.isCurrent)) {
+      context.pop();
+    }
   }
 
   void _insertPrefix(String prefix) {
@@ -476,10 +483,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
         _autosaveTimer?.cancel();
         _pendingDraft = null;
         await ref.read(appStoreProvider.notifier).deleteNote(note.id);
-        if (mounted) {
-          setState(() => _allowPop = true);
-          context.pop();
-        }
+        await _closeRouteAfterPopBarrier();
     }
   }
 }

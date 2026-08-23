@@ -145,10 +145,10 @@ Future<void> _exerciseProductionEditors(WidgetTester tester) async {
     phase: 'task editor after IME dismissal',
   );
   await _tapEditorBack(tester, phase: 'task editor save and close');
-  await _waitFor(
+  await _waitForCondition(
     tester,
-    find.byType(TasksPage),
-    phase: 'task list after save',
+    () => find.byType(TaskDetailPage).evaluate().isEmpty,
+    phase: 'task detail route closing after save',
     timeout: const Duration(seconds: 15),
   );
 
@@ -169,10 +169,10 @@ Future<void> _exerciseProductionEditors(WidgetTester tester) async {
   );
   expect(_textFieldValue(tester, taskBodyField), taskBody);
   await _tapEditorBack(tester, phase: 'reopened task detail close');
-  await _waitFor(
+  await _waitForCondition(
     tester,
-    find.byType(TasksPage),
-    phase: 'task list after persistence check',
+    () => find.byType(TaskDetailPage).evaluate().isEmpty,
+    phase: 'reopened task detail route closing',
     timeout: const Duration(seconds: 12),
   );
 
@@ -215,10 +215,10 @@ Future<void> _exerciseProductionEditors(WidgetTester tester) async {
     phase: 'note editor after IME dismissal',
   );
   await _tapEditorBack(tester, phase: 'note editor save and close');
-  await _waitFor(
+  await _waitForCondition(
     tester,
-    find.byType(NotesPage),
-    phase: 'notes list after save',
+    () => find.byType(NoteEditorPage).evaluate().isEmpty,
+    phase: 'note editor route closing after save',
     timeout: const Duration(seconds: 15),
   );
 
@@ -240,10 +240,10 @@ Future<void> _exerciseProductionEditors(WidgetTester tester) async {
   expect(_textFieldValue(tester, noteTitleField), noteTitle);
   expect(_textFieldValue(tester, noteBodyField), noteBody);
   await _tapEditorBack(tester, phase: 'reopened note editor close');
-  await _waitFor(
+  await _waitForCondition(
     tester,
-    find.byType(NotesPage),
-    phase: 'notes list after persistence check',
+    () => find.byType(NoteEditorPage).evaluate().isEmpty,
+    phase: 'reopened note editor route closing',
     timeout: const Duration(seconds: 12),
   );
 

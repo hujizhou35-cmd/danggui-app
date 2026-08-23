@@ -1,7 +1,30 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'ime_inset_guard.dart';
 import 'paper_background.dart';
+
+/// Waits until a [PopScope.canPop] change has crossed a rendered-frame
+/// boundary before an editor asks its Navigator to pop.
+///
+/// Editor saves finish asynchronously and can resume during the current
+/// frame's post-frame phase. A single post-frame callback may therefore run
+/// before the updated `canPop` value has been built, causing the Navigator to
+/// reject the pop with the stale value. Two bounded frame callbacks guarantee
+/// that at least one build has applied the permission change.
+Future<void> waitForEditorRoutePopBarrier() {
+  final binding = WidgetsBinding.instance;
+  final completer = Completer<void>();
+  binding.addPostFrameCallback((_) {
+    binding.addPostFrameCallback((_) {
+      if (!completer.isCompleted) completer.complete();
+    });
+    binding.scheduleFrame();
+  });
+  binding.scheduleFrame();
+  return completer.future;
+}
 
 /// Shared, single-inset layout for full-page and shell-hosted editors.
 ///
