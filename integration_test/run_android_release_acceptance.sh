@@ -1,64 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-notification_permission_is_declared_and_not_granted() {
-  local package_dump="$1"
-  grep -Eq \
-    '^[[:space:]]*android\.permission\.POST_NOTIFICATIONS[[:space:]]*$' \
-    "${package_dump}" &&
-    ! grep -Eq \
-      'android\.permission\.POST_NOTIFICATIONS:[[:space:]]*granted=true' \
-      "${package_dump}"
-}
-
-run_notification_permission_parser_self_test() {
-  local fixture
-  permission_parser_fixture="$(mktemp)"
-  fixture="${permission_parser_fixture}"
-  trap 'rm -f -- "${permission_parser_fixture}"' EXIT
-
-  printf '%s\n' \
-    'requested permissions:' \
-    '  android.permission.POST_NOTIFICATIONS' \
-    'runtime permissions:' > "${fixture}"
-  notification_permission_is_declared_and_not_granted "${fixture}"
-
-  printf '%s\n' \
-    'requested permissions:' \
-    '  android.permission.POST_NOTIFICATIONS' \
-    'runtime permissions:' \
-    '  android.permission.POST_NOTIFICATIONS: granted=false, flags=[]' \
-    > "${fixture}"
-  notification_permission_is_declared_and_not_granted "${fixture}"
-
-  printf '%s\n' \
-    'requested permissions:' \
-    '  android.permission.POST_NOTIFICATIONS' \
-    'runtime permissions:' \
-    '  android.permission.POST_NOTIFICATIONS: granted=true, flags=[]' \
-    > "${fixture}"
-  if notification_permission_is_declared_and_not_granted "${fixture}"; then
-    echo 'Permission parser accepted an explicitly granted permission.' >&2
-    return 1
-  fi
-
-  printf '%s\n' \
-    'requested permissions:' \
-    'runtime permissions:' > "${fixture}"
-  if notification_permission_is_declared_and_not_granted "${fixture}"; then
-    echo 'Permission parser accepted a package without the declaration.' >&2
-    return 1
-  fi
-
-  echo 'Android initial notification permission parser self-test passed.'
-}
-
-if [[ "${1:-}" == '--self-test-permission-parser' ]]; then
-  (( $# == 1 )) || exit 64
-  run_notification_permission_parser_self_test
-  exit 0
-fi
-
 if (( $# != 1 )) || [[ ! "$1" =~ ^[0-9]+$ ]]; then
   echo "Usage: $0 <api-level>" >&2
   exit 64
@@ -354,8 +296,9 @@ bounded_adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
 bounded_adb shell svc power stayon true >/dev/null
 bounded_adb shell dumpsys power > "${evidence_dir}/power-before.txt"
 
-# Build and install the ordinary debug application first so API 33+ permission
-# can be granted to the real package before the seed test performs scheduling.
+# Build the ordinary debug application once and prove a fresh package state.
+# The seed integration test is then the only first installation, avoiding an
+# immediate redundant reinstall while still exercising the real application.
 # The workflow-only debug manifest supplies VM-service transport; no release
 # manifest or production permission is changed.
 timeout --signal=TERM --kill-after=30s 12m \
@@ -392,41 +335,25 @@ if (( package_query_status != 0 )) ||
   echo 'Package Manager could not prove that the app package is absent.' >&2
   exit 1
 fi
-install_apk_logged initial-install -t "${build_apk}"
-
 bounded_adb shell getprop ro.build.version.sdk \
   > "${evidence_dir}/device-api-level.txt"
 observed_api="$(tr -d '\r[:space:]' < "${evidence_dir}/device-api-level.txt")"
 [[ "${observed_api}" == "${api_level}" ]]
 if (( api_level >= 33 )); then
-  bounded_adb shell pm revoke "${package_name}" \
-    android.permission.POST_NOTIFICATIONS \
-    > "${evidence_dir}/notification-permission-initial-state.log" 2>&1
   printf '%s\n' \
-    "{\"apiLevel\":${api_level},\"status\":\"pending\",\"runtimePermissionApplicable\":true,\"grantPerformedByCi\":false,\"appPromptExpected\":true,\"appPromptInvokedByAcceptanceTest\":false,\"dialogHandledThroughSystemUi\":false}" \
+    "{\"apiLevel\":${api_level},\"status\":\"pending\",\"packageAbsentBeforeSeed\":true,\"runtimePermissionApplicable\":true,\"initialPermissionDeniedByAcceptanceTest\":false,\"grantPerformedByCi\":false,\"appPromptExpected\":true,\"appPromptInvokedByAcceptanceTest\":false,\"dialogHandledThroughSystemUi\":false}" \
     > "${evidence_dir}/permission-policy.json"
 else
   printf '%s\n' \
-    "{\"apiLevel\":${api_level},\"status\":\"completed\",\"runtimePermissionApplicable\":false,\"grantPerformedByCi\":false,\"appPromptExpected\":false,\"appPromptInvokedByAcceptanceTest\":false,\"dialogHandledThroughSystemUi\":false}" \
+    "{\"apiLevel\":${api_level},\"status\":\"completed\",\"packageAbsentBeforeSeed\":true,\"runtimePermissionApplicable\":false,\"initialPermissionDeniedByAcceptanceTest\":null,\"grantPerformedByCi\":false,\"appPromptExpected\":false,\"appPromptInvokedByAcceptanceTest\":false,\"dialogHandledThroughSystemUi\":false}" \
     > "${evidence_dir}/permission-policy.json"
 fi
-bounded_adb shell dumpsys package "${package_name}" \
-  > "${evidence_dir}/package-initial.txt"
-if (( api_level >= 33 )); then
-  if ! notification_permission_is_declared_and_not_granted \
-    "${evidence_dir}/package-initial.txt"; then
-    echo 'POST_NOTIFICATIONS was not declared or remained explicitly granted after revoke.' >&2
-    exit 1
-  fi
-fi
-bounded_adb shell cmd appops get "${package_name}" POST_NOTIFICATION \
-  > "${evidence_dir}/notification-appop.txt" 2>&1 || true
 jq -e . "${evidence_dir}/permission-policy.json" >/dev/null
 
 run_seed_with_permission_contract
 if (( api_level >= 33 )); then
   printf '%s\n' \
-    "{\"apiLevel\":${api_level},\"status\":\"completed\",\"runtimePermissionApplicable\":true,\"grantPerformedByCi\":false,\"appPromptExpected\":true,\"appPromptInvokedByAcceptanceTest\":true,\"dialogHandledThroughSystemUi\":true}" \
+    "{\"apiLevel\":${api_level},\"status\":\"completed\",\"packageAbsentBeforeSeed\":true,\"runtimePermissionApplicable\":true,\"initialPermissionDeniedByAcceptanceTest\":true,\"grantPerformedByCi\":false,\"appPromptExpected\":true,\"appPromptInvokedByAcceptanceTest\":true,\"dialogHandledThroughSystemUi\":true}" \
     > "${evidence_dir}/permission-policy.json"
 fi
 bounded_adb shell dumpsys package "${package_name}" \

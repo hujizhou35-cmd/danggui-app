@@ -842,8 +842,6 @@ final class _Audit {
       'flutter test --reporter expanded',
       'bash tool/verify_android_artifacts.sh --self-test',
       'bash integration_test/run_android_emulator_smoke_self_test.sh',
-      'bash integration_test/run_android_release_acceptance.sh',
-      '--self-test-permission-parser',
       'bash tool/verify_android_artifacts.sh',
       'bash tool/build_ios_unsigned.sh',
     ]) {
@@ -875,6 +873,17 @@ final class _Audit {
         'release acceptance keeps seed and verify packages installed',
         '$acceptancePath must pass --no-uninstall to every seed and verify '
             'integration-test path',
+      );
+      _expect(
+        !acceptance.contains('install_apk_logged initial-install'),
+        'release acceptance seed performs the only first app installation',
+        '$acceptancePath must not preinstall immediately before Flutter seed',
+      );
+      _expectContains(
+        acceptancePath,
+        acceptance,
+        r'\"packageAbsentBeforeSeed\":true',
+        'release evidence records the fresh-package boundary before seed',
       );
     }
 
