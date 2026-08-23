@@ -3,12 +3,15 @@
 All notable changes to Danggui are documented here. The project follows
 [Semantic Versioning](https://semver.org/) for public releases.
 
-## 1.0.0 - release candidate (2026-08-22)
+## 1.0.0 - public pre-release (2026-08-23)
 
-This entry describes the v1.0.0 release candidate. It does not assert that a
-GitHub Release exists or that its final CI/signing gates have passed. The status
-is changed to a dated release only after the signed artifacts and checksums are
-published.
+The public [v1.0.0 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0)
+was built from commit `b6dc50594abdb769080a738dd64550d26bc64d36` by tag workflow
+[32609272408](https://github.com/hujizhou35-cmd/danggui-app/actions/runs/32609272408).
+All four tag jobs passed. The Android APKs and AAB use the protected release
+signing identity, and all 16 public attachments were downloaded and had their
+SHA-256 digests recomputed successfully. This remains a pre-release until the
+representative Android physical-device checklist is completed and signed.
 
 ### Added
 
@@ -49,3 +52,11 @@ published.
 - Local reminder delivery is intentionally inexact and can be delayed by OS or
   manufacturer power-management policies.
 - Danggui is intentionally single-device and has no synchronization service.
+- API 24/36 emulator acceptance passed 37/37 checks across Tasks, Reminders,
+  Notes, Folders, Past, and Settings, including SQLite integrity, reminder text
+  on the task card, AlarmManager registration, a real system notification, and
+  the real API 36 notification-permission dialog. It does not prove an old
+  schema migration or replace physical-device checks for OEM behavior,
+  lock-screen presentation, sound, vibration, or 10/30/60-minute snooze.
+- The repository Social Preview has not yet been uploaded; this does not affect
+  package integrity, but it remains an incomplete distribution task.

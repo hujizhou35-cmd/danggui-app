@@ -1,6 +1,6 @@
 # 平台、签名与交付架构
 
-> v1.0.0 当前处于首发准备状态。本页定义产物合同和硬性门禁，不代表 GitHub Release 已经存在。实时状态见 [v1.0.0 发布检查表](../release/v1.0.0-release-checklist.md)。
+> v1.0.0 已作为[公开 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0)提供，仍不是稳定版。本页定义产物合同、已取得的自动化证据和仍待完成的实体机门禁。实时状态见 [v1.0.0 发布检查表](../release/v1.0.0-release-checklist.md)。
 
 ## 平台不变量
 
@@ -117,7 +117,15 @@ CI Artifact 只用于构建审计和维护者验收，不自动等同于公开�
 
 Debug 回退包必须保留 `debug-fallback` 文件名，禁止上传应用商店或标记为正式 Release。
 
-发布时至少附加以下文件；实际 Release URL 只能在页面成功创建后写入文档：
+### v1.0.0 预发布证据
+
+版本标签 `v1.0.0` 指向提交 `b6dc50594abdb769080a738dd64550d26bc64d36`。标签工作流 [32609272408](https://github.com/hujizhou35-cmd/danggui-app/actions/runs/32609272408) 的 Android 正式构建、API 24 模拟器、API 36 模拟器和 unsigned iOS 构建四个作业全部成功；Android 作业明确使用 `release` 签名，APK 与 AAB 签名和预期证书指纹一致。公开 Pre-release 共 16 个附件，全部从下载端取回并重新计算 SHA-256 后通过。
+
+API 24/36 验收各完成 37/37 项断言，覆盖事项、提醒、笔记、文件夹、过往、设置六域数据保留、SQLite `quick_check` 与外键完整性、事项卡提醒文案、AlarmManager 注册和真实系统通知。API 36 还观察了真实系统通知权限弹窗、通过系统 UI 授权，并验证最终授权状态。iOS 作业完成 unsigned `.app` 构建与平台配置审计；该压缩包仍不可安装、不是 IPA。
+
+上述证据只支持公开 **Pre-release**。它不证明真实旧 schema 到当前 schema 的迁移，也不替代代表性 Android 实体机上的 OEM 后台策略、锁屏展示、声音、振动及 10/30/60 分钟稍后提醒验收。实体机清单未签署，GitHub Social Preview 也尚未上传，因此不得将 v1.0.0 改称稳定版。
+
+公开 Pre-release 已附加以下 Android 核心文件；真实页面为 [v1.0.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0)：
 
 - `danggui-android-universal-release.apk`
 - `danggui-android-armeabi-v7a-release.apk`

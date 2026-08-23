@@ -4,6 +4,8 @@
 
 ## API 24 / 36 模拟器自动证据
 
+v1.0.0 的可追溯证据来自标签提交 `b6dc50594abdb769080a738dd64550d26bc64d36` 和 [GitHub Actions run 32609272408](https://github.com/hujizhou35-cmd/danggui-app/actions/runs/32609272408)。该工作流的 Android 正式构建、API 24、API 36 与 unsigned iOS 四个作业全部成功。公开交付页面是 [v1.0.0 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0)；它仍不是实体机验收签署或稳定版声明。
+
 每个 API 矩阵作业一旦开始执行步骤，就会在检出源码和安装工具链之前先创建阶段哨兵；后续用 `if: always()` 上传 `danggui-emulator-api-<API>-acceptance-<SHA>`。若 GitHub 未能分配 runner 或作业被外部取消，则平台无法承诺产出 Artifact。成功门禁要求同时具备：
 
 - `before.json`、`after.json`：dataset、事项/正文/提醒/注册、笔记及文件夹、过往连续文档/事件/部件/锚点、非默认设置均逐字段一致；`PRAGMA quick_check` 为 `ok`，`foreign_key_check` 为空；事项卡实际渲染包含提醒时间与“提醒”语义。
@@ -12,7 +14,9 @@
 - `alarm-*.txt`、`alarm-contract.json`、`notification-before.txt`、`notification-after.txt`、`notification-timing.json`：数据库中只有一个提醒，证据记录其平台通知 ID 与计划时刻；覆盖后启动生产入口并执行正常协调，随后证明它存在于系统 AlarmManager，且未提前、并在设备时钟和主机单调时钟的双重硬上限内成为真实系统通知。证据不把 Alarm 的恢复来源归因于应用协调器或插件安装广播中的任一方。
 - `notification-shade.png`：展开通知栏后的系统截图；`logcat-final.txt` 和 `script-exit-status.txt` 保留最终诊断。
 
-自动化采用 debug 同签名覆盖，以便通过应用沙盒导出结构化证据。正式发布 APK 的 SHA-256 与证书仍须在下方实体机记录中逐项填写。
+API 24 与 API 36 均为 37/37 项断言通过，覆盖事项、提醒、笔记、文件夹、过往、设置六个数据域，以及 SQLite `quick_check`/外键完整性、事项卡提醒文案、AlarmManager 和真实系统通知。API 36 额外观察了真实系统权限弹窗、通过系统 UI 点击授权，并验证最终 `POST_NOTIFICATIONS` 授权状态。该精确范围不得解释为旧 schema 迁移或实体机 OEM 行为已经通过。
+
+自动化采用 debug 同签名覆盖，以便通过应用沙盒导出结构化证据。公开 Pre-release 的正式签名 Android 产物与 iOS unsigned 证据已通过下载端复核：16 个附件均重新计算 SHA-256；这不代替下方对实际用于测试的 APK 文件与证书逐项填写。
 
 Flutter 设备测试结束会强制停止应用并清除未触发的系统 Alarm；默认还会卸载应用。seed/verify 均显式使用 `--no-uninstall` 保留包与数据库，但不把 seed 结束后的 force-stop 状态或覆盖安装本身解释为闹钟已恢复。覆盖后由 verify 启动真实 `main()` 并执行正常协调流程；脚本只在此后验证 Alarm 已存在，不区分它由插件安装广播还是应用流程恢复。verify 随后保持运行并等待主机证据信号，主机在应用仍存活时完成 Alarm、通知栏、截图和 UI XML 取证，再允许测试正常退出。
 
