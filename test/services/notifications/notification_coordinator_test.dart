@@ -39,32 +39,30 @@ void main() {
     await database.close();
   });
 
-  test(
-    'reconcile schedules inexact-capable request with persisted defaults',
-    () async {
-      await database.customStatement(
-        'UPDATE app_settings SET default_snooze_minutes = 30 WHERE id = 1',
-      );
-      final task = await _createFutureReminder(tasks, nowUtc);
+  test('reconcile schedules exact request with persisted defaults', () async {
+    await database.customStatement(
+      'UPDATE app_settings SET default_snooze_minutes = 30 WHERE id = 1',
+    );
+    final task = await _createFutureReminder(tasks, nowUtc);
 
-      await coordinator.reconcile();
+    await coordinator.reconcile();
 
-      expect(gateway.initialized, isTrue);
-      expect(gateway.scheduled, hasLength(1));
-      final request = gateway.scheduled.single;
-      expect(request.title, '核对引用');
-      expect(request.payload, 'task:${task.id.value}');
-      expect(request.defaultSnoozeMinutes, 30);
-      expect(request.soundEnabled, isTrue);
-      expect(request.vibrationEnabled, isTrue);
-      expect(request.body, '当归事项提醒');
-      final registration = await database
-          .select(database.notificationRegistrations)
-          .getSingle();
-      expect(registration.scheduleRevision, 1);
-      expect(registration.platform, 'test');
-    },
-  );
+    expect(gateway.initialized, isTrue);
+    expect(gateway.scheduled, hasLength(1));
+    final request = gateway.scheduled.single;
+    expect(request.title, '核对引用');
+    expect(request.payload, 'task:${task.id.value}');
+    expect(request.defaultSnoozeMinutes, 30);
+    expect(request.soundEnabled, isTrue);
+    expect(request.vibrationEnabled, isTrue);
+    expect(request.exactScheduling, isTrue);
+    expect(request.body, '当归事项提醒');
+    final registration = await database
+        .select(database.notificationRegistrations)
+        .getSingle();
+    expect(registration.scheduleRevision, 1);
+    expect(registration.platform, 'test');
+  });
 
   test(
     'new coordinator reschedules a succeeded future reminder exactly once',
@@ -143,35 +141,32 @@ void main() {
     },
   );
 
-  test(
-    'reconcile cancels a delayed pending alarm before it can catch up',
-    () async {
-      await _createFutureReminder(tasks, nowUtc);
-      await coordinator.reconcile();
-      final registration = await database
-          .select(database.notificationRegistrations)
-          .getSingle();
-      expect(
-        gateway.pendingNotificationIdsValue,
-        contains(registration.platformNotificationId),
-      );
+  test('reconcile cancels a pending alarm after the fallback grace', () async {
+    await _createFutureReminder(tasks, nowUtc);
+    await coordinator.reconcile();
+    final registration = await database
+        .select(database.notificationRegistrations)
+        .getSingle();
+    expect(
+      gateway.pendingNotificationIdsValue,
+      contains(registration.platformNotificationId),
+    );
 
-      nowUtc = nowUtc.add(const Duration(hours: 3));
-      await coordinator.reconcile();
+    nowUtc = nowUtc.add(const Duration(hours: 3, minutes: 16));
+    await coordinator.reconcile();
 
-      final reminder = await database.select(database.reminders).getSingle();
-      expect(reminder.status, ReminderStatus.expired);
-      expect(gateway.cancelled, contains(registration.platformNotificationId));
-      expect(
-        gateway.pendingNotificationIdsValue,
-        isNot(contains(registration.platformNotificationId)),
-      );
-      expect(
-        await database.select(database.notificationRegistrations).get(),
-        isEmpty,
-      );
-    },
-  );
+    final reminder = await database.select(database.reminders).getSingle();
+    expect(reminder.status, ReminderStatus.expired);
+    expect(gateway.cancelled, contains(registration.platformNotificationId));
+    expect(
+      gateway.pendingNotificationIdsValue,
+      isNot(contains(registration.platformNotificationId)),
+    );
+    expect(
+      await database.select(database.notificationRegistrations).get(),
+      isEmpty,
+    );
+  });
 
   test(
     'failed startup reschedule retries without creating another outbox job',
@@ -548,15 +543,115 @@ void main() {
 
   test('future-reminder permission check prompts only when needed', () async {
     gateway.permissionGranted = true;
-    expect(await coordinator.ensurePermissionsForFutureReminder(), isTrue);
+    var result = await coordinator.ensurePermissionsForFutureReminder();
+    expect(result.notificationsGranted, isTrue);
+    expect(result.exactSchedulingAvailable, isTrue);
     expect(gateway.permissionRequests, 0);
 
     gateway
       ..permissionGranted = false
       ..permissionRequestResult = false;
-    expect(await coordinator.ensurePermissionsForFutureReminder(), isFalse);
+    result = await coordinator.ensurePermissionsForFutureReminder();
+    expect(result.notificationsGranted, isFalse);
+    expect(result.exactSchedulingAvailable, isFalse);
     expect(gateway.permissionRequests, 1);
   });
+
+  test('exact-alarm denial keeps delivery with an inexact fallback', () async {
+    gateway
+      ..exactSchedulingAvailable = false
+      ..exactPermissionRequestResult = false;
+    final result = await coordinator.ensurePermissionsForFutureReminder();
+
+    expect(result.notificationsGranted, isTrue);
+    expect(result.exactSchedulingAvailable, isFalse);
+    expect(gateway.exactPermissionRequests, 1);
+
+    await _createFutureReminder(tasks, nowUtc);
+    await coordinator.reconcile();
+    expect(gateway.scheduled.single.exactScheduling, isFalse);
+  });
+
+  test(
+    'granting exact access replaces a future fallback with the same id',
+    () async {
+      gateway.exactSchedulingAvailable = false;
+      await _createFutureReminder(tasks, nowUtc);
+      await coordinator.reconcile();
+      final fallback = gateway.scheduled.single;
+      expect(fallback.exactScheduling, isFalse);
+
+      gateway.exactSchedulingAvailable = true;
+      await coordinator.reconcile();
+
+      expect(gateway.scheduled, hasLength(2));
+      expect(gateway.scheduled.last.notificationId, fallback.notificationId);
+      expect(gateway.scheduled.last.exactScheduling, isTrue);
+    },
+  );
+
+  test('delivered exact reminder expires after its two-minute grace', () async {
+    await _createFutureReminder(tasks, nowUtc);
+    await coordinator.reconcile();
+    final notificationId = gateway.scheduled.single.notificationId;
+
+    nowUtc = nowUtc.add(const Duration(hours: 2, minutes: 1));
+    await coordinator.reconcile();
+    var reminder = await database.select(database.reminders).getSingle();
+    expect(reminder.status, ReminderStatus.scheduled);
+    expect(gateway.cancelled, isEmpty);
+
+    gateway.markDelivered(notificationId);
+    nowUtc = nowUtc.add(const Duration(minutes: 2));
+    await coordinator.reconcile();
+    reminder = await database.select(database.reminders).getSingle();
+    expect(reminder.status, ReminderStatus.expired);
+    expect(gateway.cancelled, isEmpty);
+  });
+
+  test(
+    'inexact fallback retains a seventy-five-minute delivery grace',
+    () async {
+      gateway.exactSchedulingAvailable = false;
+      await _createFutureReminder(tasks, nowUtc);
+      await coordinator.reconcile();
+
+      nowUtc = nowUtc.add(const Duration(hours: 3));
+      await coordinator.reconcile();
+      var reminder = await database.select(database.reminders).getSingle();
+      expect(reminder.status, ReminderStatus.scheduled);
+
+      nowUtc = nowUtc.add(const Duration(minutes: 16));
+      await coordinator.reconcile();
+      reminder = await database.select(database.reminders).getSingle();
+      expect(reminder.status, ReminderStatus.expired);
+      expect(gateway.cancelled, isNotEmpty);
+    },
+  );
+
+  test(
+    'granting exact access does not shrink an inexact delivery grace',
+    () async {
+      gateway.exactSchedulingAvailable = false;
+      await _createFutureReminder(tasks, nowUtc);
+      await coordinator.reconcile();
+      expect(gateway.scheduled.single.exactScheduling, isFalse);
+
+      nowUtc = nowUtc.add(const Duration(hours: 2, minutes: 10));
+      gateway.exactSchedulingAvailable = true;
+      await coordinator.reconcile();
+
+      var reminder = await database.select(database.reminders).getSingle();
+      expect(reminder.status, ReminderStatus.scheduled);
+      expect(gateway.cancelled, isEmpty);
+
+      nowUtc = nowUtc.add(const Duration(minutes: 66));
+      await coordinator.reconcile();
+      reminder = await database.select(database.reminders).getSingle();
+      expect(reminder.status, ReminderStatus.expired);
+      expect(gateway.cancelled, isNotEmpty);
+    },
+  );
 
   test(
     'stale outbox is discarded while startup repairs the current revision',
@@ -668,12 +763,18 @@ Future<TaskModel> _createFutureReminder(
   return task;
 }
 
-final class FakeNotificationGateway implements NotificationGateway {
+final class FakeNotificationGateway
+    implements NotificationGateway, ReminderCapabilityGateway {
   bool get initialized => presentations.isNotEmpty;
   bool permissionGranted = true;
   int permissionFailuresRemaining = 0;
   bool permissionRequestResult = true;
   int permissionRequests = 0;
+  bool exactSchedulingAvailable = true;
+  bool exactPermissionRequestResult = true;
+  int exactPermissionRequests = 0;
+  bool? soundAvailable = true;
+  bool? vibrationAvailable = true;
   int scheduleCalls = 0;
   int scheduleFailuresRemaining = 0;
   void Function(String? actionId, String? payload)? onAction;
@@ -711,6 +812,26 @@ final class FakeNotificationGateway implements NotificationGateway {
   Future<bool> requestPermissions() async {
     permissionRequests += 1;
     return permissionRequestResult;
+  }
+
+  @override
+  Future<ReminderDeliveryCapabilities> deliveryCapabilities({
+    required bool soundEnabled,
+    required bool vibrationEnabled,
+  }) async => ReminderDeliveryCapabilities(
+    notificationsGranted: await permissionsGranted(),
+    exactSchedulingAvailable: exactSchedulingAvailable,
+    exactAlarmPermissionRequired: !exactSchedulingAvailable,
+    soundAvailable: soundEnabled ? soundAvailable : null,
+    vibrationAvailable: vibrationEnabled ? vibrationAvailable : null,
+    vibrationControlledBySystem: false,
+  );
+
+  @override
+  Future<bool> requestExactAlarmPermission() async {
+    exactPermissionRequests += 1;
+    if (exactPermissionRequestResult) exactSchedulingAvailable = true;
+    return exactPermissionRequestResult;
   }
 
   @override

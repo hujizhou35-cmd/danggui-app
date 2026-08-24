@@ -296,6 +296,13 @@ run_seed_with_permission_contract() {
         tap_x=$(( (BASH_REMATCH[1] + BASH_REMATCH[3]) / 2 ))
         tap_y=$(( (BASH_REMATCH[2] + BASH_REMATCH[4]) / 2 ))
         cp "${dump_host_path}" "${evidence_dir}/permission-dialog.xml"
+        # Pre-grant exact-alarm special access before dismissing the ordinary
+        # notification dialog. This prevents a race where the app opens the
+        # special-access Settings screen before the host can establish the
+        # deterministic exact-delivery acceptance state.
+        bounded_adb shell cmd appops set "${package_name}" \
+          SCHEDULE_EXACT_ALARM allow \
+          > "${evidence_dir}/exact-alarm-appop-grant.txt" 2>&1
         bounded_adb shell input tap "${tap_x}" "${tap_y}" \
           > "${evidence_dir}/permission-dialog-tap.log" 2>&1
         printf '%s\n' \
@@ -518,6 +525,12 @@ if (( api_level >= 33 )); then
 fi
 bounded_adb shell cmd appops get "${package_name}" POST_NOTIFICATION \
   > "${evidence_dir}/notification-appop-after-permission.txt" 2>&1 || true
+if (( api_level >= 31 )); then
+  bounded_adb shell cmd appops get "${package_name}" SCHEDULE_EXACT_ALARM \
+    > "${evidence_dir}/exact-alarm-appop-after-permission.txt" 2>&1
+  grep -Eqi 'allow' \
+    "${evidence_dir}/exact-alarm-appop-after-permission.txt"
+fi
 jq -e '.status == "completed"' \
   "${evidence_dir}/permission-policy.json" >/dev/null
 extract_app_evidence before.json "${before_json}"
@@ -625,7 +638,7 @@ sha256sum "${evidence_dir}/alarm-after-explicit-overlay.txt" \
   "${evidence_dir}/alarm-after-verify.txt" \
   > "${evidence_dir}/alarm-dumps.sha256"
 
-deadline_seconds=$(( scheduled_seconds + 720 ))
+deadline_seconds=$(( scheduled_seconds + 30 ))
 current_seconds="$(device_epoch_seconds)"
 remaining_seconds=$(( deadline_seconds - current_seconds ))
 if (( remaining_seconds < 0 )); then
@@ -665,7 +678,7 @@ if (( observed_seconds + 2 < scheduled_seconds )); then
   exit 1
 fi
 printf '%s\n' \
-  "{\"scheduledEpochSeconds\":${scheduled_seconds},\"observedEpochSeconds\":${observed_seconds},\"latenessSeconds\":$(( observed_seconds - scheduled_seconds )),\"maximumAllowedLatenessSeconds\":720}" \
+  "{\"scheduledEpochSeconds\":${scheduled_seconds},\"observedEpochSeconds\":${observed_seconds},\"latenessSeconds\":$(( observed_seconds - scheduled_seconds )),\"maximumAllowedLatenessSeconds\":30}" \
   > "${evidence_dir}/notification-timing.json"
 jq -e '.latenessSeconds >= -2 and .latenessSeconds <= .maximumAllowedLatenessSeconds' \
   "${evidence_dir}/notification-timing.json" >/dev/null

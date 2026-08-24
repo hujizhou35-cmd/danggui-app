@@ -365,6 +365,14 @@ class AppLocalizationsRu extends AppLocalizations {
       'Доступ ограничен; время напоминания сохранено';
 
   @override
+  String get reminderStatusPrecisionLimited =>
+      'Запланировано, но точные напоминания отключены и возможна задержка';
+
+  @override
+  String get reminderStatusSystemDeliveryLimited =>
+      'Запланировано, но система отключила звук или вибрацию этого напоминания';
+
+  @override
   String get reminderStatusTaskClosed =>
       'Дело закрыто; напоминание приостановлено';
 
@@ -372,7 +380,17 @@ class AppLocalizationsRu extends AppLocalizations {
   String get reminderStatusPaused => 'Напоминание приостановлено';
 
   @override
+  String get enableExactReminders => 'Включить точные напоминания';
+
+  @override
   String get openNotificationSettings => 'Открыть настройки уведомлений';
+
+  @override
+  String get reminderVibrationSystemControlled =>
+      'Вибрация управляется настройками уведомлений iOS';
+
+  @override
+  String get saved => 'Сохранено';
 
   @override
   String get backupCreated => 'Резервная копия создана';

@@ -1,7 +1,7 @@
 name: danggui
 description: "当归：本地优先、无账号、无广告的事项、过往与笔记应用。"
 publish_to: "none"
-version: 1.1.0+2
+version: 1.1.2+3
 
 environment:
   sdk: ^3.13.1
@@ -68,12 +68,14 @@ flutter_launcher_icons:
 
 flutter_native_splash:
   color: "#F4EFE7"
-  image: assets/brand/danggui-launch-artwork.png
-  android_gravity: fill
-  ios_content_mode: scaleAspectFill
+  # The native surface is intentionally paper-only. The complete vertical
+  # illustration, title, privacy copy, and real progress state are rendered by
+  # StartupPage so users never see two competing brand compositions.
   android_12:
     color: "#F4EFE7"
-    image: assets/brand/danggui-native-splash-emblem.png
-    icon_background_color: "#FCF1DE"
+    # A same-paper single pixel keeps regeneration from falling back to the
+    # launcher icon. Checked-in v31 themes use a transparent drawable so the
+    # system stage remains visually paper-only.
+    image: android/app/src/main/res/drawable/background.png
   android: true
   ios: true

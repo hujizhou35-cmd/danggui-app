@@ -3,6 +3,39 @@
 All notable changes to Danggui are documented here. The project follows
 [Semantic Versioning](https://semver.org/) for public releases.
 
+## 1.1.2 - compact history and reminder delivery pre-release (2026-08-25)
+
+The v1.1.2 release is published separately from v1.1.0. The existing v1.1.0
+tag, Pre-release, artifacts, checksums, and historical evidence remain intact.
+
+### Fixed
+
+- Made the editor save action provide explicit feedback instead of appearing
+  inert, while retaining serialized autosave and the forced flush on exit.
+- Allowed reminder selection at every minute and corrected notification-channel
+  handling so the chosen sound and vibration policy reaches scheduled alerts.
+  Android uses user-controlled exact-alarm access when granted and preserves
+  the selected time with a clearly labelled inexact fallback when denied.
+  Delivered requests expire after a two-minute settling window; requests still
+  pending at the platform retain a conservative 75-minute fallback window,
+  independent of later exact-permission changes.
+- Compacted Past into one line per event, with the event text first, its time
+  and date after it, and only one blank line between different days.
+- Removed the duplicate native launch emblem. Android and iOS now hand off from
+  a paper-only native surface to the sole full-height Flutter composition,
+  which remains visible for at least 1.2 seconds after its first decoded frame.
+- Kept Android 12+'s mandatory system splash paper-only through an explicit
+  transparent drawable and removed the dark-mode black transition frame.
+
+### Delivery
+
+- Set product version `1.1.2`, build number `3`, universal Android version code
+  `3`, and split APK codes `1003`, `2003`, and `4003` from `pubspec.yaml`.
+- Settings and the open-source license surface show `1.1.2`; backup, export,
+  diagnostics, Android, and iOS build evidence record `1.1.2+3`.
+- Added the protected `v1.1.2` Pre-release contract and deterministic
+  `danggui-ios-source-v1.1.2.zip` delivery without modifying v1.1.0.
+
 ## 1.1.0 - editor and reminder reliability pre-release (2026-08-24)
 
 The [v1.1.0 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0)

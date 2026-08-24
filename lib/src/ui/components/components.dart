@@ -2,6 +2,7 @@ export 'bottom_nav.dart';
 export 'danggui_icon_button.dart';
 export 'danggui_switch.dart';
 export 'editor_toolbar.dart';
+export 'editor_save_feedback.dart';
 export 'editor_page_frame.dart';
 export 'export_sheet.dart';
 export 'ime_inset_guard.dart';

@@ -798,6 +798,18 @@ abstract class AppLocalizations {
   /// **'权限受限，提醒时间已保留'**
   String get reminderStatusPermissionDenied;
 
+  /// No description provided for @reminderStatusPrecisionLimited.
+  ///
+  /// In zh, this message translates to:
+  /// **'已安排，但未开启精确提醒权限，可能延迟'**
+  String get reminderStatusPrecisionLimited;
+
+  /// No description provided for @reminderStatusSystemDeliveryLimited.
+  ///
+  /// In zh, this message translates to:
+  /// **'已安排，但系统已关闭此提醒的声音或振动'**
+  String get reminderStatusSystemDeliveryLimited;
+
   /// No description provided for @reminderStatusTaskClosed.
   ///
   /// In zh, this message translates to:
@@ -810,11 +822,29 @@ abstract class AppLocalizations {
   /// **'提醒已暂停'**
   String get reminderStatusPaused;
 
+  /// No description provided for @enableExactReminders.
+  ///
+  /// In zh, this message translates to:
+  /// **'启用精确提醒'**
+  String get enableExactReminders;
+
   /// No description provided for @openNotificationSettings.
   ///
   /// In zh, this message translates to:
   /// **'打开通知设置'**
   String get openNotificationSettings;
+
+  /// No description provided for @reminderVibrationSystemControlled.
+  ///
+  /// In zh, this message translates to:
+  /// **'振动由 iOS 系统通知设置控制'**
+  String get reminderVibrationSystemControlled;
+
+  /// No description provided for @saved.
+  ///
+  /// In zh, this message translates to:
+  /// **'已保存'**
+  String get saved;
 
   /// No description provided for @backupCreated.
   ///

@@ -1,6 +1,6 @@
 # iOS 源码包构建说明
 
-`danggui-ios-source-v1.1.0.zip` 是可审计、可复现解包的 Flutter/iOS 源码交付，不是 IPA，也不能直接安装到普通 iPhone。为了让接收者能运行与标签 CI 相同的完整测试和平台审计，压缩包保留全部已跟踪的 Flutter 项目源码（包括 Android 平台源码、`test/` 和 `integration_test/`），但不包含签名证书、描述文件、密钥、构建缓存、`dist` 或用户数据。
+`danggui-ios-source-v1.1.2.zip` 是可审计、可复现解包的 Flutter/iOS 源码交付，不是 IPA，也不能直接安装到普通 iPhone。为了让接收者能运行与标签 CI 相同的完整测试和平台审计，压缩包保留全部已跟踪的 Flutter 项目源码（包括 Android 平台源码、`test/` 和 `integration_test/`），但不包含签名证书、描述文件、密钥、构建缓存、`dist` 或用户数据。既有 `danggui-ios-source-v1.1.0.zip` 继续保留在 v1.1.0 Release 中。
 
 ## 环境
 
@@ -11,9 +11,9 @@
 ## 校验与构建
 
 ```bash
-grep '  ./danggui-ios-source-v1.1.0.zip$' SHA256SUMS | shasum -a 256 -c -
-unzip danggui-ios-source-v1.1.0.zip
-cd danggui-ios-source-v1.1.0
+grep '  ./danggui-ios-source-v1.1.2.zip$' SHA256SUMS | shasum -a 256 -c -
+unzip danggui-ios-source-v1.1.2.zip
+cd danggui-ios-source-v1.1.2
 flutter config --no-analytics --enable-swift-package-manager
 flutter pub get --enforce-lockfile
 flutter analyze --fatal-infos

@@ -32,7 +32,7 @@ class NoteEditorPage extends ConsumerStatefulWidget {
 }
 
 class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, EditorSaveFeedbackMixin<NoteEditorPage> {
   final _titleController = TextEditingController();
   final _bodyController = TextEditingController();
   final _bodyUndoController = UndoHistoryController();
@@ -65,6 +65,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   @override
   void dispose() {
     _autosaveTimer?.cancel();
+    disposeEditorSaveFeedback();
     WidgetsBinding.instance.removeObserver(this);
     if (_pendingDraft != null) {
       unawaited(_startSaveLoop());
@@ -262,9 +263,20 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
                     : null,
               ),
               EditorToolbarItem(
-                icon: const Icon(Icons.save_outlined),
+                icon: editorSaveFeedbackIcon(
+                  key: const Key('note-editor-save'),
+                ),
                 semanticLabel: l10n.save,
-                onPressed: () => _flushSave(interactive: true),
+                onPressed: editorSaveInProgress
+                    ? null
+                    : () {
+                        unawaited(
+                          runEditorManualSave(
+                            flush: () => _flushSave(interactive: true),
+                            savedLabel: l10n.saved,
+                          ),
+                        );
+                      },
               ),
             ],
           ),

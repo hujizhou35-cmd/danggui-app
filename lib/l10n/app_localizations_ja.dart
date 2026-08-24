@@ -358,13 +358,30 @@ class AppLocalizationsJa extends AppLocalizations {
   String get reminderStatusPermissionDenied => '権限が制限されています。通知時刻は保存済みです';
 
   @override
+  String get reminderStatusPrecisionLimited =>
+      '設定済みですが、正確な通知の権限が無効なため遅れる場合があります';
+
+  @override
+  String get reminderStatusSystemDeliveryLimited =>
+      '設定済みですが、システムでこの通知の音または振動が無効です';
+
+  @override
   String get reminderStatusTaskClosed => '事項が閉じられ、通知は一時停止中です';
 
   @override
   String get reminderStatusPaused => '通知は一時停止中です';
 
   @override
+  String get enableExactReminders => '正確な通知を有効にする';
+
+  @override
   String get openNotificationSettings => '通知設定を開く';
+
+  @override
+  String get reminderVibrationSystemControlled => '振動は iOS の通知設定で管理されます';
+
+  @override
+  String get saved => '保存しました';
 
   @override
   String get backupCreated => 'バックアップを作成しました';

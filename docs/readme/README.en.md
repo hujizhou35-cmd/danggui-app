@@ -14,7 +14,7 @@
 </p>
 
 > [!IMPORTANT]
-> Danggui [v1.1.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0) is publicly available as a **Pre-release**. Android receives formally signed install packages. iOS receives a deterministic source archive and unsigned build evidence only—no IPA or TestFlight distribution. Physical-device release acceptance is not yet complete, so this is not a stable release.
+> Danggui [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) is delivered as a separate **Pre-release**. Android receives formally signed install packages. iOS receives a deterministic source archive and unsigned build evidence only—no IPA or TestFlight distribution. Physical-device release acceptance is not yet complete, so this is not a stable release. The existing v1.1.0 release and its files remain available.
 
 ## A quiet, local-first place for plans and memories
 
@@ -25,7 +25,7 @@ Danggui combines tasks, a continuously growing history document, and independent
 - Notes with one-level folders, pinning, lists, checkboxes, and task conversion.
 - Transactional SQLite storage, migrations, integrity checks, optionally encrypted `.dgbak` backups, merge/replace restore, and readable Markdown + JSON exports.
 - Detailed offline Help plus Simplified Chinese, English, Japanese, and Russian UI, with system-following and manual language selection.
-- v1.1.0 keeps Tasks, Notes, and Past editable, defaults new tasks to today, exposes reminder lifecycle controls, and restores the complete branded one-second launch composition.
+- v1.1.2 adds minute-precise reminders, explicit save feedback, and one-line Past events. A paper-only native hand-off now leads to the sole complete Flutter launch composition for at least 1.2 seconds.
 
 ## Preview
 
@@ -37,16 +37,16 @@ Danggui combines tasks, a continuously growing history document, and independent
 
 | Platform | Delivery |
 | --- | --- |
-| Android | Formally signed universal and split APKs plus AAB from the [v1.1.0 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0) |
-| iOS | Deterministic `danggui-ios-source-v1.1.0.zip`, Xcode project, and unsigned `Runner.app` build evidence; no IPA or TestFlight distribution |
+| Android | Formally signed universal and split APKs plus AAB from the [v1.1.2 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) |
+| iOS | Deterministic `danggui-ios-source-v1.1.2.zip`, Xcode project, and unsigned `Runner.app` build evidence; no IPA or TestFlight distribution |
 
-Most Android users should download `danggui-android-universal-release.apk`; split APKs are for users who know their device ABI, and the AAB is for store or managed distribution. The Pre-release also includes `SHA256SUMS` and the signing certificate SHA-256 fingerprint, both of which should be checked before installation. See the [platform delivery guide](../architecture/platform-delivery.md), [iOS source build guide](../architecture/ios-source-build.md), and [v1.1.0 release checklist](../release/v1.1.0-release-checklist.md).
+Most Android users should download `danggui-android-universal-release.apk`; split APKs are for users who know their device ABI, and the AAB is for store or managed distribution. The Pre-release also includes `SHA256SUMS` and the signing certificate SHA-256 fingerprint, both of which should be checked before installation. See the [platform delivery guide](../architecture/platform-delivery.md), [iOS source build guide](../architecture/ios-source-build.md), and [v1.1.2 release checklist](../release/v1.1.2-release-checklist.md).
 
 ## Pre-release acceptance status
 
 Automated acceptance has exercised same-version, same-signature overlay installation on Android API 24 and API 36. It verifies 37 retention assertions across six data domains, SQLite `quick_check` and foreign-key integrity, AlarmManager scheduling, a real system notification, and the real notification-permission flow on API 36.
 
-Acceptance is still outstanding for physical Android devices across OEM variants, lock-screen delivery, sound, vibration, and snooze, plus final sign-off of an overlay upgrade from the official v1.0.0 package. v1.1.0 therefore remains a Pre-release rather than a stable release.
+Acceptance is still outstanding for physical Android devices across OEM variants, lock-screen delivery, sound, vibration, and snooze, plus final sign-off of an overlay upgrade from the published v1.1.0 package. v1.1.2 therefore remains a Pre-release rather than a stable release.
 
 ## Privacy and license
 

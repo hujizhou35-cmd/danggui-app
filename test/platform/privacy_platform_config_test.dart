@@ -18,18 +18,49 @@ void main() {
     expect(report.checks.length, greaterThanOrEqualTo(50));
     expect(expectedApplicationId, 'com.danggui.memo');
     final version = readReleaseVersion(repositoryRoot);
-    expect(version.name, '1.1.0');
-    expect(version.buildNumber, 2);
-    expect(version.technical, '1.1.0+2');
+    expect(version.name, '1.1.2');
+    expect(version.buildNumber, 3);
+    expect(version.technical, '1.1.2+3');
     expect(appVersionName, version.name);
     expect(appBuildNumber, version.buildNumber);
     expect(appTechnicalVersion, version.technical);
     expect(expectedAndroidPermissions, <String>{
       'android.permission.POST_NOTIFICATIONS',
       'android.permission.RECEIVE_BOOT_COMPLETED',
+      'android.permission.SCHEDULE_EXACT_ALARM',
       'android.permission.VIBRATE',
     });
   });
+
+  test(
+    'production local notifications retain sound and vibration delivery',
+    () {
+      final source = File(
+        _join(
+          repositoryRoot.path,
+          'lib/src/services/notifications/notification_coordinator.dart',
+        ),
+      ).readAsStringSync();
+
+      for (final requiredSource in <String>[
+        'vibrationPattern: request.vibrationEnabled',
+        '_defaultVibrationPattern',
+        'playSound: request.soundEnabled',
+        'enableVibration: request.vibrationEnabled',
+        'presentSound: request.soundEnabled',
+        '_reminderChannelId(',
+        'AndroidScheduleMode.exactAllowWhileIdle',
+        'AndroidScheduleMode.inexactAllowWhileIdle',
+      ]) {
+        expect(source, contains(requiredSource), reason: requiredSource);
+      }
+      expect(
+        source,
+        contains('Int64List.fromList(<int>[0, 400, 200, 400])'),
+        reason: 'API 24/25 requires an explicit vibration cadence.',
+      );
+    },
+  );
 
   test('iOS source delivery declares a complete tracked content manifest', () {
     final script = File(
@@ -124,8 +155,8 @@ void main() {
     );
     notificationSource.writeAsStringSync(
       notificationSource.readAsStringSync().replaceFirst(
-        'AndroidScheduleMode.inexactAllowWhileIdle',
         'AndroidScheduleMode.exactAllowWhileIdle',
+        'AndroidScheduleMode.alarmClock',
       ),
     );
 
@@ -160,7 +191,7 @@ void main() {
     expect(failures, contains('android.permission.USE_EXACT_ALARM'));
     expect(failures, contains('android.permission.USE_FULL_SCREEN_INTENT'));
     expect(failures, contains('firebase_core'));
-    expect(failures, contains('exact-alarm or full-screen notification API'));
+    expect(failures, contains('alarm-clock or full-screen notification API'));
     expect(failures, contains('hard-coded remote URL'));
     expect(failures, contains('entitlement files require review'));
     expect(failures, contains('exclude Application Support/danggui'));

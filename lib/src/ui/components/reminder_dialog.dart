@@ -22,7 +22,7 @@ class ReminderDialog extends StatefulWidget {
     this.dateSemanticLabel,
     this.onDatePressed,
     this.onTimeChanged,
-    this.minuteStep = 5,
+    this.minuteStep = 1,
   }) : assert(minuteStep > 0 && 60 % minuteStep == 0);
 
   final String title;
@@ -58,8 +58,7 @@ class _ReminderDialogState extends State<ReminderDialog> {
   void initState() {
     super.initState();
     _hour = widget.selectedTime.hour;
-    _minuteIndex =
-        (widget.selectedTime.minute / widget.minuteStep).round() % _minuteCount;
+    _minuteIndex = widget.selectedTime.minute ~/ widget.minuteStep;
     _hourController = FixedExtentScrollController(
       initialItem: _anchoredIndex(_loopAnchor, 24, _hour),
     );
@@ -71,8 +70,7 @@ class _ReminderDialogState extends State<ReminderDialog> {
   @override
   void didUpdateWidget(covariant ReminderDialog oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final nextMinuteIndex =
-        (widget.selectedTime.minute / widget.minuteStep).round() % _minuteCount;
+    final nextMinuteIndex = widget.selectedTime.minute ~/ widget.minuteStep;
     if (widget.selectedTime.hour != _hour) {
       _hour = widget.selectedTime.hour;
       _hourController.jumpToItem(_anchoredIndex(_loopAnchor, 24, _hour));

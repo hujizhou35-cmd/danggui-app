@@ -1,6 +1,6 @@
 # 平台、签名与交付架构
 
-> v1.1.0 计划以[公开 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0)交付，仍不是稳定版。本页定义产物合同、已取得的自动化证据和仍待完成的标签/实体机门禁。实时状态见 [v1.1.0 发布检查表](../release/v1.1.0-release-checklist.md)；v1.0.0 的历史证据继续保留在文末。
+> v1.1.2 计划以[独立公开 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2)交付，仍不是稳定版。本页定义产物合同、已取得的自动化证据和仍待完成的标签/实体机门禁。实时状态见 [v1.1.2 发布检查表](../release/v1.1.2-release-checklist.md)；既有 v1.1.0 与 v1.0.0 的标签、Release、附件和历史证据继续保留。
 
 ## 平台不变量
 
@@ -9,7 +9,8 @@
 - Android 最低 API 24，compile/target API 36；iOS 最低版本 15，仅支持手机竖屏。
 - 所有 Android 变体都不声明 `android.permission.INTERNET`；CI 会解析最终 APK 并阻止包含 INTERNET 的产物。
 - 应用禁用 Android 系统云备份与设备迁移，避免本地数据库被系统服务上传；跨设备迁移只走应用内、用户主动选择的 `.dgbak` 流程。
-- 不申请 `SCHEDULE_EXACT_ALARM` 或 `USE_EXACT_ALARM`。业务层必须使用非精确本地提醒模式，并向用户说明 OEM 省电策略可能造成延迟。
+- Android 仅声明 `SCHEDULE_EXACT_ALARM` 特殊访问：授权时使用 `exactAllowWhileIdle`，拒绝时保留提醒并降级到 `inexactAllowWhileIdle`，同时明确提示可能延迟。继续禁止商店政策更严格的 `USE_EXACT_ALARM`、全屏通知和绕过免打扰能力。
+- 到点超过 2 分钟且已不在系统 pending 列表的请求才记为已过期；仍 pending 的请求一律保守保留 75 分钟后再取消。宽限依据实际 pending 状态而不是“当前”精确权限，避免用户事后授权时误杀此前的非精确提醒。
 
 ## 本地通知平台配置
 
@@ -18,9 +19,10 @@ Android 主清单只包含：
 - `POST_NOTIFICATIONS`：Android 13+ 由用户操作触发运行时授权。
 - `VIBRATE`：遵循用户与通知频道设置。
 - `RECEIVE_BOOT_COMPLETED`：设备重启或应用更新后由插件恢复仍有效的计划提醒。
+- `SCHEDULE_EXACT_ALARM`：仅用于用户主动创建的本地事项提醒；特殊访问被拒绝或撤销时继续保存并使用非精确回退。
 - `ScheduledNotificationReceiver`、`ScheduledNotificationBootReceiver` 和 `ActionBroadcastReceiver`，全部 `exported=false`。
 
-Android 启用 core library desugaring，并保留 `ic_stat_danggui` 通知小图标。Dart 初始化必须使用 `AndroidInitializationSettings('ic_stat_danggui')`；通知频道一旦创建，声音和振动属性由 Android 固化，修改默认值时必须使用新的频道版本 ID。
+Android 启用 core library desugaring，并保留 `ic_stat_danggui` 通知小图标。Dart 初始化必须使用 `AndroidInitializationSettings('ic_stat_danggui')`；通知频道一旦创建，声音和振动属性由 Android 固化，修改默认值时必须使用新的频道版本 ID。应用不申请 `USE_EXACT_ALARM`、全屏通知、勿扰模式绕过或前台服务，不把事项提醒伪装成系统闹钟。
 
 iOS 的 `AppDelegate` 将 `UNUserNotificationCenter` delegate 指向 Flutter AppDelegate，并为通知动作的后台 isolate 注册插件。通知授权仍只能在用户明确开启提醒时由 Dart 请求，不得在首次启动时突兀弹窗。
 
@@ -83,10 +85,10 @@ debug 回退包。仓库另以服务端 tag ruleset 限制 `v*` 的创建、更�
 
 CI 产出：
 
-- 从 `pubspec.yaml` 的 `1.1.0+2` 派生的通用 APK/AAB（versionCode `2`）。
-- `armeabi-v7a`、`arm64-v8a`、`x86_64` 分架构 APK（versionCode 分别为 `1002`、`2002`、`4002`）。
+- 从 `pubspec.yaml` 的 `1.1.2+3` 派生的通用 APK/AAB（versionCode `3`）。
+- `armeabi-v7a`、`arm64-v8a`、`x86_64` 分架构 APK（versionCode 分别为 `1003`、`2003`、`4003`）。
 - `SHA256SUMS`、`SIGNING_MODE.txt`、`SIGNING_CERTIFICATE.txt`、`SIGNING_CERTIFICATE_SHA256.txt` 和工具链记录。
-- `danggui-ios-source-v1.1.0.zip`：由干净标签提交确定性打包的完整已跟踪 Flutter 跨平台源码、iOS/Xcode 工程、锁定依赖、资源、四语本地化、测试、许可证与构建说明。
+- `danggui-ios-source-v1.1.2.zip`：由干净标签提交确定性打包的完整已跟踪 Flutter 跨平台源码、iOS/Xcode 工程、锁定依赖、资源、四语本地化、测试、许可证与构建说明。
 - macOS 上的 unsigned `Runner.app` 压缩包，仅作为 iOS 源码可构建证据，不是 IPA，不能安装到普通 iPhone。
 
 CI Artifact 只用于构建审计和维护者验收，不自动等同于公开正式包。`v*` 受保护标签必须等待 Android、API 24、API 36 与 unsigned iOS 四项作业全绿，随后发布作业从同一 run 下载产物、复算统一 `SHA256SUMS`，并创建或刷新 GitHub Pre-release；刷新时会替换并核对完整附件集合，且拒绝改写已经人工提升为 Stable 的 Release。只有该标签 run 中 `SIGNING_MODE.txt=release` 且通过下述全部门禁的包，才可称为官方安装包。普通用户应优先选择 `danggui-android-universal-release.apk`；ABI 分包面向明确知道设备架构的用户，AAB 不应直接侧载。
@@ -120,7 +122,7 @@ API 33+ 在每个 AVD attempt 的第一次 Flutter 构建、安装或启动之�
 1. `SIGNING_MODE.txt` 为 `release`。
 2. `apksigner verify --verbose --print-certs` 通过，证书 SHA-256 与公开指纹一致。
 3. AAB 的 JAR 签名/证书通过，且 bundletool 解析到的 ID、版本、SDK 和权限与 APK/发布合同一致。
-4. 最终 APK 不含 INTERNET 或精确闹钟权限。
+4. 最终 APK 不含 INTERNET、`USE_EXACT_ALARM`、全屏通知或勿扰模式绕过权限；只允许已审计的 `SCHEDULE_EXACT_ALARM` 特殊访问。
 5. `flutter analyze --fatal-infos`、全部测试与 API 24/API 36 Debug 插桩交互验收通过。
 6. 两个 API 作业都对 `android-linux` 同一 SHA 的通用 Release-mode APK 完成全新安装、冷启动、包/版本、基础导航、稳定进程和无崩溃烟测。
 7. API 24/API 36 的同签名 Debug 覆盖、提醒和数据保留验收通过；这项不能冒充真实旧版本正式包升级。
@@ -128,11 +130,15 @@ API 33+ 在每个 AVD attempt 的第一次 Flutter 构建、安装或启动之�
 
 Debug 回退包必须保留 `debug-fallback` 文件名，禁止上传应用商店或标记为正式 Release。
 
-### v1.1.0 预发布合同
+### v1.1.2 预发布合同
 
-标签 `v1.1.0` 必须与 `pubspec.yaml` 的产品版本一致，并从合并后的受保护 `main` 创建。标签发布资产包括五个 Android 包、统一校验和、正式证书 SHA-256、确定性 iOS 源码 ZIP 和 unsigned `.app.zip` 构建证据。iOS 两类压缩包都不是 IPA；源码构建步骤见 [iOS 源码包构建说明](ios-source-build.md)。
+标签 `v1.1.2` 必须与 `pubspec.yaml` 的产品版本一致，并从合并后的受保护 `main` 创建。标签发布资产包括五个 Android 包、统一校验和、正式证书 SHA-256、确定性 iOS 源码 ZIP 和 unsigned `.app.zip` 构建证据。iOS 两类压缩包都不是 IPA；源码构建步骤见 [iOS 源码包构建说明](ios-source-build.md)。工作流按当前标签名创建或刷新 Release，只允许替换同一 `v1.1.2` Pre-release 的附件，不得删除或改写 `v1.1.0`。
 
-v1.1.0 的稳定版门禁额外要求：用已公开的正式 v1.0.0 APK 在代表性 Android 实体机执行覆盖升级，确认既有事项、提醒、笔记、过往和设置完整保留，并复验编辑器键盘复位、默认当天、提醒状态与完整启动构图。在此签署前，v1.1.0 只能保持 Pre-release。
+v1.1.2 的稳定版门禁额外要求：用已公开的正式签名 v1.1.0 APK 在代表性 Android 实体机执行覆盖升级，确认既有事项、提醒、笔记、过往和设置完整保留，并复验保存反馈、每分钟提醒选择、声音/振动、紧凑过往和唯一的 1.2 秒完整启动构图。在此签署前，v1.1.2 只能保持 Pre-release。
+
+### v1.1.0 预发布证据
+
+`v1.1.0` 标签、公开 Pre-release 与 16 个附件已经存在；其 Android 正式签名证书、包名和历史检查表均继续保留。v1.1.2 是新标签和新 Release，不通过重写或删除 v1.1.0 交付。历史事实源见 [v1.1.0 发布检查表](../release/v1.1.0-release-checklist.md)。
 
 ### v1.0.0 预发布证据
 

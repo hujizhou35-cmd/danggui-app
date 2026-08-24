@@ -46,9 +46,9 @@ void main() {
     expect(editor, findsOneWidget);
     final textField = tester.widget<TextField>(editor);
     final textController = textField.controller!;
-    expect(textController.text, '第一行\n\n第二行\n\n第三行');
+    expect(textController.text, '第一行\n第二行\n第三行');
 
-    const selectedText = '第一行\n\n第二行';
+    const selectedText = '第一行\n第二行';
     textController.selection = const TextSelection(
       baseOffset: 0,
       extentOffset: selectedText.length,
@@ -96,6 +96,69 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1));
     await tester.pump();
     expect(saves, <String>['最终稿']);
+  });
+
+  testWidgets('Past manual save flushes once and exposes visible feedback', (
+    tester,
+  ) async {
+    _setPhoneSize(tester);
+    final write = Completer<void>();
+    final saves = <String>[];
+    await tester.pumpWidget(
+      _testApp(
+        container,
+        PastPage(
+          autosaveDelay: const Duration(seconds: 10),
+          onPersist: (text) async {
+            saves.add(text);
+            await write.future;
+          },
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.enterText(
+      find.byKey(const Key('past-continuous-document-editor')),
+      '立即保存的内容',
+    );
+    await tester.tap(find.byKey(const Key('past-editor-save')));
+    await tester.pump();
+    expect(saves, <String>['立即保存的内容']);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('past-editor-save')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.bySemanticsLabel('保存'), warnIfMissed: false);
+    await tester.pump();
+    expect(saves, <String>['立即保存的内容']);
+
+    write.complete();
+    await tester.pump();
+    await tester.pump();
+    expect(find.byIcon(Icons.check_rounded), findsOneWidget);
+    expect(find.text('已保存'), findsOneWidget);
+  });
+
+  testWidgets('Past clean manual save still confirms without writing', (
+    tester,
+  ) async {
+    _setPhoneSize(tester);
+    var writes = 0;
+    await tester.pumpWidget(
+      _testApp(container, PastPage(onPersist: (text) async => writes++)),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.byKey(const Key('past-editor-save')));
+    await tester.pump();
+    expect(writes, 0);
+    expect(find.text('已保存'), findsOneWidget);
+    expect(find.byIcon(Icons.check_rounded), findsOneWidget);
   });
 
   testWidgets('Past flushes pending edits on background and disposal', (
@@ -286,7 +349,9 @@ Widget _testApp(ProviderContainer container, Widget home) {
         GlobalWidgetsLocalizations.delegate,
       ],
       theme: DangguiTheme.light(),
-      home: home,
+      // Feature pages are AppShell children in production and therefore have
+      // a descendant Scaffold for save feedback and snack bars.
+      home: Scaffold(body: home),
     ),
   );
 }

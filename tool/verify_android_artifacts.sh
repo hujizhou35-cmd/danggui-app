@@ -131,6 +131,7 @@ mapfile -t permission_names < <(
 required_permissions=(
   android.permission.POST_NOTIFICATIONS
   android.permission.RECEIVE_BOOT_COMPLETED
+  android.permission.SCHEDULE_EXACT_ALARM
   android.permission.VIBRATE
 )
 for required in "${required_permissions[@]}"; do
@@ -143,6 +144,7 @@ for permission in "${permission_names[@]}"; do
   case "${permission}" in
     android.permission.POST_NOTIFICATIONS|\
     android.permission.RECEIVE_BOOT_COMPLETED|\
+    android.permission.SCHEDULE_EXACT_ALARM|\
     android.permission.VIBRATE|\
     com.danggui.memo.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION)
       ;;
@@ -306,6 +308,7 @@ permissions = {
 required_permissions = {
     "android.permission.POST_NOTIFICATIONS",
     "android.permission.RECEIVE_BOOT_COMPLETED",
+    "android.permission.SCHEDULE_EXACT_ALARM",
     "android.permission.VIBRATE",
 }
 allowed_permissions = required_permissions | {

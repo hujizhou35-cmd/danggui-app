@@ -125,12 +125,75 @@ final class PastBlockViewModel {
   final bool? isChecked;
 }
 
+enum PastEditorSegmentKind { dateHeading, event, freeform }
+
+final class PastEditorSegmentViewModel {
+  const PastEditorSegmentViewModel({
+    required this.id,
+    required this.kind,
+    required this.text,
+    required this.separatorBefore,
+    required this.sourceBlockIds,
+    this.eventId,
+    this.completionLocalDate,
+  });
+
+  final String id;
+  final PastEditorSegmentKind kind;
+  final String text;
+  final String separatorBefore;
+  final List<String> sourceBlockIds;
+  final String? eventId;
+  final String? completionLocalDate;
+}
+
+final class PastEditorDocumentViewModel {
+  const PastEditorDocumentViewModel({
+    required this.revision,
+    required this.segments,
+  });
+
+  static const empty = PastEditorDocumentViewModel(
+    revision: 0,
+    segments: <PastEditorSegmentViewModel>[],
+  );
+
+  final int revision;
+  final List<PastEditorSegmentViewModel> segments;
+
+  String get text => segments
+      .map((segment) => '${segment.separatorBefore}${segment.text}')
+      .join();
+
+  PastEditorDraft createDraft(String editedText) => PastEditorDraft(
+    baseRevision: revision,
+    baseText: text,
+    baseSegments: segments,
+    text: editedText,
+  );
+}
+
+final class PastEditorDraft {
+  const PastEditorDraft({
+    required this.baseRevision,
+    required this.baseText,
+    required this.baseSegments,
+    required this.text,
+  });
+
+  final int baseRevision;
+  final String baseText;
+  final List<PastEditorSegmentViewModel> baseSegments;
+  final String text;
+}
+
 final class DangguiAppState {
   const DangguiAppState({
     this.tasks = const <TaskViewModel>[],
     this.notes = const <NoteViewModel>[],
     this.folders = const <FolderViewModel>[],
     this.pastBlocks = const <PastBlockViewModel>[],
+    this.pastDocument = PastEditorDocumentViewModel.empty,
     this.settings = const AppSettingsModel(),
     this.searchQuery = '',
   });
@@ -139,6 +202,7 @@ final class DangguiAppState {
   final List<NoteViewModel> notes;
   final List<FolderViewModel> folders;
   final List<PastBlockViewModel> pastBlocks;
+  final PastEditorDocumentViewModel pastDocument;
   final AppSettingsModel settings;
   final String searchQuery;
 
@@ -147,6 +211,7 @@ final class DangguiAppState {
     List<NoteViewModel>? notes,
     List<FolderViewModel>? folders,
     List<PastBlockViewModel>? pastBlocks,
+    PastEditorDocumentViewModel? pastDocument,
     AppSettingsModel? settings,
     String? searchQuery,
   }) {
@@ -155,6 +220,7 @@ final class DangguiAppState {
       notes: notes ?? this.notes,
       folders: folders ?? this.folders,
       pastBlocks: pastBlocks ?? this.pastBlocks,
+      pastDocument: pastDocument ?? this.pastDocument,
       settings: settings ?? this.settings,
       searchQuery: searchQuery ?? this.searchQuery,
     );

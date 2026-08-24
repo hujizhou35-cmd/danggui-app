@@ -1171,8 +1171,17 @@ final class DriftDocumentRepository extends _RepositoryBase
             return old == null || !_samePersistedBlock(old, block);
           })
           .toList(growable: false);
+      final semanticChangedBlockIds = <String>{
+        for (final block in blocksToWrite)
+          if (oldById[block.id] == null ||
+              !_sameSemanticBlock(oldById[block.id]!, block))
+            block.id,
+      };
       final calculatedHashes = await Future.wait<String>([
-        for (final block in blocksToWrite) sha256Hex(_blockHashInput(block)),
+        for (final block in blocksToWrite)
+          semanticChangedBlockIds.contains(block.id)
+              ? sha256Hex(_blockHashInput(block))
+              : Future<String>.value(oldById[block.id]!.semanticHash),
       ]);
       final changedHashes = <String, String>{
         for (var index = 0; index < blocksToWrite.length; index++)
@@ -1237,7 +1246,7 @@ final class DriftDocumentRepository extends _RepositoryBase
       }
       await _remapOrDetachAnchors(deletedIds, replacements);
       await _updateAnchorHashes(blockHashes, <String>{
-        ...changedHashes.keys,
+        ...semanticChangedBlockIds,
         for (final targets in replacements.values) ...targets,
       }, now);
       if (deletedIds.isNotEmpty) {
@@ -1526,6 +1535,13 @@ final class DriftDocumentRepository extends _RepositoryBase
   bool _samePersistedBlock(DocumentBlockRow old, DocumentBlockModel block) =>
       old.parentBlockId == block.parentBlockId &&
       old.sortRank == block.sortRank &&
+      old.blockType == block.blockType &&
+      old.plainText == block.plainText &&
+      old.payloadJson == block.payloadJson &&
+      old.attributesJson == block.attributesJson &&
+      old.isChecked == block.isChecked;
+
+  bool _sameSemanticBlock(DocumentBlockRow old, DocumentBlockModel block) =>
       old.blockType == block.blockType &&
       old.plainText == block.plainText &&
       old.payloadJson == block.payloadJson &&

@@ -17,6 +17,7 @@ import '../../domain/models.dart';
 
 const _snoozeActionPrefix = 'danggui.snooze.';
 const _supportedSnoozeMinutes = <int>[10, 30, 60];
+final _defaultVibrationPattern = Int64List.fromList(<int>[0, 400, 200, 400]);
 
 final notificationStateRevisionProvider =
     NotifierProvider<NotificationStateRevision, int>(
@@ -60,6 +61,48 @@ abstract interface class NotificationGateway {
   Future<void> cancel(int notificationId);
 }
 
+/// Optional platform capability seam used by the production gateway and by
+/// focused tests. Keeping it separate preserves simple notification fakes.
+abstract interface class ReminderCapabilityGateway {
+  Future<ReminderDeliveryCapabilities> deliveryCapabilities({
+    required bool soundEnabled,
+    required bool vibrationEnabled,
+  });
+
+  Future<bool> requestExactAlarmPermission();
+}
+
+final class ReminderDeliveryCapabilities {
+  const ReminderDeliveryCapabilities({
+    required this.notificationsGranted,
+    required this.exactSchedulingAvailable,
+    required this.exactAlarmPermissionRequired,
+    required this.soundAvailable,
+    required this.vibrationAvailable,
+    required this.vibrationControlledBySystem,
+  });
+
+  final bool? notificationsGranted;
+  final bool exactSchedulingAvailable;
+  final bool exactAlarmPermissionRequired;
+  final bool? soundAvailable;
+  final bool? vibrationAvailable;
+  final bool vibrationControlledBySystem;
+
+  bool get precisionRestricted =>
+      exactAlarmPermissionRequired && !exactSchedulingAvailable;
+}
+
+final class ReminderAuthorizationResult {
+  const ReminderAuthorizationResult({
+    required this.notificationsGranted,
+    required this.exactSchedulingAvailable,
+  });
+
+  final bool notificationsGranted;
+  final bool exactSchedulingAvailable;
+}
+
 /// Every string rendered by the operating system for a reminder.
 ///
 /// Keeping this value in the platform seam makes locale selection and category
@@ -92,6 +135,7 @@ final class LocalNotificationRequest {
     required this.soundEnabled,
     required this.vibrationEnabled,
     required this.defaultSnoozeMinutes,
+    required this.exactScheduling,
     required this.payload,
   });
 
@@ -102,6 +146,7 @@ final class LocalNotificationRequest {
   final bool soundEnabled;
   final bool vibrationEnabled;
   final int defaultSnoozeMinutes;
+  final bool exactScheduling;
   final String payload;
 }
 
@@ -130,6 +175,8 @@ final class NotificationCoordinator {
   Completer<void>? _reconcileIdle;
   bool _interruptedJobsRecovered = false;
   bool _startupRescheduleComplete = false;
+  bool _exactSchedulingAvailable = true;
+  bool? _lastExactSchedulingAvailable;
   Timer? _retryTimer;
   bool _disposed = false;
 
@@ -179,8 +226,7 @@ final class NotificationCoordinator {
     }
   }
 
-  /// Requests ordinary notification permission only. It never requests exact
-  /// alarm, full-screen, network, or critical-alert access.
+  /// Requests ordinary notification permission only.
   Future<bool> requestPermissions() async {
     if (!_gateway.isSupported) return true;
     await initialize();
@@ -198,10 +244,79 @@ final class NotificationCoordinator {
     return _gateway.permissionsGranted();
   }
 
+  Future<ReminderDeliveryCapabilities?> deliveryCapabilities({
+    bool soundEnabled = true,
+    bool vibrationEnabled = true,
+  }) async {
+    if (!_gateway.isSupported) return null;
+    await initialize();
+    return _readCapabilities(
+      soundEnabled: soundEnabled,
+      vibrationEnabled: vibrationEnabled,
+    );
+  }
+
+  Future<bool> requestExactAlarmPermission() async {
+    if (!_gateway.isSupported) return true;
+    await initialize();
+    final capabilityGateway = _gateway;
+    if (capabilityGateway is! ReminderCapabilityGateway) return true;
+    final granted = await (capabilityGateway as ReminderCapabilityGateway)
+        .requestExactAlarmPermission();
+    _startupRescheduleComplete = false;
+    await reconcile();
+    return granted;
+  }
+
   /// Checks first so the system prompt is only requested when necessary.
-  Future<bool> ensurePermissionsForFutureReminder() async {
-    if (await permissionsGranted() == true) return true;
-    return requestPermissions();
+  Future<ReminderAuthorizationResult>
+  ensurePermissionsForFutureReminder() async {
+    var notificationsGranted = await permissionsGranted() == true;
+    if (!notificationsGranted) {
+      notificationsGranted = await requestPermissions();
+    }
+    if (!notificationsGranted) {
+      return const ReminderAuthorizationResult(
+        notificationsGranted: false,
+        exactSchedulingAvailable: false,
+      );
+    }
+
+    var capabilities = await deliveryCapabilities();
+    var exactSchedulingAvailable =
+        capabilities?.exactSchedulingAvailable ?? true;
+    if (capabilities?.precisionRestricted == true) {
+      exactSchedulingAvailable = await requestExactAlarmPermission();
+      capabilities = await deliveryCapabilities();
+      exactSchedulingAvailable =
+          capabilities?.exactSchedulingAvailable ?? exactSchedulingAvailable;
+    }
+    return ReminderAuthorizationResult(
+      notificationsGranted: true,
+      exactSchedulingAvailable: exactSchedulingAvailable,
+    );
+  }
+
+  Future<ReminderDeliveryCapabilities> _readCapabilities({
+    required bool soundEnabled,
+    required bool vibrationEnabled,
+  }) async {
+    final capabilityGateway = _gateway;
+    if (capabilityGateway is ReminderCapabilityGateway) {
+      return (capabilityGateway as ReminderCapabilityGateway)
+          .deliveryCapabilities(
+            soundEnabled: soundEnabled,
+            vibrationEnabled: vibrationEnabled,
+          );
+    }
+    return ReminderDeliveryCapabilities(
+      notificationsGranted: await _gateway.permissionsGranted(),
+      exactSchedulingAvailable: true,
+      exactAlarmPermissionRequired: false,
+      soundAvailable: null,
+      vibrationAvailable: null,
+      vibrationControlledBySystem: false,
+    );
   }
 
   /// Persists a permission result after a future reminder's first save. A
@@ -370,9 +485,23 @@ final class NotificationCoordinator {
   Future<void> _reconcileOnce() async {
     final database = await _readDatabase();
     await _initializeForDatabase(database);
+    final capabilities = await _readCapabilities(
+      soundEnabled: true,
+      vibrationEnabled: true,
+    );
+    final exactSchedulingAvailable = capabilities.exactSchedulingAvailable;
+    if (_lastExactSchedulingAvailable != null &&
+        _lastExactSchedulingAvailable != exactSchedulingAvailable) {
+      // Android removes future exact alarms when special access is revoked.
+      // Replacing every future request with the same stable ID also upgrades
+      // inexact fallbacks immediately after the user grants access.
+      _startupRescheduleComplete = false;
+    }
+    _lastExactSchedulingAvailable = exactSchedulingAvailable;
+    _exactSchedulingAvailable = exactSchedulingAvailable;
     final expirationCutoff = _nowMicros();
     await _expirePastReminders(database, expirationCutoff);
-    final permission = await _gateway.permissionsGranted();
+    final permission = capabilities.notificationsGranted;
     if (permission == false) {
       await _markScheduledRemindersPermissionDenied(database);
     } else if (permission == true) {
@@ -425,37 +554,48 @@ final class NotificationCoordinator {
   /// it looking scheduled forever after the operating system has fired it.
   /// Permission-denied reminders also expire without catch-up delivery.
   Future<void> _expirePastReminders(DangguiDatabase database, int now) async {
-    final rows = await database
+    const deliveredGrace = Duration(minutes: 2);
+    const pendingFallbackGrace = Duration(minutes: 75);
+    final deliveredBefore = now - deliveredGrace.inMicroseconds;
+    final pendingFallbackBefore = now - pendingFallbackGrace.inMicroseconds;
+    final candidates = await database
         .customSelect(
-          'SELECT r.id, r.schedule_revision '
+          'SELECT r.id, r.schedule_revision, r.scheduled_at_utc '
           'FROM reminders r JOIN tasks t ON t.id = r.task_id '
           'WHERE r.scheduled_at_utc <= ? AND r.status IN (?, ?) '
           'AND t.status = ?',
           variables: <Variable<Object>>[
-            Variable.withInt(now),
+            Variable.withInt(deliveredBefore),
             Variable.withString(ReminderStatus.scheduled.name),
             Variable.withString(ReminderStatus.permissionDenied.name),
             Variable.withString(TaskStatus.active.name),
           ],
         )
         .get();
-    if (rows.isEmpty) return;
+    if (candidates.isEmpty) return;
 
     // A one-shot request disappears from the plugin's pending list when the
-    // platform receiver has displayed it. Cancelling only IDs that are still
-    // pending prevents an inexact alarm delayed by Doze from appearing after
-    // the reminder is marked expired, while preserving an already-visible
-    // notification and its 10/30/60-minute snooze actions.
+    // platform receiver has displayed it. Historical schedule mode is not
+    // stored, so current exact-alarm access must not retroactively shrink an
+    // inexact request's delivery window. A request that is no longer pending
+    // may expire after two minutes; any still-pending request receives the
+    // conservative 75-minute fallback window before cancellation.
     final pendingIds = await _gateway.pendingNotificationIds();
-    for (final row in rows) {
+    final expiringRows = <QueryRow>[];
+    for (final row in candidates) {
       final notificationId = _notificationId(row.read<String>('id'));
-      if (pendingIds.contains(notificationId)) {
-        await _gateway.cancel(notificationId);
+      final isPending = pendingIds.contains(notificationId);
+      final scheduledAt = row.read<int>('scheduled_at_utc');
+      if (isPending && scheduledAt > pendingFallbackBefore) {
+        continue;
       }
+      if (isPending) await _gateway.cancel(notificationId);
+      expiringRows.add(row);
     }
+    if (expiringRows.isEmpty) return;
 
     await database.transaction(() async {
-      for (final row in rows) {
+      for (final row in expiringRows) {
         final reminderId = row.read<String>('id');
         final previousRevision = row.read<int>('schedule_revision');
         final revision = previousRevision + 1;
@@ -471,7 +611,7 @@ final class NotificationCoordinator {
             Variable.withInt(now),
             Variable.withString(reminderId),
             Variable.withInt(previousRevision),
-            Variable.withInt(now),
+            Variable.withInt(deliveredBefore),
             Variable.withString(ReminderStatus.scheduled.name),
             Variable.withString(ReminderStatus.permissionDenied.name),
           ],
@@ -694,6 +834,7 @@ final class NotificationCoordinator {
         soundEnabled: row.read<bool>('sound_enabled'),
         vibrationEnabled: row.read<bool>('vibration_enabled'),
         defaultSnoozeMinutes: row.read<int>('default_snooze_minutes'),
+        exactScheduling: _exactSchedulingAvailable,
         payload: 'task:${row.read<String>('task_id')}',
       ),
     );
@@ -887,7 +1028,8 @@ final class NotificationCoordinator {
   int _nowMicros() => _nowUtc().toUtc().microsecondsSinceEpoch;
 }
 
-final class _FlutterNotificationGateway implements NotificationGateway {
+final class _FlutterNotificationGateway
+    implements NotificationGateway, ReminderCapabilityGateway {
   _FlutterNotificationGateway({FlutterLocalNotificationsPlugin? plugin})
     : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
 
@@ -967,6 +1109,91 @@ final class _FlutterNotificationGateway implements NotificationGateway {
   }
 
   @override
+  Future<bool> requestExactAlarmPermission() async {
+    if (!Platform.isAndroid) return true;
+    final android = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    final requested = await android?.requestExactAlarmsPermission();
+    if (requested != null) return requested;
+    return await android?.canScheduleExactNotifications() ?? false;
+  }
+
+  @override
+  Future<ReminderDeliveryCapabilities> deliveryCapabilities({
+    required bool soundEnabled,
+    required bool vibrationEnabled,
+  }) async {
+    if (Platform.isAndroid) {
+      final android = _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
+      final notificationsGranted = await android?.areNotificationsEnabled();
+      bool exactSchedulingAvailable;
+      try {
+        exactSchedulingAvailable =
+            await android?.canScheduleExactNotifications() ?? false;
+      } on Object {
+        // Falling back to an inexact alarm is safer than abandoning delivery
+        // when an OEM implementation cannot answer the special-access query.
+        exactSchedulingAvailable = false;
+      }
+      AndroidNotificationChannel? selectedChannel;
+      try {
+        final channels = await android?.getNotificationChannels();
+        if (channels != null) {
+          final expectedId = _reminderChannelId(
+            soundEnabled: soundEnabled,
+            vibrationEnabled: vibrationEnabled,
+          );
+          for (final channel in channels) {
+            if (channel.id == expectedId) {
+              selectedChannel = channel;
+              break;
+            }
+          }
+        }
+      } on Object {
+        // Channel diagnostics are advisory. Scheduling must continue when an
+        // OEM omits or rejects the channel-list API.
+      }
+      final channelEnabled =
+          selectedChannel == null ||
+          selectedChannel.importance.value > Importance.none.value;
+      return ReminderDeliveryCapabilities(
+        notificationsGranted: notificationsGranted,
+        exactSchedulingAvailable: exactSchedulingAvailable,
+        exactAlarmPermissionRequired: !exactSchedulingAvailable,
+        soundAvailable: !soundEnabled || selectedChannel == null
+            ? null
+            : channelEnabled && selectedChannel.playSound,
+        vibrationAvailable: !vibrationEnabled || selectedChannel == null
+            ? null
+            : channelEnabled && selectedChannel.enableVibration,
+        vibrationControlledBySystem: false,
+      );
+    }
+
+    final options = await _plugin
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >()
+        ?.checkPermissions();
+    return ReminderDeliveryCapabilities(
+      notificationsGranted: options?.isEnabled,
+      exactSchedulingAvailable: true,
+      exactAlarmPermissionRequired: false,
+      soundAvailable: !soundEnabled || options == null
+          ? null
+          : options.isAlertEnabled && options.isSoundEnabled,
+      vibrationAvailable: null,
+      vibrationControlledBySystem: true,
+    );
+  }
+
+  @override
   Future<bool?> permissionsGranted() async {
     if (Platform.isAndroid) {
       return _plugin
@@ -995,9 +1222,6 @@ final class _FlutterNotificationGateway implements NotificationGateway {
     if (presentation == null) {
       throw StateError('Notification gateway has not been initialized.');
     }
-    final channelSuffix =
-        '${request.soundEnabled ? 'sound' : 'silent'}-'
-        '${request.vibrationEnabled ? 'vibrate' : 'steady'}';
     return _plugin.zonedSchedule(
       id: request.notificationId,
       title: request.title,
@@ -1005,7 +1229,10 @@ final class _FlutterNotificationGateway implements NotificationGateway {
       scheduledDate: tz.TZDateTime.from(request.scheduledAtUtc, tz.UTC),
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
-          'danggui-reminders-$channelSuffix',
+          _reminderChannelId(
+            soundEnabled: request.soundEnabled,
+            vibrationEnabled: request.vibrationEnabled,
+          ),
           presentation.channelName,
           channelDescription: presentation.channelDescription,
           importance: Importance.high,
@@ -1014,6 +1241,9 @@ final class _FlutterNotificationGateway implements NotificationGateway {
           icon: 'ic_stat_danggui',
           playSound: request.soundEnabled,
           enableVibration: request.vibrationEnabled,
+          vibrationPattern: request.vibrationEnabled
+              ? _defaultVibrationPattern
+              : null,
           actions: <AndroidNotificationAction>[
             for (final minutes in _orderedSnoozeMinutes(
               request.defaultSnoozeMinutes,
@@ -1033,8 +1263,9 @@ final class _FlutterNotificationGateway implements NotificationGateway {
           categoryIdentifier: _categoryId(request.defaultSnoozeMinutes),
         ),
       ),
-      // Deliberately inexact: no exact-alarm permission is requested.
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      androidScheduleMode: request.exactScheduling
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle,
       payload: request.payload,
     );
   }
@@ -1042,6 +1273,14 @@ final class _FlutterNotificationGateway implements NotificationGateway {
   @override
   Future<void> cancel(int notificationId) => _plugin.cancel(id: notificationId);
 }
+
+String _reminderChannelId({
+  required bool soundEnabled,
+  required bool vibrationEnabled,
+}) =>
+    'danggui-reminders-'
+    '${soundEnabled ? 'sound' : 'silent'}-'
+    '${vibrationEnabled ? 'vibrate' : 'steady'}';
 
 DateTime _systemNowUtc() => DateTime.now().toUtc();
 

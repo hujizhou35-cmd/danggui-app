@@ -12,11 +12,11 @@ import '../../core/theme/theme.dart';
 ///
 /// [minimumDisplayDuration] is injectable so widget tests can advance a fake
 /// clock without slowing down. Production keeps the complete composition on
-/// screen for at least one second, even when local initialization is instant.
+/// screen for at least 1.2 seconds, even when local initialization is instant.
 class StartupPage extends ConsumerStatefulWidget {
   const StartupPage({
     super.key,
-    this.minimumDisplayDuration = const Duration(seconds: 1),
+    this.minimumDisplayDuration = const Duration(milliseconds: 1200),
     this.artworkAsset = 'assets/brand/danggui-launch-artwork.png',
     this.artworkReadyTimeout = const Duration(seconds: 3),
   });

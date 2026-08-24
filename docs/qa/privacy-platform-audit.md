@@ -1,4 +1,4 @@
-# 当归 1.1.0 隐私与平台发布前审计
+# 当归 1.1.2 隐私与平台发布前审计
 
 - 审计日期：2026-08-24
 - 审计对象：Android 与 iOS 的已检入源配置、Dart 生产源码、`pubspec.lock`，以及执行 `flutter pub get` 后解析到的移动端原生插件元数据。
@@ -6,7 +6,7 @@
 
 ## 结论
 
-当前源配置符合上述应用级离线边界。Android 源清单只有本地提醒所需的三个权限；iOS 没有 entitlement 文件、远程通知 entitlement、后台网络模式或联网能力；生产 Dart 与原生入口未发现网络 API 或硬编码远端地址；运行时依赖采用显式允许名单，锁文件中的托管包均带 SHA-256，且没有 git/path 依赖。
+当前源配置符合上述应用级离线边界。Android 源清单只有本地提醒所需的四个权限；iOS 没有 entitlement 文件、远程通知 entitlement、后台网络模式或联网能力；生产 Dart 与原生入口未发现网络 API 或硬编码远端地址；运行时依赖采用显式允许名单，锁文件中的托管包均带 SHA-256，且没有 git/path 依赖。
 
 这一结论是“源配置验证”，不是对尚未生成的最终 APK、AAB 或未来签名 IPA 的替代证明。最终 Android APK 必须继续通过 `tool/verify_android_artifacts.ps1` 或 CI 中对应的 shell 检查；iOS 当前只交付确定性源码 ZIP 和未签名编译证据，不声明已完成签名 IPA 审计。源码 ZIP 从干净标签的全部 Git 跟踪内容生成，保留跨平台工程与测试，并在打包后拒绝密钥、证书、描述文件、`.env`、缓存、`build` 和 `dist`。
 
@@ -15,11 +15,11 @@
 | 范围 | 验证结果 | 自动化门禁 |
 | --- | --- | --- |
 | 应用身份 | Android `namespace`/`applicationId` 与 iOS bundle ID 均为 `com.danggui.memo` | Dart 审计 + 平台静态测试 + APK 检查 |
-| 版本 | `1.1.0+2`；设置显示产品版本 `1.1.0`，备份/导出记录技术版本；平台构建值均从 `pubspec.yaml` 派生 | Dart 审计 + APK 检查 + iOS 构建脚本 |
+| 版本 | `1.1.2+3`；帮助与隐私和许可页显示产品版本 `1.1.2`，备份/导出记录技术版本；平台构建值均从 `pubspec.yaml` 派生 | Dart 审计 + APK 检查 + iOS 构建脚本 |
 | Android SDK | min 24、target 36、compile 36；Java/Kotlin 17 | Dart 审计 + APK 检查 |
 | iOS 目标 | iOS 15.0；iPhone/iPad 均只允许竖屏 | Dart 审计 + iOS 构建脚本 |
-| Android 权限 | 仅 `POST_NOTIFICATIONS`、`VIBRATE`、`RECEIVE_BOOT_COMPLETED` | 源清单精确集合 + 解析插件清单 + 最终 APK 精确集合 |
-| 提醒能力 | 使用 `inexactAllowWhileIdle`；无精确闹钟、全屏通知或前台服务权限 | 源码模式检查 + 最终 APK 权限检查 |
+| Android 权限 | 仅 `POST_NOTIFICATIONS`、`VIBRATE`、`RECEIVE_BOOT_COMPLETED`、`SCHEDULE_EXACT_ALARM`；继续禁止 `USE_EXACT_ALARM` | 源清单精确集合 + 解析插件清单 + 最终 APK 精确集合 |
+| 提醒能力 | 精确访问开启时使用 `exactAllowWhileIdle`；拒绝时保留时间并明确降级 `inexactAllowWhileIdle`；已不 pending 的请求 2 分钟后收尾，仍 pending 最多保留 75 分钟且不按当前权限追溯缩短；无 `USE_EXACT_ALARM`、全屏通知、勿扰模式绕过或前台服务权限 | 源码模式检查 + 最终 APK 权限检查 |
 | iOS 通知 | 仅本地 `UserNotifications`；无 `aps-environment`、远程注册或 `remote-notification` 后台模式 | plist/pbxproj/entitlement/原生源码扫描 |
 | 网络边界 | 无 INTERNET/网络状态权限，无 ATS 放宽，无 Dart/Android/iOS 网络 API，无远端端点 | 多语言静态扫描 + 最终 APK 权限检查 |
 | 数据备份 | Android 系统云备份和设备迁移覆盖 root/file/database/sharedpref/external 全部排除；iOS 每次启动对 Application Support/danggui 设置排除提示 | 清单/XML、AppDelegate 与负向篡改检查 |
@@ -32,8 +32,9 @@
 - `POST_NOTIFICATIONS`：Android 13+ 首次创建未来提醒时由用户授权；拒绝后应用记录状态并继续提供无通知的本地功能。
 - `VIBRATE`：实现用户可选的本地提醒振动。
 - `RECEIVE_BOOT_COMPLETED`：设备重启或应用更新后恢复已排期的本地提醒。
+- `SCHEDULE_EXACT_ALARM`：为用户主动创建的本地事项提醒申请可撤销特殊访问；拒绝后不丢弃提醒时间，改用可能延迟的非精确调度并在界面说明。
 
-未声明 `INTERNET`、`ACCESS_NETWORK_STATE`、`SCHEDULE_EXACT_ALARM`、`USE_EXACT_ALARM`、`USE_FULL_SCREEN_INTENT`、广告 ID、存储、定位、相机或麦克风权限。`PROCESS_TEXT` 的 `<queries>` 只是 Flutter 文本处理所需的包可见性声明，不是权限，也不提供网络访问。
+未声明 `INTERNET`、`ACCESS_NETWORK_STATE`、`USE_EXACT_ALARM`、`USE_FULL_SCREEN_INTENT`、勿扰模式访问、广告 ID、存储、定位、相机或麦克风权限。`SCHEDULE_EXACT_ALARM` 只用于用户可撤销的本地精确提醒特殊访问；拒绝后仍以非精确提醒降级。`PROCESS_TEXT` 的 `<queries>` 只是 Flutter 文本处理所需的包可见性声明，不是权限，也不提供网络访问。
 
 ## iOS 能力与备份说明
 
@@ -64,7 +65,7 @@ dart run tool/audit_offline_boundary.dart
 flutter test test/platform/privacy_platform_config_test.dart --reporter expanded
 ```
 
-静态测试还会在临时副本中主动注入 INTERNET/精确闹钟/全屏通知权限、Firebase 依赖、精确调度 API、HTTPS 端点和 iOS entitlement，并破坏 iOS 系统备份排除及 Keychain 本机限定选项，确认审计器会失败关闭，而不是只验证当前“恰好通过”的文件。
+静态测试还会在临时副本中主动注入 INTERNET/`USE_EXACT_ALARM`/全屏通知权限、Firebase 依赖、未受控精确调度 API、HTTPS 端点和 iOS entitlement，并破坏 iOS 系统备份排除及 Keychain 本机限定选项，确认审计器会失败关闭，而不是只验证当前“恰好通过”的文件。
 
 ## 源配置与最终产物的边界
 
