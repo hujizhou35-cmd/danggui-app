@@ -686,7 +686,7 @@ run_retry_gate_tests() {
   rm -rf -- "${case_root}"
 }
 
-run_alarm_dump_contract_tests() {
+run_alarm_dump_contract_tests() (
   local case_root
   local active_dump
   local cancellation_dump
@@ -724,7 +724,7 @@ run_alarm_dump_contract_tests() {
     return 1
   fi
   rm -rf -- "${case_root}"
-}
+)
 
 run_health_case healthy 1 0 false
 run_health_case launcher-then-systemui 1 0 false
@@ -742,12 +742,12 @@ run_health_case app-query-failure 1 1 false
 run_health_case timeout 2 75 false
 run_classifier_contract_tests
 run_product_failure_precedence_tests
-run_alarm_dump_contract_tests
 if command -v setsid >/dev/null; then
   run_process_group_termination_test
 else
   echo 'Process-group runtime self-test skipped: setsid is unavailable.'
 fi
+run_alarm_dump_contract_tests
 run_retry_gate_tests
 
 echo 'Android emulator infrastructure health/retry self-test passed.'
