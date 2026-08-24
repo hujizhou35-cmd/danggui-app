@@ -56,7 +56,7 @@ fi
 tracked_manifest="$(git ls-tree -r --name-only HEAD | LC_ALL=C sort)"
 archive_manifest="$(
   sed -n "s#^${prefix}##p" <<<"${archive_contents}" |
-    sed '/\/$/d' |
+    sed -e '/^$/d' -e '/\/$/d' |
     LC_ALL=C sort
 )"
 if ! diff -u \
