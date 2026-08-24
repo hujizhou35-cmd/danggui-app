@@ -275,17 +275,21 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
             SettingsTile(
               title: l10n.vibration,
-              subtitle: copy.vibrationHint,
-              trailing: DangguiSwitch(
-                value: settings.defaultVibrationEnabled,
-                semanticLabel: l10n.vibration,
-                size: DangguiSwitchSize.compact,
-                onChanged: enabled
-                    ? (value) => _save(
-                        settings.copyWith(defaultVibrationEnabled: value),
-                      )
-                    : null,
-              ),
+              subtitle: Theme.of(context).platform == TargetPlatform.iOS
+                  ? l10n.reminderVibrationSystemControlled
+                  : copy.vibrationHint,
+              trailing: Theme.of(context).platform == TargetPlatform.iOS
+                  ? const Icon(Icons.phone_iphone_rounded)
+                  : DangguiSwitch(
+                      value: settings.defaultVibrationEnabled,
+                      semanticLabel: l10n.vibration,
+                      size: DangguiSwitchSize.compact,
+                      onChanged: enabled
+                          ? (value) => _save(
+                              settings.copyWith(defaultVibrationEnabled: value),
+                            )
+                          : null,
+                    ),
             ),
             SettingsTile(
               title: l10n.snooze,
@@ -715,18 +719,36 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _requestNotificationPermission() async {
-    bool granted;
+    var granted = false;
+    var exactSchedulingAvailable = true;
+    NotificationCoordinator? notifications;
     try {
-      granted = await ref
-          .read(notificationCoordinatorProvider)
-          .requestPermissions();
-    } catch (_) {
+      final coordinator = ref.read(notificationCoordinatorProvider);
+      notifications = coordinator;
+      granted = await coordinator.requestPermissions();
+    } on Object {
       granted = false;
+    }
+    if (granted && notifications != null) {
+      try {
+        exactSchedulingAvailable = await notifications
+            .requestExactAlarmPermission();
+      } on Object {
+        // Ordinary notification access remains granted even if the platform
+        // cannot open or query Android's separate exact-alarm settings page.
+        exactSchedulingAvailable = false;
+      }
     }
     if (!mounted) return;
     final l10n = AppLocalizations.of(context);
     final copy = _SettingsCopy.of(context);
-    _showMessage(granted ? copy.permissionGranted : l10n.permissionDenied);
+    _showMessage(
+      !granted
+          ? l10n.permissionDenied
+          : exactSchedulingAvailable
+          ? copy.permissionGranted
+          : l10n.reminderStatusPrecisionLimited,
+    );
   }
 
   Future<void> _restoreBackup() async {
@@ -1589,7 +1611,7 @@ final class _SettingsCopy {
     textSizeHint: '同时调整事项、过往、笔记与帮助',
     densityHint: '调整事项卡片的留白',
     notificationPermission: '通知权限',
-    notificationPermissionHint: '仅用于本地事项提醒',
+    notificationPermissionHint: '用于本地通知与精确提醒；精确权限可拒绝',
     permissionGranted: '通知权限已开启',
     soundHint: '新提醒默认播放声音',
     vibrationHint: '可与声音独立设置',
@@ -1668,7 +1690,7 @@ final class _SettingsCopy {
     textSizeHint: 'Applies to Tasks, Past, Notes, and Help',
     densityHint: 'Adjust spacing inside task cards',
     notificationPermission: 'Notification permission',
-    notificationPermissionHint: 'Used only for local task reminders',
+    notificationPermissionHint: 'For local notifications and exact timing',
     permissionGranted: 'Notifications are enabled',
     soundHint: 'Play sound for new reminders by default',
     vibrationHint: 'Can be configured independently from sound',
@@ -1748,7 +1770,7 @@ final class _SettingsCopy {
     textSizeHint: '事項・過往・ノート・ヘルプに適用',
     densityHint: '事項カードの余白を調整',
     notificationPermission: '通知の権限',
-    notificationPermissionHint: '端末内の事項通知だけに使用',
+    notificationPermissionHint: 'ローカル通知と正確な時刻指定に使用',
     permissionGranted: '通知が有効です',
     soundHint: '新しい通知で音を鳴らす',
     vibrationHint: '音とは別に設定できます',
@@ -1828,7 +1850,7 @@ final class _SettingsCopy {
     textSizeHint: 'Для дел, прошлого, заметок и справки',
     densityHint: 'Интервалы внутри карточек дел',
     notificationPermission: 'Разрешение на уведомления',
-    notificationPermissionHint: 'Только для локальных напоминаний',
+    notificationPermissionHint: 'Для локальных уведомлений и точного времени',
     permissionGranted: 'Уведомления разрешены',
     soundHint: 'Звук для новых напоминаний по умолчанию',
     vibrationHint: 'Настраивается независимо от звука',

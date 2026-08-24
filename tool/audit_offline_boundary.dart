@@ -10,6 +10,7 @@ const String expectedIosDeploymentTarget = '15.0';
 const Set<String> expectedAndroidPermissions = <String>{
   'android.permission.POST_NOTIFICATIONS',
   'android.permission.RECEIVE_BOOT_COMPLETED',
+  'android.permission.SCHEDULE_EXACT_ALARM',
   'android.permission.VIBRATE',
 };
 
@@ -459,8 +460,8 @@ final class _Audit {
         manifestPath,
         manifest,
         RegExp(
-          r'android\.permission\.(INTERNET|SCHEDULE_EXACT_ALARM|'
-          r'USE_EXACT_ALARM|USE_FULL_SCREEN_INTENT|ACCESS_NETWORK_STATE|'
+          r'android\.permission\.(INTERNET|USE_EXACT_ALARM|'
+          r'USE_FULL_SCREEN_INTENT|ACCESS_NETWORK_STATE|'
           r'AD_ID|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|'
           r'READ_MEDIA_|ACCESS_FINE_LOCATION|ACCESS_COARSE_LOCATION|'
           r'CAMERA|RECORD_AUDIO)',
@@ -557,17 +558,29 @@ final class _Audit {
       _expectContains(
         'lib/src/services/notifications/notification_coordinator.dart',
         notificationSource,
+        'AndroidScheduleMode.exactAllowWhileIdle',
+        'Android reminders must use exact allow-while-idle when access exists',
+      );
+      _expectContains(
+        'lib/src/services/notifications/notification_coordinator.dart',
+        notificationSource,
         'AndroidScheduleMode.inexactAllowWhileIdle',
-        'Android reminders must use the inexact allow-while-idle mode',
+        'Android reminders must retain an inexact permission-denied fallback',
+      );
+      _expectContains(
+        'lib/src/services/notifications/notification_coordinator.dart',
+        notificationSource,
+        'requestExactAlarmsPermission',
+        'Android exact-alarm special access must be requested explicitly',
       );
       _expectNoMatch(
         'lib/src/services/notifications/notification_coordinator.dart',
         notificationSource,
         RegExp(
-          r'AndroidScheduleMode\.(exact|exactAllowWhileIdle|alarmClock)\b|'
-          r'fullScreenIntent\s*:\s*true|requestExactAlarmsPermission',
+          r'AndroidScheduleMode\.(exact|alarmClock)\b|'
+          r'fullScreenIntent\s*:\s*true',
         ),
-        'exact-alarm or full-screen notification API',
+        'alarm-clock or full-screen notification API',
       );
     }
 

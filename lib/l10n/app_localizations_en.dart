@@ -365,13 +365,31 @@ class AppLocalizationsEn extends AppLocalizations {
       'Permission restricted; reminder time saved';
 
   @override
+  String get reminderStatusPrecisionLimited =>
+      'Scheduled, but exact reminder access is off and delivery may be delayed';
+
+  @override
+  String get reminderStatusSystemDeliveryLimited =>
+      'Scheduled, but the system disabled sound or vibration for this reminder';
+
+  @override
   String get reminderStatusTaskClosed => 'Task closed; reminder paused';
 
   @override
   String get reminderStatusPaused => 'Reminder paused';
 
   @override
+  String get enableExactReminders => 'Enable exact reminders';
+
+  @override
   String get openNotificationSettings => 'Open notification settings';
+
+  @override
+  String get reminderVibrationSystemControlled =>
+      'Vibration is controlled by iOS notification settings';
+
+  @override
+  String get saved => 'Saved';
 
   @override
   String get backupCreated => 'Backup created';

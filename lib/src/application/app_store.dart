@@ -1116,6 +1116,135 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
   /// Replaces the editable Past document while preserving stable block ids
   /// around the changed range and recording explicit split/merge mappings for
   /// provenance anchors inside that range.
+  Future<PastEditorDocumentViewModel> replacePastEditorDocument(
+    PastEditorDraft draft,
+  ) async {
+    final database = await ref.read(databaseProvider.future);
+    final document = await database
+        .customSelect(
+          'SELECT id, revision FROM documents WHERE singleton_key = ?',
+          variables: <Variable<Object>>[Variable.withString('past.main')],
+        )
+        .getSingle();
+    final documentId = document.read<String>('id');
+    final currentRevision = document.read<int>('revision');
+    final serializedBase = _serializePastEditorSegments(draft.baseSegments);
+    if (serializedBase != draft.baseText) {
+      throw const ValidationException('过往编辑基线无效。');
+    }
+    if (draft.text == draft.baseText) {
+      if (state.value?.pastDocument.revision != currentRevision) {
+        await refresh();
+      }
+      return state.requireValue.pastDocument;
+    }
+    if (currentRevision != draft.baseRevision) {
+      throw const StateConflictException('过往已在其他操作中更新。');
+    }
+
+    final oldRows = await database
+        .customSelect(
+          'SELECT id, parent_block_id, sort_rank, block_type, plain_text, '
+          'payload_json, attributes_json, is_checked FROM document_blocks '
+          'WHERE document_id = ? ORDER BY sort_rank, id',
+          variables: <Variable<Object>>[Variable.withString(documentId)],
+        )
+        .get();
+    final oldById = <String, QueryRow>{
+      for (final row in oldRows) row.read<String>('id'): row,
+    };
+    final projectedBlockIds = <String>[];
+    for (final segment in draft.baseSegments) {
+      projectedBlockIds.addAll(segment.sourceBlockIds);
+    }
+    if (projectedBlockIds.length != projectedBlockIds.toSet().length ||
+        projectedBlockIds.toSet().difference(oldById.keys.toSet()).isNotEmpty ||
+        oldById.keys.toSet().difference(projectedBlockIds.toSet()).isNotEmpty) {
+      throw const StateConflictException('过往编辑基线与当前文档不一致。');
+    }
+
+    final editedLines = _parsePastProjectedLines(draft.text);
+    final matches = _matchPastProjectionLines(draft.baseSegments, editedLines);
+    final matchedBaseIndexes = matches.values.toSet();
+    if (matches.length == editedLines.length &&
+        matchedBaseIndexes.length == draft.baseSegments.length &&
+        matches.entries.every((match) => match.key == match.value)) {
+      // The user only changed synthetic whitespace between projected rows.
+      // Keep the database untouched and return the canonical projection.
+      return state.requireValue.pastDocument;
+    }
+
+    final oldModels = <String, DocumentBlockModel>{
+      for (final row in oldRows)
+        row.read<String>('id'): _pastDocumentBlockFromRow(row, documentId),
+    };
+    final newBlocksByLine = <int, DocumentBlockModel>{};
+    final unmatchedLineIndexes = <int>[
+      for (var index = 0; index < editedLines.length; index++)
+        if (!matches.containsKey(index)) index,
+    ];
+    for (final lineIndex in unmatchedLineIndexes) {
+      final parsed = _parsePastProjectedLine(editedLines[lineIndex]);
+      newBlocksByLine[lineIndex] = DocumentBlockModel(
+        id: _uuid.v4(),
+        documentId: DocumentId(documentId),
+        sortRank: 0,
+        blockType: parsed.type,
+        plainText: parsed.text,
+        isChecked: parsed.isChecked,
+      );
+    }
+
+    final unmatchedBaseIndexes = <int>[
+      for (var index = 0; index < draft.baseSegments.length; index++)
+        if (!matchedBaseIndexes.contains(index)) index,
+    ];
+    final replacementLineByBase = _matchPastReplacementSegments(
+      baseSegments: draft.baseSegments,
+      editedLines: editedLines,
+      unmatchedBaseIndexes: unmatchedBaseIndexes,
+      unmatchedLineIndexes: unmatchedLineIndexes,
+    );
+    final replacements = <String, List<String>>{};
+    for (final baseIndex in unmatchedBaseIndexes) {
+      final segment = draft.baseSegments[baseIndex];
+      final replacementLine = replacementLineByBase[baseIndex];
+      final targets = replacementLine == null
+          ? const <String>[]
+          : <String>[newBlocksByLine[replacementLine]!.id];
+      for (final sourceBlockId in segment.sourceBlockIds) {
+        replacements[sourceBlockId] = targets;
+      }
+    }
+
+    final blocks = <DocumentBlockModel>[];
+    var nextSortRank = 1024;
+    for (var index = 0; index < editedLines.length; index++) {
+      final baseIndex = matches[index];
+      if (baseIndex == null) {
+        blocks.add(
+          _pastDocumentBlockWithRank(newBlocksByLine[index]!, nextSortRank),
+        );
+        nextSortRank += 1024;
+        continue;
+      }
+      for (final blockId in draft.baseSegments[baseIndex].sourceBlockIds) {
+        blocks.add(
+          _pastDocumentBlockWithRank(oldModels[blockId]!, nextSortRank),
+        );
+        nextSortRank += 1024;
+      }
+    }
+    await DriftDocumentRepository(database).replaceBlocks(
+      DocumentId(documentId),
+      blocks,
+      expectedRevision: currentRevision,
+      replacements: replacements,
+    );
+    await refresh();
+    return state.requireValue.pastDocument;
+  }
+
   Future<void> replacePastDocumentText(String text) async {
     final database = await ref.read(databaseProvider.future);
     final document = await database
@@ -1407,12 +1536,38 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         ),
     ];
 
+    final pastDocumentRow = await database
+        .customSelect(
+          'SELECT id, revision FROM documents WHERE singleton_key = ?',
+          variables: <Variable<Object>>[Variable.withString('past.main')],
+        )
+        .getSingle();
     final pastRows = await database
         .customSelect(
-          'SELECT b.id, b.block_type, b.plain_text, b.is_checked '
+          'SELECT b.id, b.sort_rank, b.block_type, b.plain_text, b.is_checked '
           'FROM document_blocks b JOIN documents d ON d.id = b.document_id '
           'WHERE d.singleton_key = ? ORDER BY b.sort_rank, b.id',
           variables: <Variable<Object>>[Variable.withString('past.main')],
+        )
+        .get();
+    final pastEventRows = await database
+        .customSelect(
+          'SELECT e.id AS event_id, e.append_sequence, '
+          'e.completion_local_date, e.anchor_state, p.role, p.source_order, '
+          'l.id AS link_id, l.current_block_id, l.link_state '
+          'FROM past_events e '
+          'LEFT JOIN past_event_parts p ON p.event_id = e.id '
+          'LEFT JOIN past_anchor_links l ON l.part_id = p.id '
+          'WHERE e.document_id = ? '
+          'ORDER BY e.append_sequence, p.source_order, l.id',
+          variables: <Variable<Object>>[
+            Variable.withString(pastDocumentRow.read<String>('id')),
+          ],
+          readsFrom: <ResultSetImplementation>{
+            database.pastEvents,
+            database.pastEventParts,
+            database.pastAnchorLinks,
+          },
         )
         .get();
     final pastBlocks = <PastBlockViewModel>[
@@ -1428,6 +1583,11 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           isChecked: row.readNullable<bool>('is_checked'),
         ),
     ];
+    final pastDocument = _buildPastEditorDocument(
+      revision: pastDocumentRow.read<int>('revision'),
+      blockRows: pastRows,
+      eventRows: pastEventRows,
+    );
 
     final settingsRow = await database
         .customSelect('SELECT * FROM app_settings WHERE id = 1')
@@ -1468,6 +1628,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       notes: notes,
       folders: folders,
       pastBlocks: pastBlocks,
+      pastDocument: pastDocument,
       settings: settings,
     );
   }
@@ -1878,6 +2039,239 @@ DateTime? _fromMicros(int? value) {
   return DateTime.fromMicrosecondsSinceEpoch(value, isUtc: true).toLocal();
 }
 
+PastEditorDocumentViewModel _buildPastEditorDocument({
+  required int revision,
+  required List<QueryRow> blockRows,
+  required List<QueryRow> eventRows,
+}) {
+  final blockIndexes = <String, int>{};
+  final blocksById = <String, PastBlockViewModel>{};
+  for (var index = 0; index < blockRows.length; index++) {
+    final row = blockRows[index];
+    final id = row.read<String>('id');
+    blockIndexes[id] = index;
+    blocksById[id] = PastBlockViewModel(
+      id: id,
+      type: _enumByName(
+        DocumentBlockType.values,
+        row.read<String>('block_type'),
+        DocumentBlockType.paragraph,
+      ),
+      text: row.read<String>('plain_text'),
+      isChecked: row.readNullable<bool>('is_checked'),
+    );
+  }
+
+  final events = <String, _PastProjectionEvent>{};
+  for (final row in eventRows) {
+    final eventId = row.read<String>('event_id');
+    final event = events.putIfAbsent(
+      eventId,
+      () => _PastProjectionEvent(
+        id: eventId,
+        completionLocalDate: row.read<String>('completion_local_date'),
+        appendSequence: row.read<int>('append_sequence'),
+      ),
+    );
+    final roleName = row.readNullable<String>('role');
+    final blockId = row.readNullable<String>('current_block_id');
+    if (roleName == null ||
+        blockId == null ||
+        row.readNullable<String>('link_state') != AnchorLinkState.linked.name ||
+        !blocksById.containsKey(blockId)) {
+      continue;
+    }
+    final role = _nullableEnumByName(PastPartRole.values, roleName);
+    if (role == null) continue;
+    event.links.add(
+      _PastProjectionLink(
+        role: role,
+        sourceOrder: row.read<int>('source_order'),
+        blockId: blockId,
+      ),
+    );
+  }
+
+  final blockEventIds = <String, Set<String>>{};
+  for (final event in events.values) {
+    for (final link in event.links) {
+      blockEventIds.putIfAbsent(link.blockId, () => <String>{}).add(event.id);
+    }
+  }
+  final eligibleByFirstIndex = <int, _PastProjectionEvent>{};
+  final claimedBlockIds = <String>{};
+  final orderedEvents = events.values.toList(
+    growable: false,
+  )..sort((left, right) => left.appendSequence.compareTo(right.appendSequence));
+  for (final event in orderedEvents) {
+    final hasTitle = event.links.any((link) => link.role == PastPartRole.title);
+    final hasTime = event.links.any((link) => link.role == PastPartRole.time);
+    final sourceBlockIds =
+        event.links.map((link) => link.blockId).toSet().toList(growable: false)
+          ..sort(
+            (left, right) =>
+                blockIndexes[left]!.compareTo(blockIndexes[right]!),
+          );
+    if (!hasTitle || !hasTime || sourceBlockIds.isEmpty) continue;
+    if (sourceBlockIds.any((id) => (blockEventIds[id]?.length ?? 0) != 1)) {
+      continue;
+    }
+    final indexes = sourceBlockIds
+        .map((id) => blockIndexes[id]!)
+        .toList(growable: false);
+    final first = indexes.first;
+    final last = indexes.last;
+    if (last - first + 1 != indexes.length ||
+        sourceBlockIds.any(claimedBlockIds.contains)) {
+      continue;
+    }
+    event.sourceBlockIds = sourceBlockIds;
+    eligibleByFirstIndex[first] = event;
+    claimedBlockIds.addAll(sourceBlockIds);
+  }
+
+  final segments = <PastEditorSegmentViewModel>[];
+  var number = 0;
+  String separatorFor(PastEditorSegmentKind kind) {
+    if (segments.isEmpty) return '';
+    return kind == PastEditorSegmentKind.dateHeading ? '\n\n' : '\n';
+  }
+
+  for (var index = 0; index < blockRows.length; index++) {
+    final row = blockRows[index];
+    final blockId = row.read<String>('id');
+    final event = eligibleByFirstIndex[index];
+    if (event != null) {
+      final text = _pastEventProjectionText(event, blocksById);
+      if (text.isNotEmpty) {
+        segments.add(
+          PastEditorSegmentViewModel(
+            id: 'event:${event.id}',
+            kind: PastEditorSegmentKind.event,
+            text: text,
+            separatorBefore: separatorFor(PastEditorSegmentKind.event),
+            sourceBlockIds: event.sourceBlockIds,
+            eventId: event.id,
+            completionLocalDate: event.completionLocalDate,
+          ),
+        );
+      }
+      continue;
+    }
+    if (claimedBlockIds.contains(blockId)) continue;
+    final block = blocksById[blockId]!;
+    if (block.type == DocumentBlockType.numbered) number++;
+    final kind = block.type == DocumentBlockType.pastDate
+        ? PastEditorSegmentKind.dateHeading
+        : PastEditorSegmentKind.freeform;
+    segments.add(
+      PastEditorSegmentViewModel(
+        id: 'block:$blockId',
+        kind: kind,
+        text: _pastProjectionBlockText(block, number: number),
+        separatorBefore: separatorFor(kind),
+        sourceBlockIds: <String>[blockId],
+        completionLocalDate: kind == PastEditorSegmentKind.dateHeading
+            ? block.text
+            : null,
+      ),
+    );
+  }
+  return PastEditorDocumentViewModel(revision: revision, segments: segments);
+}
+
+String _pastEventProjectionText(
+  _PastProjectionEvent event,
+  Map<String, PastBlockViewModel> blocksById,
+) {
+  final usedBlockIds = <String>{};
+  List<String> take(Set<PastPartRole> roles, {bool calendar = false}) {
+    final values = <String>[];
+    final links = event.links.toList(growable: false)
+      ..sort((left, right) => left.sourceOrder.compareTo(right.sourceOrder));
+    for (final link in links) {
+      if (!roles.contains(link.role) || !usedBlockIds.add(link.blockId)) {
+        continue;
+      }
+      final block = blocksById[link.blockId];
+      if (block == null) continue;
+      var value = _pastProjectionBlockText(block).trim();
+      if (value.isEmpty) continue;
+      if (calendar) value = _pastCalendarProjectionText(value);
+      values.add(value);
+    }
+    return values;
+  }
+
+  final core = <String>[
+    ...take(const <PastPartRole>{PastPartRole.title}),
+    ...take(const <PastPartRole>{PastPartRole.time}),
+    ...take(const <PastPartRole>{PastPartRole.dueDate}, calendar: true),
+  ];
+  final details = <String>[
+    ...take(const <PastPartRole>{PastPartRole.body, PastPartRole.checklist}),
+    ...take(const <PastPartRole>{PastPartRole.plan}),
+  ];
+  for (final blockId in event.sourceBlockIds) {
+    if (!usedBlockIds.add(blockId)) continue;
+    final block = blocksById[blockId];
+    if (block == null) continue;
+    final value = _pastProjectionBlockText(block).trim();
+    if (value.isNotEmpty) details.add(value);
+  }
+  final coreText = core.join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+  final detailText = details.join(' · ').replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (coreText.isEmpty) return detailText;
+  if (detailText.isEmpty) return coreText;
+  return '$coreText · $detailText';
+}
+
+String _pastCalendarProjectionText(String value) {
+  final normalized = value.trim();
+  if (normalized.startsWith('📅')) return normalized;
+  final withoutLegacyPrefix = normalized.startsWith('原计划：')
+      ? normalized.substring('原计划：'.length).trim()
+      : normalized;
+  return RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(withoutLegacyPrefix)
+      ? '📅 $withoutLegacyPrefix'
+      : withoutLegacyPrefix;
+}
+
+String _pastProjectionBlockText(PastBlockViewModel block, {int number = 1}) =>
+    switch (block.type) {
+      DocumentBlockType.bullet => '• ${block.text}',
+      DocumentBlockType.numbered => '$number. ${block.text}',
+      DocumentBlockType.checklist =>
+        '${block.isChecked == true ? '☒' : '☐'} ${block.text}',
+      _ => block.text,
+    };
+
+final class _PastProjectionEvent {
+  _PastProjectionEvent({
+    required this.id,
+    required this.completionLocalDate,
+    required this.appendSequence,
+  });
+
+  final String id;
+  final String completionLocalDate;
+  final int appendSequence;
+  final List<_PastProjectionLink> links = <_PastProjectionLink>[];
+  List<String> sourceBlockIds = const <String>[];
+}
+
+final class _PastProjectionLink {
+  const _PastProjectionLink({
+    required this.role,
+    required this.sourceOrder,
+    required this.blockId,
+  });
+
+  final PastPartRole role;
+  final int sourceOrder;
+  final String blockId;
+}
+
 final class _ParsedEditableBlock {
   const _ParsedEditableBlock({
     required this.type,
@@ -1943,6 +2337,196 @@ String _editableBlockText(
   };
 }
 
+String _serializePastEditorSegments(
+  List<PastEditorSegmentViewModel> segments,
+) => segments
+    .map((segment) => '${segment.separatorBefore}${segment.text}')
+    .join();
+
+List<String> _parsePastProjectedLines(String source) => source
+    .replaceAll('\r\n', '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .where((line) => line.isNotEmpty)
+    .toList(growable: false);
+
+Map<int, int> _matchPastProjectionLines(
+  List<PastEditorSegmentViewModel> baseSegments,
+  List<String> editedLines,
+) {
+  final baseOccurrences = <String, List<int>>{};
+  for (var index = 0; index < baseSegments.length; index++) {
+    baseOccurrences
+        .putIfAbsent(baseSegments[index].text, () => <int>[])
+        .add(index);
+  }
+  final editedOccurrences = <String, List<int>>{};
+  for (var index = 0; index < editedLines.length; index++) {
+    editedOccurrences.putIfAbsent(editedLines[index], () => <int>[]).add(index);
+  }
+  final matches = <int, int>{};
+  for (final entry in editedOccurrences.entries) {
+    final baseIndexes = baseOccurrences[entry.key];
+    if (baseIndexes == null) continue;
+    matches.addAll(_pairPastProjectionOccurrences(baseIndexes, entry.value));
+  }
+  return matches;
+}
+
+Map<int, int> _pairPastProjectionOccurrences(
+  List<int> baseIndexes,
+  List<int> editedIndexes,
+) {
+  final matches = <int, int>{};
+  var baseCursor = 0;
+  var editedCursor = 0;
+  while (baseCursor < baseIndexes.length &&
+      editedCursor < editedIndexes.length) {
+    final remainingBase = baseIndexes.length - baseCursor;
+    final remainingEdited = editedIndexes.length - editedCursor;
+    if (remainingBase > remainingEdited &&
+        baseCursor + 1 < baseIndexes.length) {
+      final currentDistance =
+          (baseIndexes[baseCursor] - editedIndexes[editedCursor]).abs();
+      final nextDistance =
+          (baseIndexes[baseCursor + 1] - editedIndexes[editedCursor]).abs();
+      if (nextDistance < currentDistance) {
+        baseCursor++;
+        continue;
+      }
+    }
+    if (remainingEdited > remainingBase &&
+        editedCursor + 1 < editedIndexes.length) {
+      final currentDistance =
+          (baseIndexes[baseCursor] - editedIndexes[editedCursor]).abs();
+      final nextDistance =
+          (baseIndexes[baseCursor] - editedIndexes[editedCursor + 1]).abs();
+      if (nextDistance < currentDistance) {
+        editedCursor++;
+        continue;
+      }
+    }
+    matches[editedIndexes[editedCursor]] = baseIndexes[baseCursor];
+    baseCursor++;
+    editedCursor++;
+  }
+  return matches;
+}
+
+Map<int, int> _matchPastReplacementSegments({
+  required List<PastEditorSegmentViewModel> baseSegments,
+  required List<String> editedLines,
+  required List<int> unmatchedBaseIndexes,
+  required List<int> unmatchedLineIndexes,
+}) {
+  final candidates =
+      <({int baseIndex, int lineIndex, int distance, int similarity})>[];
+  for (final baseIndex in unmatchedBaseIndexes) {
+    for (final lineIndex in unmatchedLineIndexes) {
+      final similarity = _pastProjectionTextSimilarity(
+        baseSegments[baseIndex].text,
+        editedLines[lineIndex],
+      );
+      // A tiny shared suffix (for example ":00") is not enough evidence that
+      // a new row edits the old event. Uncertain pairs stay detached/unanchored.
+      if (similarity < 4) continue;
+      candidates.add((
+        baseIndex: baseIndex,
+        lineIndex: lineIndex,
+        distance: (baseIndex - lineIndex).abs(),
+        similarity: similarity,
+      ));
+    }
+  }
+  candidates.sort((left, right) {
+    final bySimilarity = right.similarity.compareTo(left.similarity);
+    if (bySimilarity != 0) return bySimilarity;
+    final byDistance = left.distance.compareTo(right.distance);
+    if (byDistance != 0) return byDistance;
+    final byBase = left.baseIndex.compareTo(right.baseIndex);
+    if (byBase != 0) return byBase;
+    return left.lineIndex.compareTo(right.lineIndex);
+  });
+
+  final matchedBaseIndexes = <int>{};
+  final matchedLineIndexes = <int>{};
+  final replacements = <int, int>{};
+  for (final candidate in candidates) {
+    if (matchedBaseIndexes.contains(candidate.baseIndex) ||
+        matchedLineIndexes.contains(candidate.lineIndex)) {
+      continue;
+    }
+    final isAmbiguous = candidates.any(
+      (other) =>
+          (other.baseIndex == candidate.baseIndex ||
+              other.lineIndex == candidate.lineIndex) &&
+          (other.baseIndex != candidate.baseIndex ||
+              other.lineIndex != candidate.lineIndex) &&
+          other.distance == candidate.distance &&
+          other.similarity == candidate.similarity,
+    );
+    if (isAmbiguous) continue;
+    matchedBaseIndexes.add(candidate.baseIndex);
+    matchedLineIndexes.add(candidate.lineIndex);
+    replacements[candidate.baseIndex] = candidate.lineIndex;
+  }
+  return replacements;
+}
+
+int _pastProjectionTextSimilarity(String left, String right) {
+  final shortest = left.length < right.length ? left.length : right.length;
+  var prefix = 0;
+  while (prefix < shortest &&
+      left.codeUnitAt(prefix) == right.codeUnitAt(prefix)) {
+    prefix++;
+  }
+  var suffix = 0;
+  while (suffix < shortest - prefix &&
+      left.codeUnitAt(left.length - suffix - 1) ==
+          right.codeUnitAt(right.length - suffix - 1)) {
+    suffix++;
+  }
+  final leftTokens = left
+      .split(RegExp(r'[\s·]+'))
+      .where((value) => value.isNotEmpty)
+      .toSet();
+  final rightTokens = right
+      .split(RegExp(r'[\s·]+'))
+      .where((value) => value.isNotEmpty)
+      .toSet();
+  return prefix + suffix + leftTokens.intersection(rightTokens).length * 4;
+}
+
+DocumentBlockModel _pastDocumentBlockFromRow(QueryRow row, String documentId) =>
+    DocumentBlockModel(
+      id: row.read<String>('id'),
+      documentId: DocumentId(documentId),
+      parentBlockId: row.readNullable<String>('parent_block_id'),
+      sortRank: row.read<int>('sort_rank'),
+      blockType: DocumentBlockType.values.byName(
+        row.read<String>('block_type'),
+      ),
+      plainText: row.read<String>('plain_text'),
+      payloadJson: row.read<String>('payload_json'),
+      attributesJson: row.read<String>('attributes_json'),
+      isChecked: row.readNullable<bool>('is_checked'),
+    );
+
+DocumentBlockModel _pastDocumentBlockWithRank(
+  DocumentBlockModel block,
+  int sortRank,
+) => DocumentBlockModel(
+  id: block.id,
+  documentId: block.documentId,
+  parentBlockId: block.parentBlockId,
+  sortRank: sortRank,
+  blockType: block.blockType,
+  plainText: block.plainText,
+  payloadJson: block.payloadJson,
+  attributesJson: block.attributesJson,
+  isChecked: block.isChecked,
+);
+
 final class _ParsedPastBlock {
   const _ParsedPastBlock({
     required this.type,
@@ -1995,6 +2579,13 @@ List<_ParsedPastBlock> _parsePastDocumentText(String source) {
         return _ParsedPastBlock(type: DocumentBlockType.paragraph, text: text);
       })
       .toList(growable: false);
+}
+
+_ParsedPastBlock _parsePastProjectedLine(String source) {
+  final parsed = _parsePastDocumentText(source);
+  return parsed.isEmpty
+      ? const _ParsedPastBlock(type: DocumentBlockType.paragraph, text: '')
+      : parsed.single;
 }
 
 String _pastBlockFingerprint(

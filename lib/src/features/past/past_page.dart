@@ -30,13 +30,14 @@ class PastPage extends ConsumerStatefulWidget {
 }
 
 class _PastPageState extends ConsumerState<PastPage>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, EditorSaveFeedbackMixin<PastPage> {
   final _searchController = TextEditingController();
   final _documentController = TextEditingController();
   final _focusNode = FocusNode();
   final _undoController = UndoHistoryController();
   late final AppStoreController _store;
-  late final Future<void> Function(String text) _persist;
+  late final Future<PastEditorDocumentViewModel> Function(PastEditorDraft draft)
+  _persist;
   late final Duration _autosaveDelay;
   late final Duration _autosaveRetryDelay;
   Timer? _autosaveTimer;
@@ -49,12 +50,19 @@ class _PastPageState extends ConsumerState<PastPage>
   var _initialized = false;
   var _isForeground = true;
   var _disposed = false;
+  PastEditorDocumentViewModel _baseDocument = PastEditorDocumentViewModel.empty;
 
   @override
   void initState() {
     super.initState();
     _store = ref.read(appStoreProvider.notifier);
-    _persist = widget.onPersist ?? _store.replacePastDocumentText;
+    final customPersist = widget.onPersist;
+    _persist = customPersist == null
+        ? _store.replacePastEditorDocument
+        : (draft) async {
+            await customPersist(draft.text);
+            return _plainPastDocumentAfterSave(draft);
+          };
     _autosaveDelay = widget.autosaveDelay;
     _autosaveRetryDelay = widget.autosaveRetryDelay;
     _isForeground = switch (WidgetsBinding.instance.lifecycleState) {
@@ -73,6 +81,7 @@ class _PastPageState extends ConsumerState<PastPage>
   void dispose() {
     _disposed = true;
     _autosaveTimer?.cancel();
+    disposeEditorSaveFeedback();
     WidgetsBinding.instance.removeObserver(this);
     _focusNode.removeListener(_onFocusChanged);
     _undoController.removeListener(_refreshToolbar);
@@ -117,7 +126,7 @@ class _PastPageState extends ConsumerState<PastPage>
     final l10n = AppLocalizations.of(context);
     final asyncState = ref.watch(appStoreProvider);
     if (asyncState.hasValue) {
-      _synchronizeDocument(asyncState.requireValue.pastBlocks);
+      _synchronizeDocument(asyncState.requireValue.pastDocument);
     }
     return EditorPageFrame(
       key: const Key('past-editor-page'),
@@ -186,6 +195,20 @@ class _PastPageState extends ConsumerState<PastPage>
                 ? _undoController.redo
                 : null,
           ),
+          EditorToolbarItem(
+            icon: editorSaveFeedbackIcon(key: const Key('past-editor-save')),
+            semanticLabel: l10n.save,
+            onPressed: editorSaveInProgress
+                ? null
+                : () {
+                    unawaited(
+                      runEditorManualSave(
+                        flush: _flushSave,
+                        savedLabel: l10n.saved,
+                      ),
+                    );
+                  },
+          ),
         ],
       ),
     );
@@ -234,10 +257,11 @@ class _PastPageState extends ConsumerState<PastPage>
     );
   }
 
-  void _synchronizeDocument(List<PastBlockViewModel> blocks) {
-    final serialized = _serializeBlocks(blocks);
+  void _synchronizeDocument(PastEditorDocumentViewModel document) {
+    final serialized = document.text;
     if (!_initialized) {
       _initialized = true;
+      _baseDocument = document;
       _persistedText = serialized;
       _lastObservedText = serialized;
       _documentController.value = TextEditingValue(
@@ -248,18 +272,19 @@ class _PastPageState extends ConsumerState<PastPage>
     }
     final hasLocalChanges =
         _pendingDraft != null || _documentController.text != _persistedText;
-    if (!_focusNode.hasFocus &&
-        !hasLocalChanges &&
-        serialized != _persistedText) {
-      _persistedText = serialized;
-      _lastObservedText = serialized;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || _focusNode.hasFocus) return;
-        _documentController.value = TextEditingValue(
-          text: serialized,
-          selection: TextSelection.collapsed(offset: serialized.length),
-        );
-      });
+    if (!_focusNode.hasFocus && !hasLocalChanges) {
+      _baseDocument = document;
+      if (serialized != _persistedText) {
+        _persistedText = serialized;
+        _lastObservedText = serialized;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || _focusNode.hasFocus) return;
+          _documentController.value = TextEditingValue(
+            text: serialized,
+            selection: TextSelection.collapsed(offset: serialized.length),
+          );
+        });
+      }
     }
   }
 
@@ -296,7 +321,11 @@ class _PastPageState extends ConsumerState<PastPage>
       final draft = _pendingDraft;
       if (draft == null || draft.revision <= _persistedRevision) return true;
       try {
-        await _persist(draft.text);
+        final savedDocument = await _persist(
+          _baseDocument.createDraft(draft.text),
+        );
+        _baseDocument = savedDocument;
+        _persistedText = savedDocument.text;
       } on Object catch (error) {
         // Keep the failed draft intact. Background failures are retried when
         // the app resumes; foreground failures also receive a bounded retry.
@@ -313,8 +342,22 @@ class _PastPageState extends ConsumerState<PastPage>
         return false;
       }
       _persistedRevision = draft.revision;
-      _persistedText = draft.text;
-      if (identical(_pendingDraft, draft)) _pendingDraft = null;
+      if (identical(_pendingDraft, draft)) {
+        _pendingDraft = null;
+        if (!_disposed &&
+            _documentController.text == draft.text &&
+            _documentController.text != _baseDocument.text) {
+          final offset = _documentController.selection.extentOffset.clamp(
+            0,
+            _baseDocument.text.length,
+          );
+          _lastObservedText = _baseDocument.text;
+          _documentController.value = TextEditingValue(
+            text: _baseDocument.text,
+            selection: TextSelection.collapsed(offset: offset),
+          );
+        }
+      }
       // If editing continued during the awaited write, loop immediately and
       // persist the newer revision serially so the old value cannot win.
     }
@@ -499,20 +542,22 @@ String _isoLocalDate(DateTime value) =>
     '${value.month.toString().padLeft(2, '0')}-'
     '${value.day.toString().padLeft(2, '0')}';
 
-String _serializeBlocks(List<PastBlockViewModel> blocks) {
-  var number = 0;
-  return blocks
-      .map((block) {
-        return switch (block.type) {
-          DocumentBlockType.bullet => '• ${block.text}',
-          DocumentBlockType.numbered => '${++number}. ${block.text}',
-          DocumentBlockType.checklist =>
-            '${block.isChecked == true ? '☒' : '☐'} ${block.text}',
-          _ => block.text,
-        };
-      })
-      .join('\n\n');
-}
+PastEditorDocumentViewModel _plainPastDocumentAfterSave(
+  PastEditorDraft draft,
+) => PastEditorDocumentViewModel(
+  revision: draft.baseRevision + 1,
+  segments: draft.text.isEmpty
+      ? const <PastEditorSegmentViewModel>[]
+      : <PastEditorSegmentViewModel>[
+          PastEditorSegmentViewModel(
+            id: 'test:${draft.baseRevision + 1}',
+            kind: PastEditorSegmentKind.freeform,
+            text: draft.text,
+            separatorBefore: '',
+            sourceBlockIds: const <String>[],
+          ),
+        ],
+);
 
 final class _PastSaveDraft {
   const _PastSaveDraft({required this.revision, required this.text});

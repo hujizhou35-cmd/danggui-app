@@ -7,6 +7,7 @@ import 'package:danggui/src/data/database.dart';
 import 'package:danggui/src/domain/models.dart';
 import 'package:danggui/src/features/settings/settings_page.dart';
 import 'package:danggui/src/services/backup/backup_service.dart';
+import 'package:danggui/src/services/notifications/notification_coordinator.dart';
 import 'package:danggui/src/ui/components/components.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -46,7 +47,7 @@ void main() {
     expect(settings.autoBackupMinuteLocal, 35);
   });
 
-  testWidgets('shows the 1.1.0 product version without build metadata', (
+  testWidgets('shows the 1.1.2 product version without build metadata', (
     tester,
   ) async {
     _setPhoneSize(tester);
@@ -59,8 +60,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     await _scrollToText(tester, '关于当归', maximumDrags: 20);
-    expect(find.text('版本 1.1.0'), findsOneWidget);
-    expect(find.textContaining('1.1.0+2'), findsNothing);
+    expect(find.text('帮助与隐私'), findsOneWidget);
+    expect(find.text('版本 1.1.2'), findsOneWidget);
+    expect(find.textContaining('1.1.2+3'), findsNothing);
   });
 
   testWidgets('shows complete settings and exposes every locale choice', (
@@ -88,6 +90,44 @@ void main() {
     expect(find.text('English'), findsOneWidget);
     expect(find.text('日本語'), findsOneWidget);
     expect(find.text('Русский'), findsOneWidget);
+  });
+
+  testWidgets('exact settings failure does not report notification denial', (
+    tester,
+  ) async {
+    _setPhoneSize(tester);
+    final gateway = _ExactRequestFailureGateway();
+    final coordinator = NotificationCoordinator(
+      () async => database,
+      gateway: gateway,
+    );
+    final settingsContainer = ProviderContainer(
+      overrides: [
+        databaseProvider.overrideWith((ref) async => database),
+        notificationCoordinatorProvider.overrideWithValue(coordinator),
+      ],
+    );
+    addTearDown(() {
+      settingsContainer.dispose();
+      coordinator.dispose();
+    });
+    await settingsContainer.read(appStoreProvider.future);
+    await tester.pumpWidget(
+      _settingsApp(
+        settingsContainer,
+        const SettingsPage(loadLatestBackupStatus: false),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await _scrollToText(tester, '通知权限');
+    await tester.tap(find.text('通知权限'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.textContaining('未开启精确提醒权限'), findsOneWidget);
+    expect(find.textContaining('通知已被禁用'), findsNothing);
+    expect(gateway.exactPermissionRequests, 1);
   });
 
   testWidgets('backup action is operational through its injectable seam', (
@@ -691,4 +731,55 @@ Widget _settingsApp(
       home: home,
     ),
   );
+}
+
+final class _ExactRequestFailureGateway
+    implements NotificationGateway, ReminderCapabilityGateway {
+  int exactPermissionRequests = 0;
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  String get platformName => 'test';
+
+  @override
+  Future<void> initialize({
+    required void Function(String? actionId, String? payload) onAction,
+    required NotificationPresentation presentation,
+  }) async {}
+
+  @override
+  Future<bool?> permissionsGranted() async => true;
+
+  @override
+  Future<bool> requestPermissions() async => true;
+
+  @override
+  Future<ReminderDeliveryCapabilities> deliveryCapabilities({
+    required bool soundEnabled,
+    required bool vibrationEnabled,
+  }) async => const ReminderDeliveryCapabilities(
+    notificationsGranted: true,
+    exactSchedulingAvailable: false,
+    exactAlarmPermissionRequired: true,
+    soundAvailable: true,
+    vibrationAvailable: true,
+    vibrationControlledBySystem: false,
+  );
+
+  @override
+  Future<bool> requestExactAlarmPermission() async {
+    exactPermissionRequests++;
+    throw StateError('settings unavailable');
+  }
+
+  @override
+  Future<Set<int>> pendingNotificationIds() async => const <int>{};
+
+  @override
+  Future<void> schedule(LocalNotificationRequest request) async {}
+
+  @override
+  Future<void> cancel(int notificationId) async {}
 }

@@ -358,13 +358,28 @@ class AppLocalizationsZh extends AppLocalizations {
   String get reminderStatusPermissionDenied => '权限受限，提醒时间已保留';
 
   @override
+  String get reminderStatusPrecisionLimited => '已安排，但未开启精确提醒权限，可能延迟';
+
+  @override
+  String get reminderStatusSystemDeliveryLimited => '已安排，但系统已关闭此提醒的声音或振动';
+
+  @override
   String get reminderStatusTaskClosed => '事项关闭，提醒已暂停';
 
   @override
   String get reminderStatusPaused => '提醒已暂停';
 
   @override
+  String get enableExactReminders => '启用精确提醒';
+
+  @override
   String get openNotificationSettings => '打开通知设置';
+
+  @override
+  String get reminderVibrationSystemControlled => '振动由 iOS 系统通知设置控制';
+
+  @override
+  String get saved => '已保存';
 
   @override
   String get backupCreated => '备份已创建';

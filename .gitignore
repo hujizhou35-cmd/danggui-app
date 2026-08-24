@@ -65,6 +65,7 @@ ios/.symlinks/
 
 # Test and tool output
 test-results/
+test/**/failures/
 screenshots/actual/
 screenshots/diff/
 dist/

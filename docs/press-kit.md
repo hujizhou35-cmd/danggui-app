@@ -16,8 +16,8 @@
 | 资产 | 仓库路径 | 用途 |
 | --- | --- | --- |
 | 应用图标源图 | `docs/assets/brand/danggui-app-icon-source.png` | README、Android 图标衍生、社交预览 |
-| 启动插画源图 | `docs/assets/brand/danggui-launch-source.png` | Android/iOS 启动与初始化界面衍生 |
-| 原生启动徽记 | `docs/assets/brand/danggui-native-splash-emblem.png` | Android 12+ 系统 Splash，由启动插画衍生 |
+| 启动插画源图 | `docs/assets/brand/danggui-launch-source.png` | Flutter 初始化界面衍生；完整竖版构图的唯一插画来源 |
+| 历史原生启动徽记 | `docs/assets/brand/danggui-native-splash-emblem.png` | 仅保留为 v1.1.0 历史源资产；v1.1.2 不再在系统 Splash 中显示 |
 | GitHub Social Preview | `docs/assets/brand/danggui-social-preview.jpg` | 1280×640、低于 1 MB，可直接上传到仓库设置 |
 | UI 总览 | `docs/assets/screenshots/danggui-ui-overview-v1.png` | README 与设计说明 |
 
@@ -46,7 +46,7 @@
 
 ## Release 传播模板
 
-v1.1.0 当前对外状态统一写作“公开预发布”或“Pre-release”，不得写成“稳定版”“正式稳定发布”或笼统的“已全面验收”。官方页面为 [v1.1.0 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0)，真实标签、工作流、附件与实体机状态以 [v1.1.0 发布检查表](release/v1.1.0-release-checklist.md)为准。Android 附件必须来自受保护标签并使用与 v1.0.0 相同的正式签名；CI Artifact、`debug-fallback` 包、iOS 源码 ZIP 和 unsigned `.app.zip` 均不能作为 Android 正式安装包传播。v1.0.0 的历史提交与工作流证据仍保留在其独立检查表中。
+v1.1.2 当前对外状态统一写作“公开预发布”或“Pre-release”，不得写成“稳定版”“正式稳定发布”或笼统的“已全面验收”。官方页面为 [v1.1.2 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2)，真实标签、工作流、附件与实体机状态以 [v1.1.2 发布检查表](release/v1.1.2-release-checklist.md)为准。Android 附件必须来自受保护标签并使用与 v1.1.0 相同的正式签名；CI Artifact、`debug-fallback` 包、iOS 源码 ZIP 和 unsigned `.app.zip` 均不能作为 Android 正式安装包传播。v1.1.0 与 v1.0.0 的历史 Release、附件、提交和检查表继续保留。
 
 标题：`当归 v{version} · Android`
 

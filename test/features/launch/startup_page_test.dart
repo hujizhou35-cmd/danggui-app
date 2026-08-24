@@ -30,7 +30,7 @@ void main() {
   });
 
   testWidgets(
-    'waits one second after the first brand frame, then navigates once',
+    'waits 1.2 seconds after the first brand frame, then navigates once',
     (tester) async {
       var destinationMounts = 0;
       final router = GoRouter(
@@ -68,11 +68,11 @@ void main() {
         findsOneWidget,
       );
 
-      // Decode and paint the real launch artwork. The one-second clock starts
+      // Decode and paint the real launch artwork. The 1.2-second clock starts
       // only after this complete image frame becomes visible.
       await _waitForArtworkFrame(tester);
 
-      await tester.pump(const Duration(milliseconds: 999));
+      await tester.pump(const Duration(milliseconds: 1199));
       expect(find.byType(StartupPage), findsOneWidget);
       expect(destinationMounts, 0);
 

@@ -72,20 +72,23 @@ void main() {
     await backupDirectory.delete(recursive: true);
   });
 
-  test('next reminder defaults to the next future five-minute boundary', () {
-    expect(
-      nextReminderTime(DateTime(2026, 8, 23, 10, 2, 45)),
-      DateTime(2026, 8, 23, 10, 5),
-    );
-    expect(
-      nextReminderTime(DateTime(2026, 8, 23, 10, 5)),
-      DateTime(2026, 8, 23, 10, 10),
-    );
-    expect(
-      nextReminderTime(DateTime.utc(2026, 8, 23, 23, 59, 59)),
-      DateTime.utc(2026, 8, 24),
-    );
-  });
+  test(
+    'next reminder defaults to a whole minute at least five minutes ahead',
+    () {
+      expect(
+        nextReminderTime(DateTime(2026, 8, 23, 10, 2, 45)),
+        DateTime(2026, 8, 23, 10, 8),
+      );
+      expect(
+        nextReminderTime(DateTime(2026, 8, 23, 10, 5)),
+        DateTime(2026, 8, 23, 10, 10),
+      );
+      expect(
+        nextReminderTime(DateTime.utc(2026, 8, 23, 23, 59, 59)),
+        DateTime.utc(2026, 8, 24, 0, 5),
+      );
+    },
+  );
 
   testWidgets('shared creation sheet defaults to today and can clear it', (
     tester,
@@ -344,6 +347,178 @@ void main() {
       expect(settingsLauncher.openCount, 1);
     },
   );
+
+  testWidgets('task detail surfaces the exact-reminder fallback', (
+    tester,
+  ) async {
+    notificationGateway
+      ..exactSchedulingAvailable = false
+      ..exactPermissionRequestResult = false;
+    final taskId = (await tester.runAsync(
+      () => controller.createTask(
+        title: '精确提醒权限',
+        reminderAt: DateTime.now().add(const Duration(hours: 2)),
+      ),
+    ))!;
+
+    await tester.pumpWidget(
+      _providerApp(container, TaskDetailPage(taskId: taskId)),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(find.textContaining('未开启精确提醒权限'), findsOneWidget);
+    final action = find.byKey(const Key('task-reminder-open-settings'));
+    expect(find.text('启用精确提醒'), findsOneWidget);
+    await tester.tap(action);
+    await tester.pump();
+    expect(notificationGateway.exactPermissionRequests, 1);
+    expect(notificationGateway.active.values.single.exactScheduling, isFalse);
+  });
+
+  testWidgets('inexact delivery grace is not labeled expired', (tester) async {
+    notificationGateway.exactSchedulingAvailable = false;
+    final fixedNow = DateTime(2026, 8, 25, 10, 10);
+    final taskId = (await tester.runAsync(
+      () => controller.createTask(
+        title: '仍在非精确宽限内',
+        reminderAt: DateTime.now().add(const Duration(hours: 2)),
+      ),
+    ))!;
+    await tester.runAsync(() async {
+      await database.customStatement(
+        'UPDATE reminders SET scheduled_at_utc = ?, status = ?, '
+        'pause_reason = NULL WHERE task_id = ?',
+        <Object?>[
+          fixedNow
+              .subtract(const Duration(minutes: 10))
+              .toUtc()
+              .microsecondsSinceEpoch,
+          ReminderStatus.scheduled.name,
+          taskId,
+        ],
+      );
+      await controller.refresh();
+    });
+
+    await tester.pumpWidget(
+      _providerApp(
+        container,
+        TaskDetailPage(taskId: taskId, now: () => fixedNow),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(find.text('提醒时间已过，不会补发。'), findsNothing);
+    expect(find.textContaining('未开启精确提醒权限'), findsOneWidget);
+  });
+
+  testWidgets(
+    'ordinary notification denial takes priority over exact settings',
+    (tester) async {
+      notificationGateway
+        ..notificationsGranted = false
+        ..exactSchedulingAvailable = false;
+      final taskId = (await tester.runAsync(
+        () => controller.createTask(
+          title: '普通通知权限优先',
+          reminderAt: DateTime.now().add(const Duration(hours: 2)),
+        ),
+      ))!;
+      await tester.runAsync(() async {
+        await database.customStatement(
+          'UPDATE reminders SET status = ?, pause_reason = ? WHERE task_id = ?',
+          <Object?>[
+            ReminderStatus.permissionDenied.name,
+            ReminderPauseReason.permissionDenied.name,
+            taskId,
+          ],
+        );
+        await controller.refresh();
+      });
+
+      await tester.pumpWidget(
+        _providerApp(container, TaskDetailPage(taskId: taskId)),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(find.textContaining('权限受限'), findsOneWidget);
+      expect(find.text('打开通知设置'), findsOneWidget);
+      expect(find.text('启用精确提醒'), findsNothing);
+      await tester.tap(find.byKey(const Key('task-reminder-open-settings')));
+      await tester.pump();
+      expect(settingsLauncher.openCount, 1);
+      expect(notificationGateway.exactPermissionRequests, 0);
+    },
+  );
+
+  testWidgets('editing an existing reminder refreshes channel diagnostics', (
+    tester,
+  ) async {
+    final taskId = (await tester.runAsync(
+      () => controller.createTask(
+        title: '频道状态刷新',
+        reminderAt: DateTime.now().add(const Duration(hours: 2)),
+      ),
+    ))!;
+    await tester.pumpWidget(
+      _providerApp(
+        container,
+        TaskDetailPage(
+          taskId: taskId,
+          autosaveDelay: const Duration(milliseconds: 20),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.textContaining('系统已关闭此提醒'), findsNothing);
+
+    var soundSwitch = tester.widget<DangguiSwitch>(
+      find.byType(DangguiSwitch).first,
+    );
+    soundSwitch.onChanged!(false);
+    for (
+      var attempt = 0;
+      container.read(appStoreProvider).requireValue.tasks.single.soundEnabled &&
+          attempt < 100;
+      attempt++
+    ) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+    expect(
+      container.read(appStoreProvider).requireValue.tasks.single.soundEnabled,
+      isFalse,
+    );
+
+    notificationGateway.soundAvailable = false;
+    soundSwitch = tester.widget<DangguiSwitch>(
+      find.byType(DangguiSwitch).first,
+    );
+    soundSwitch.onChanged!(true);
+    for (
+      var attempt = 0;
+      find.textContaining('系统已关闭此提醒').evaluate().isEmpty && attempt < 100;
+      attempt++
+    ) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    expect(find.textContaining('系统已关闭此提醒'), findsOneWidget);
+    final settings = find.byKey(const Key('task-reminder-open-settings'));
+    expect(settings, findsOneWidget);
+    await tester.tap(settings);
+    await tester.pump();
+    expect(settingsLauncher.openCount, 1);
+  });
 
   testWidgets('task detail refuses to confirm a past reminder time', (
     tester,
@@ -877,7 +1052,8 @@ class _FakeNotificationSettingsLauncher
   }
 }
 
-final class _FakeNotificationGateway implements NotificationGateway {
+final class _FakeNotificationGateway
+    implements NotificationGateway, ReminderCapabilityGateway {
   final List<LocalNotificationRequest> scheduled = <LocalNotificationRequest>[];
   final List<int> cancelled = <int>[];
   final Map<int, LocalNotificationRequest> active =
@@ -886,6 +1062,12 @@ final class _FakeNotificationGateway implements NotificationGateway {
   bool throwOnPermissionQuery = false;
   bool throwOnSchedule = false;
   bool throwOnCancel = false;
+  bool notificationsGranted = true;
+  bool exactSchedulingAvailable = true;
+  bool exactPermissionRequestResult = true;
+  int exactPermissionRequests = 0;
+  bool? soundAvailable = true;
+  bool? vibrationAvailable = true;
 
   @override
   bool get isSupported => true;
@@ -904,11 +1086,31 @@ final class _FakeNotificationGateway implements NotificationGateway {
   @override
   Future<bool?> permissionsGranted() async {
     if (throwOnPermissionQuery) throw StateError('permission query failed');
-    return true;
+    return notificationsGranted;
   }
 
   @override
-  Future<bool> requestPermissions() async => true;
+  Future<bool> requestPermissions() async => notificationsGranted;
+
+  @override
+  Future<ReminderDeliveryCapabilities> deliveryCapabilities({
+    required bool soundEnabled,
+    required bool vibrationEnabled,
+  }) async => ReminderDeliveryCapabilities(
+    notificationsGranted: await permissionsGranted(),
+    exactSchedulingAvailable: exactSchedulingAvailable,
+    exactAlarmPermissionRequired: !exactSchedulingAvailable,
+    soundAvailable: soundEnabled ? soundAvailable : null,
+    vibrationAvailable: vibrationEnabled ? vibrationAvailable : null,
+    vibrationControlledBySystem: false,
+  );
+
+  @override
+  Future<bool> requestExactAlarmPermission() async {
+    exactPermissionRequests += 1;
+    if (exactPermissionRequestResult) exactSchedulingAvailable = true;
+    return exactPermissionRequestResult;
+  }
 
   @override
   Future<Set<int>> pendingNotificationIds() async => active.keys.toSet();

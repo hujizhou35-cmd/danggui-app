@@ -391,7 +391,7 @@ void main() {
       tester,
       ReminderDialog(
         title: '设置提醒时间',
-        selectedTime: const TimeOfDay(hour: 18, minute: 50),
+        selectedTime: const TimeOfDay(hour: 18, minute: 51),
         dateLabel: '8月24日',
         dateSemanticLabel: '提醒日期',
         cancelLabel: '取消',
@@ -405,7 +405,7 @@ void main() {
     );
 
     await tester.tap(find.text('确定'));
-    expect(confirmed, const TimeOfDay(hour: 18, minute: 50));
+    expect(confirmed, const TimeOfDay(hour: 18, minute: 51));
     expect(tester.takeException(), isNull);
   });
 }

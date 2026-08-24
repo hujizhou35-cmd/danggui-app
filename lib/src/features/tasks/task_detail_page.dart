@@ -37,7 +37,7 @@ class TaskDetailPage extends ConsumerStatefulWidget {
 }
 
 class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, EditorSaveFeedbackMixin<TaskDetailPage> {
   final _titleController = TextEditingController();
   final _planController = TextEditingController();
   final _bodyController = TextEditingController();
@@ -48,6 +48,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   DateTime? _reminderAt;
   bool _sound = true;
   bool _vibration = true;
+  ReminderDeliveryCapabilities? _reminderCapabilities;
   bool _allowPop = false;
   bool _closing = false;
   String? _loadedId;
@@ -78,6 +79,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   @override
   void dispose() {
     _autosaveTimer?.cancel();
+    disposeEditorSaveFeedback();
     WidgetsBinding.instance.removeObserver(this);
     if (_pendingDraft != null) {
       unawaited(_startSaveLoop());
@@ -224,9 +226,13 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
                   _ReminderStatusRow(
                     key: const Key('task-reminder-status'),
                     label: _reminderStatusLabel(task, l10n),
-                    showSettingsAction: _isPermissionRestricted(task),
-                    settingsLabel: l10n.openNotificationSettings,
-                    onOpenSettings: _openNotificationSettings,
+                    showSettingsAction: _isSystemDeliveryRestricted(task),
+                    settingsLabel: _isPermissionRestricted(task)
+                        ? l10n.openNotificationSettings
+                        : _isPrecisionRestricted
+                        ? l10n.enableExactReminders
+                        : l10n.openNotificationSettings,
+                    onOpenSettings: () => _openReminderSettings(task),
                   ),
                 if (_reminderAt != null)
                   Padding(
@@ -246,15 +252,24 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
                         ),
                         const SizedBox(width: 18),
                         Expanded(
-                          child: _ReminderOption(
-                            label: l10n.vibration,
-                            value: _vibration,
-                            onChanged: (value) {
-                              _reminderFieldsDirty = true;
-                              setState(() => _vibration = value);
-                              _onDraftChanged();
-                            },
-                          ),
+                          child:
+                              (_reminderCapabilities
+                                      ?.vibrationControlledBySystem ??
+                                  Theme.of(context).platform ==
+                                      TargetPlatform.iOS)
+                              ? Text(
+                                  l10n.reminderVibrationSystemControlled,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                )
+                              : _ReminderOption(
+                                  label: l10n.vibration,
+                                  value: _vibration,
+                                  onChanged: (value) {
+                                    _reminderFieldsDirty = true;
+                                    setState(() => _vibration = value);
+                                    _onDraftChanged();
+                                  },
+                                ),
                         ),
                       ],
                     ),
@@ -315,9 +330,20 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
                     : null,
               ),
               EditorToolbarItem(
-                icon: const Icon(Icons.save_outlined),
+                icon: editorSaveFeedbackIcon(
+                  key: const Key('task-editor-save'),
+                ),
                 semanticLabel: l10n.save,
-                onPressed: () => _flushSave(interactive: true),
+                onPressed: editorSaveInProgress
+                    ? null
+                    : () {
+                        unawaited(
+                          runEditorManualSave(
+                            flush: () => _flushSave(interactive: true),
+                            savedLabel: l10n.saved,
+                          ),
+                        );
+                      },
               ),
             ],
           ),
@@ -426,15 +452,22 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   Future<void> _refreshReminderPermissionState() async {
     try {
       await _notifications.reconcile();
+      await _refreshReminderCapabilities();
       await _store.refresh();
     } on Object {
       // Returning from system settings must never interrupt draft editing.
     }
   }
 
-  Future<void> _openNotificationSettings() async {
+  Future<void> _openReminderSettings(TaskViewModel task) async {
     try {
-      await ref.read(notificationSettingsLauncherProvider).open();
+      if (_isPermissionRestricted(task)) {
+        await ref.read(notificationSettingsLauncherProvider).open();
+      } else if (_isPrecisionRestricted) {
+        await _notifications.requestExactAlarmPermission();
+      } else {
+        await ref.read(notificationSettingsLauncherProvider).open();
+      }
     } on Object {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -445,19 +478,35 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
 
   bool _isPermissionRestricted(TaskViewModel task) =>
       task.reminderStatus == ReminderStatus.permissionDenied ||
-      task.reminderPauseReason == ReminderPauseReason.permissionDenied;
+      task.reminderPauseReason == ReminderPauseReason.permissionDenied ||
+      _reminderCapabilities?.notificationsGranted == false;
+
+  bool get _isPrecisionRestricted =>
+      _reminderCapabilities?.precisionRestricted == true;
+
+  bool _isSystemDeliveryRestricted(TaskViewModel task) =>
+      _isPermissionRestricted(task) ||
+      _isPrecisionRestricted ||
+      (_sound && _reminderCapabilities?.soundAvailable == false) ||
+      (_vibration && _reminderCapabilities?.vibrationAvailable == false);
 
   String _reminderStatusLabel(TaskViewModel task, AppLocalizations l10n) {
     if (task.status == TaskStatus.completionPending ||
         task.reminderPauseReason == ReminderPauseReason.taskClosed) {
       return l10n.reminderStatusTaskClosed;
     }
-    if (task.reminderStatus == ReminderStatus.expired ||
-        (_reminderAt != null && !_reminderAt!.isAfter(_now()))) {
+    if (task.reminderStatus == ReminderStatus.expired) {
       return l10n.reminderExpired;
     }
     if (_isPermissionRestricted(task)) {
       return l10n.reminderStatusPermissionDenied;
+    }
+    if (_isPrecisionRestricted) {
+      return l10n.reminderStatusPrecisionLimited;
+    }
+    if ((_sound && _reminderCapabilities?.soundAvailable == false) ||
+        (_vibration && _reminderCapabilities?.vibrationAvailable == false)) {
+      return l10n.reminderStatusSystemDeliveryLimited;
     }
     if (task.reminderStatus == ReminderStatus.paused) {
       return l10n.reminderStatusPaused;
@@ -484,6 +533,22 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
     _persistedRevision = 0;
     _lastObservedSignature = _draftSignature();
     _controllersReady = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_refreshReminderCapabilities());
+    });
+  }
+
+  Future<void> _refreshReminderCapabilities() async {
+    try {
+      final capabilities = await _notifications.deliveryCapabilities(
+        soundEnabled: _sound,
+        vibrationEnabled: _vibration,
+      );
+      if (!mounted) return;
+      setState(() => _reminderCapabilities = capabilities);
+    } on Object {
+      // Capability diagnostics are advisory and must never interrupt editing.
+    }
   }
 
   void _mergeExternalTask(TaskViewModel task) {
@@ -610,27 +675,34 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
         task.reminderAt!.isAfter(now) &&
         (_persistedReminderAt == null || !_persistedReminderAt!.isAfter(now));
     final notifications = activatesFutureReminder ? _notifications : null;
-    bool? permissionGranted;
-    if (activatesFutureReminder) {
-      try {
-        permissionGranted = await notifications!
-            .ensurePermissionsForFutureReminder();
-      } on Object {
-        // A platform permission failure must never discard the editor data.
-        permissionGranted = false;
-      }
-    }
+    // Commit the user's reminder intent before opening any system permission
+    // surface. Android exact-alarm settings leave the app, and the process may
+    // be reclaimed there; the selected time must already be recoverable.
     final persist = widget.onPersist;
     if (persist == null) {
       await _store.updateTask(task, updateReminder: draft.reminderFieldsDirty);
     } else {
       await persist(task);
     }
-    if (activatesFutureReminder && permissionGranted != null) {
+
+    ReminderAuthorizationResult? authorization;
+    if (activatesFutureReminder) {
+      try {
+        authorization = await notifications!
+            .ensurePermissionsForFutureReminder();
+      } on Object {
+        // A platform permission failure must never discard the editor data.
+        authorization = const ReminderAuthorizationResult(
+          notificationsGranted: false,
+          exactSchedulingAvailable: false,
+        );
+      }
+    }
+    if (activatesFutureReminder && authorization != null) {
       try {
         await notifications!.applyPermissionResultForTask(
           task.id,
-          granted: permissionGranted,
+          granted: authorization.notificationsGranted,
         );
       } on Object {
         // The task transaction above already committed. A platform/plugin
@@ -645,13 +717,27 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
       } on Object {
         // The ordinary AppStore/lifecycle recovery path will retry this read.
       }
-      if (!permissionGranted && mounted) {
+      await _refreshReminderCapabilities();
+      if (!authorization.notificationsGranted && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(AppLocalizations.of(context).permissionDenied),
           ),
         );
+      } else if (!authorization.exactSchedulingAvailable && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              AppLocalizations.of(context).reminderStatusPrecisionLimited,
+            ),
+          ),
+        );
       }
+    } else if (draft.reminderFieldsDirty && task.reminderAt != null) {
+      // Existing reminders may move between immutable Android channel
+      // combinations when sound or vibration changes. Re-read the selected
+      // channel immediately so the editor does not show stale diagnostics.
+      await _refreshReminderCapabilities();
     }
   }
 
@@ -895,11 +981,29 @@ class _SmartField extends StatelessWidget {
   }
 }
 
-/// The next five-minute boundary, guaranteed to be later than [now].
+/// A whole-minute default with enough lead time to finish system permissions.
+///
+/// The picker still exposes every minute. Only the initial suggestion keeps a
+/// five-minute safety window so a first-time notification or exact-alarm
+/// permission flow cannot consume the reminder before it is scheduled.
 DateTime nextReminderTime(DateTime now) {
-  final flooredMinute = now.minute - now.minute % 5;
-  final boundary = now.isUtc
-      ? DateTime.utc(now.year, now.month, now.day, now.hour, flooredMinute)
-      : DateTime(now.year, now.month, now.day, now.hour, flooredMinute);
-  return boundary.add(const Duration(minutes: 5));
+  final earliest = now.add(const Duration(minutes: 5));
+  final boundary = earliest.isUtc
+      ? DateTime.utc(
+          earliest.year,
+          earliest.month,
+          earliest.day,
+          earliest.hour,
+          earliest.minute,
+        )
+      : DateTime(
+          earliest.year,
+          earliest.month,
+          earliest.day,
+          earliest.hour,
+          earliest.minute,
+        );
+  return earliest.isAtSameMomentAs(boundary)
+      ? boundary
+      : boundary.add(const Duration(minutes: 1));
 }

@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img alt="状态：v1.1.0 公开预发布" src="https://img.shields.io/badge/状态-v1.1.0%20公开预发布-B5684C?style=flat-square" />
+  <img alt="状态：v1.1.2 公开预发布" src="https://img.shields.io/badge/状态-v1.1.2%20公开预发布-B5684C?style=flat-square" />
   <img alt="平台：Android 与 iOS 源码" src="https://img.shields.io/badge/平台-Android%20%7C%20iOS%20源码-6F8068?style=flat-square" />
   <img alt="隐私：离线优先" src="https://img.shields.io/badge/隐私-离线优先-81786F?style=flat-square" />
   <img alt="语言：中英日俄" src="https://img.shields.io/badge/语言-中%20%7C%20英%20%7C%20日%20%7C%20俄-D8CEC1?style=flat-square&labelColor=81786F" />
@@ -22,7 +22,7 @@
 </p>
 
 > [!IMPORTANT]
-> 当归 [v1.1.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0) 已公开为 **Pre-release（预发布版）**。Android 提供正式签名的安装包；iOS 提供确定性源码压缩包和无签名构建证据，不提供 IPA 或 TestFlight。本版本尚未完成实体机发布验收，请勿视为稳定版。
+> 当归 [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) 以独立 **Pre-release（预发布版）**交付。Android 提供正式签名的安装包；iOS 提供确定性源码压缩包和无签名构建证据，不提供 IPA 或 TestFlight。本版本尚未完成实体机发布验收，请勿视为稳定版；已上传的 v1.1.0 及其附件继续保留。
 
 ## 为什么是当归
 
@@ -33,7 +33,7 @@
 - **笔记**：单层文件夹、置顶、列表、勾选项和事项转换。
 - **可靠数据**：SQLite 事务、版本迁移、可选加密的 `.dgbak` 备份、合并/替换恢复，以及 Markdown + JSON 可读导出。
 - **四种语言与离线帮助**：简体中文、English、日本語、Русский；默认跟随系统，也可手动切换，设置页内置详细操作说明。
-- **1.1.0 可靠编辑**：事项、笔记与过往保持可编辑，事项创建默认当天，并在详情中统一管理本地提醒；完整品牌启动页至少展示一秒。
+- **1.1.2 精准提醒与紧凑过往**：提醒可精确到每分钟，保存操作有明确反馈，过往按事件单行排列；原生阶段只显示暖纸底，完整品牌启动页由 Flutter 唯一展示至少 1.2 秒。
 
 ## 产品预览
 
@@ -45,18 +45,18 @@
 
 ## 下载与构建
 
-| 平台 | v1.1.0 预发布交付 | 获取方式 |
+| 平台 | v1.1.2 预发布交付 | 获取方式 |
 | --- | --- | --- |
-| Android | 正式签名通用 APK、分架构 APK、AAB | 从 [v1.1.0 预发布页](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0) 下载 |
-| iOS | `danggui-ios-source-v1.1.0.zip`、Xcode 工程与无签名 `Runner.app` 构建证据 | 按[源码包构建说明](docs/architecture/ios-source-build.md)自行编译；本次不提供 IPA/TestFlight |
+| Android | 正式签名通用 APK、分架构 APK、AAB | 从 [v1.1.2 预发布页](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) 下载 |
+| iOS | `danggui-ios-source-v1.1.2.zip`、Xcode 工程与无签名 `Runner.app` 构建证据 | 按[源码包构建说明](docs/architecture/ios-source-build.md)自行编译；本次不提供 IPA/TestFlight |
 
-普通 Android 用户请下载 `danggui-android-universal-release.apk`；分架构 APK 面向了解设备 ABI 的用户，AAB 面向应用商店或受控分发。预发布页同时提供 `SHA256SUMS` 和签名证书 SHA-256 指纹，安装前应核对二者。完整交付边界与验证步骤见[平台、签名与交付架构](docs/architecture/platform-delivery.md)；当前发布状态见 [v1.1.0 发布检查表](docs/release/v1.1.0-release-checklist.md)。
+普通 Android 用户请下载 `danggui-android-universal-release.apk`；分架构 APK 面向了解设备 ABI 的用户，AAB 面向应用商店或受控分发。预发布页同时提供 `SHA256SUMS` 和签名证书 SHA-256 指纹，安装前应核对二者。完整交付边界与验证步骤见[平台、签名与交付架构](docs/architecture/platform-delivery.md)；当前发布状态见 [v1.1.2 发布检查表](docs/release/v1.1.2-release-checklist.md)。
 
 ## 预发布验收状态
 
 自动验收已在 Android API 24 与 API 36 上完成同版本、同签名覆盖安装，验证六个数据域共 37 项数据保留断言、SQLite `quick_check` 与外键完整性、AlarmManager 调度、真实系统通知，以及 API 36 的真实通知权限流程。
 
-实体 Android 设备上的不同 OEM 行为、锁屏通知、声音、振动与稍后提醒（snooze），以及从 v1.0.0 正式包覆盖升级的最终签署仍未完成。因此 v1.1.0 保持 Pre-release，不是稳定版。
+实体 Android 设备上的不同 OEM 行为、锁屏通知、声音、振动与稍后提醒（snooze），以及从已公开 v1.1.0 正式签名包覆盖升级的最终签署仍未完成。因此 v1.1.2 保持 Pre-release，不是稳定版。
 
 ## 隐私承诺
 

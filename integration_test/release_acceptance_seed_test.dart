@@ -45,9 +45,9 @@ void main() {
     final coordinator = container.read(notificationCoordinatorProvider);
     await coordinator.initialize();
     final initialPermission = await coordinator.permissionsGranted();
-    final notificationsGranted = apiLevel >= 33
-        ? await coordinator.ensurePermissionsForFutureReminder()
-        : initialPermission;
+    final authorization = await coordinator
+        .ensurePermissionsForFutureReminder();
+    final notificationsGranted = authorization.notificationsGranted;
     if (apiLevel >= 33) {
       expect(
         initialPermission,
@@ -61,6 +61,12 @@ void main() {
       reason: apiLevel >= 33
           ? 'API $apiLevel must complete the app-initiated POST_NOTIFICATIONS permission flow.'
           : 'API $apiLevel must support ordinary notifications without a runtime prompt.',
+    );
+    expect(
+      authorization.exactSchedulingAvailable,
+      isTrue,
+      reason:
+          'API $apiLevel acceptance must run with exact reminder scheduling available.',
     );
 
     final folderId = await controller.createFolder(
@@ -106,7 +112,7 @@ void main() {
       taskId: taskId,
       noteId: noteId,
       pastTaskId: pastTaskId,
-      notificationsGranted: notificationsGranted!,
+      notificationsGranted: notificationsGranted,
     );
     expect(snapshot['quickCheck'], <String>['ok']);
     expect(snapshot['foreignKeyCheck'], isEmpty);

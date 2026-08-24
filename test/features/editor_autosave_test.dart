@@ -136,6 +136,34 @@ void main() {
     expect(saves.single.body, '销毁前必须保存');
   });
 
+  testWidgets('task manual save flushes the draft and confirms success', (
+    tester,
+  ) async {
+    final saves = <TaskViewModel>[];
+
+    await tester.pumpWidget(
+      _testApp(
+        container,
+        TaskDetailPage(
+          taskId: taskId,
+          autosaveDelay: const Duration(seconds: 10),
+          onPersist: (task) async => saves.add(task),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).at(2), '事项按钮立即保存');
+
+    await tester.tap(find.byKey(const Key('task-editor-save')));
+    await tester.pump();
+
+    expect(saves, hasLength(1));
+    expect(saves.single.body, '事项按钮立即保存');
+    expect(find.byIcon(Icons.check_rounded), findsOneWidget);
+    expect(find.text('已保存'), findsOneWidget);
+    expect(find.byType(TaskDetailPage), findsOneWidget);
+  });
+
   testWidgets('note autosave debounces rapid edits and flushes on disposal', (
     tester,
   ) async {
@@ -202,6 +230,71 @@ void main() {
     expect(attempts, 2);
     expect(saved?.body, '不可丢失的草稿');
   });
+
+  testWidgets('note manual save flushes the draft and confirms success', (
+    tester,
+  ) async {
+    final saves = <NoteViewModel>[];
+
+    await tester.pumpWidget(
+      _testApp(
+        container,
+        NoteEditorPage(
+          noteId: noteId,
+          autosaveDelay: const Duration(seconds: 10),
+          onPersist: (note) async => saves.add(note),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).at(1), '点击按钮立即保存');
+
+    await tester.tap(find.byKey(const Key('note-editor-save')));
+    await tester.pump();
+
+    expect(saves, hasLength(1));
+    expect(saves.single.body, '点击按钮立即保存');
+    expect(find.byIcon(Icons.check_rounded), findsOneWidget);
+    expect(find.text('已保存'), findsOneWidget);
+    expect(find.byType(NoteEditorPage), findsOneWidget);
+  });
+
+  testWidgets(
+    'note manual save ignores a duplicate tap during an active write',
+    (tester) async {
+      final write = Completer<void>();
+      final saves = <NoteViewModel>[];
+
+      await tester.pumpWidget(
+        _testApp(
+          container,
+          NoteEditorPage(
+            noteId: noteId,
+            autosaveDelay: const Duration(seconds: 10),
+            onPersist: (note) async {
+              saves.add(note);
+              await write.future;
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.enterText(find.byType(TextField).at(1), '只写入一次');
+
+      await tester.tap(find.byKey(const Key('note-editor-save')));
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      await tester.tap(find.byKey(const Key('note-editor-save')));
+      await tester.pump();
+
+      expect(saves, hasLength(1));
+      write.complete();
+      await tester.pump();
+      await tester.pump();
+      expect(saves, hasLength(1));
+      expect(find.text('已保存'), findsOneWidget);
+    },
+  );
 }
 
 Widget _testApp(ProviderContainer container, Widget home) {

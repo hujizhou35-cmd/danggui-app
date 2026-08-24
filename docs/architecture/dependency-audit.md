@@ -17,7 +17,7 @@ or AI SDK is present.
 | `cupertino_icons 1.0.9` | Platform-familiar fallback icons | [flutter/packages](https://github.com/flutter/packages/tree/main/third_party/packages/cupertino_icons), Flutter project | MIT | Both | None | Replaceable by bundled vector assets or Material icons. |
 | `drift 2.34.3` + `drift_flutter 0.3.1` | Typed SQLite schema, migrations, transactions and testable repositories | [simolus3/drift](https://github.com/simolus3/drift), actively released | MIT | Both | None | SQL schema is documented independently and backup/export formats are not Drift-specific; a repository-by-repository migration remains possible. |
 | `file_picker 12.0.0` | User-initiated backup import and filesystem selection | [miguelpruivo/flutter_file_picker](https://github.com/miguelpruivo/flutter_file_picker) | MIT | Both | None | Mobile providers can return temporary copies or scoped URIs. Files are validated and copied immediately; no persistent access is assumed. A native document-picker adapter can replace it. |
-| `flutter_local_notifications 22.3.0` | Local, inexact notifications and snooze actions | [MaikuB/flutter_local_notifications](https://github.com/MaikuB/flutter_local_notifications) | BSD-3-Clause | Both | None; no push service | OEM power management may delay inexact alarms. All scheduling is behind `NotificationGateway`, with a revisioned outbox for replacement. |
+| `flutter_local_notifications 22.3.0` | Local exact/inexact fallback notifications and snooze actions | [MaikuB/flutter_local_notifications](https://github.com/MaikuB/flutter_local_notifications) | BSD-3-Clause | Both | None; no push service | Android exact delivery uses user-controlled `SCHEDULE_EXACT_ALARM`; denial falls back to inexact delivery. All scheduling is behind `NotificationGateway`, with a revisioned outbox for replacement. |
 | `flutter_riverpod 3.4.2` | Application state and dependency injection | [rrousselGit/riverpod](https://github.com/rrousselGit/riverpod) | MIT | Both | None | Providers are at presentation/application boundaries; repositories and services remain plain Dart and testable without Riverpod. |
 | `flutter_secure_storage 10.3.1` | Optional automatic-backup passphrase in Android Keystore / Apple Keychain | [mogol/flutter_secure_storage](https://github.com/mogol/flutter_secure_storage) | BSD-3-Clause | Both | None | Used only for an optional local secret. Disabling encryption deletes the stored secret. The passphrase-store interface can be replaced by native code. |
 | `go_router 17.5.0` | Four-tab shell and nested detail routes | [flutter/packages](https://github.com/flutter/packages/tree/main/packages/go_router), Flutter team | BSD-3-Clause | Both | None | Routes are centralized in `app.dart`; Navigator 2.0 can replace it without data changes. |
@@ -44,7 +44,7 @@ must retain the repository `NOTICE` file.
 ## Offline and permission gates
 
 - Android's merged release manifest is inspected in CI and must not contain
-  `android.permission.INTERNET`, exact-alarm or full-screen-intent permissions.
+  `android.permission.INTERNET`, `USE_EXACT_ALARM`, or full-screen-intent permissions. `SCHEDULE_EXACT_ALARM` is the sole reviewed special-access exception for local reminders.
 - iOS contains no remote notification entitlement, background networking mode,
   analytics endpoint or account capability.
 - A repository-wide import/configuration scan rejects Firebase, analytics,
