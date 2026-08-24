@@ -612,14 +612,14 @@ run_retry_gate_tests() {
   [[ ! -e "${evidence_dir}/attempt-1" ]]
 
   printf '%s\n' \
-    '{"status":"passed","phase":"release-acceptance-complete","attempt":1,"exitStatus":0}' \
+    '{"status":"passed","phase":"release-binary-smoke-complete","attempt":1,"exitStatus":0}' \
     > "${evidence_dir}/workflow-phase.json"
   RUNNER_TEMP="${case_root}" bash "${script_dir}/android_emulator_retry_gate.sh" \
     enforce 36 success false skipped >/dev/null
   jq -e '.finalStatus == "passed-primary" and
     .workflowPhaseValid == true' "${evidence_dir}/retry-decision.json" >/dev/null
   printf '%s\n' \
-    '{"status":"passed","phase":"release-acceptance-complete","attempt":2,"exitStatus":0}' \
+    '{"status":"passed","phase":"release-binary-smoke-complete","attempt":2,"exitStatus":0}' \
     > "${evidence_dir}/workflow-phase.json"
   RUNNER_TEMP="${case_root}" bash "${script_dir}/android_emulator_retry_gate.sh" \
     enforce 36 failure true success >/dev/null
@@ -686,6 +686,46 @@ run_retry_gate_tests() {
   rm -rf -- "${case_root}"
 }
 
+run_alarm_dump_contract_tests() (
+  local case_root
+  local active_dump
+  local cancellation_dump
+  # Most infrastructure tests source the helpers inside isolated subshells;
+  # this small pure-parser contract runs in the parent shell.
+  source "${script_dir}/android_emulator_infrastructure.sh"
+  case_root="$(mktemp -d "${TMPDIR:-/tmp}/danggui-alarm-contract.XXXXXX")"
+  active_dump="${case_root}/active.txt"
+  cancellation_dump="${case_root}/cancellation.txt"
+
+  printf '%s\n' \
+    'Pending alarm batches:' \
+    '  RTC_WAKEUP #0: Alarm{26da1f8 type 0 when 1787517843000 com.danggui.memo}' \
+    '    tag=*walarm*:com.danggui.memo/com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver' \
+    > "${active_dump}"
+  danggui_alarm_dump_has_scheduled_notification \
+    "${active_dump}" com.danggui.memo 1787517843000
+  if danggui_alarm_dump_has_scheduled_notification \
+       "${active_dump}" com.danggui.memo 1787517844000; then
+    echo 'A different scheduled instant was incorrectly accepted.' >&2
+    return 1
+  fi
+
+  printf '%s\n' \
+    'Exact Alarm Candidates:' \
+    '  com.danggui.memo' \
+    'Removal history:' \
+    '  #1: Reason=pi_cancelled' \
+    '    Snapshot:' \
+    '      type=RTC_WAKEUP tag=*walarm*:com.danggui.memo/com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver' \
+    > "${cancellation_dump}"
+  if danggui_alarm_dump_has_scheduled_notification \
+       "${cancellation_dump}" com.danggui.memo 1787517843000; then
+    echo 'Cancellation history was incorrectly accepted as a pending alarm.' >&2
+    return 1
+  fi
+  rm -rf -- "${case_root}"
+)
+
 run_health_case healthy 1 0 false
 run_health_case launcher-then-systemui 1 0 false
 run_health_case all-launcher 1 75 true
@@ -707,6 +747,7 @@ if command -v setsid >/dev/null; then
 else
   echo 'Process-group runtime self-test skipped: setsid is unavailable.'
 fi
+run_alarm_dump_contract_tests
 run_retry_gate_tests
 
 echo 'Android emulator infrastructure health/retry self-test passed.'

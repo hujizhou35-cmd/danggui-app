@@ -127,6 +127,35 @@ void main() {
     expect(deleted, isTrue);
   });
 
+  testWidgets('TaskCard exposes a hit-testable title semantic target', (
+    tester,
+  ) async {
+    const title = 'IME task semantics';
+    const cardKey = ValueKey<String>('task-card-semantics');
+    await _pump(
+      tester,
+      const Center(
+        child: SizedBox(
+          width: 378,
+          child: TaskCard(
+            key: cardKey,
+            title: title,
+            switchSemanticLabel: 'IME task semantics on',
+            addToPastLabel: 'Add to past',
+            deleteLabel: 'Delete',
+            onTap: _noop,
+          ),
+        ),
+      ),
+    );
+
+    final semantics = tester.ensureSemantics();
+    expect(find.byKey(cardKey).hitTestable(), findsOneWidget);
+    expect(find.bySemanticsLabel(title), findsOneWidget);
+    expect(find.bySemanticsLabel(title).hitTestable(), findsOneWidget);
+    semantics.dispose();
+  });
+
   testWidgets('active and pending TaskCards keep the same height', (
     tester,
   ) async {
@@ -410,3 +439,5 @@ Future<void> _pump(
   );
   await tester.pump();
 }
+
+void _noop() {}

@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../application/app_store.dart';
+import '../../core/app_version.dart';
 import '../../core/theme/theme.dart';
 import '../../domain/models.dart';
 import '../../services/backup/automatic_backup_coordinator.dart';
@@ -125,8 +126,6 @@ class SettingsPage extends ConsumerStatefulWidget {
 }
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
-  static const _appVersion = '1.0.0+1';
-
   late TimeOfDay _backupTime;
   int? _pendingTextScale;
   var _saving = false;
@@ -415,7 +414,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               onTap: () => showLicensePage(
                 context: context,
                 applicationName: l10n.appName,
-                applicationVersion: _appVersion,
+                applicationVersion: appVersionName,
                 applicationIcon: Padding(
                   padding: const EdgeInsets.all(8),
                   child: Image.asset(
@@ -428,7 +427,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
             SettingsTile(
               title: l10n.about,
-              subtitle: l10n.versionLabel(_appVersion),
+              subtitle: l10n.versionLabel(appVersionName),
               trailing: const Icon(Icons.eco_outlined),
               showDivider: false,
             ),

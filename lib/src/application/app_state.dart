@@ -14,6 +14,8 @@ final class TaskViewModel {
     this.body = '',
     this.soundEnabled = true,
     this.vibrationEnabled = true,
+    this.reminderStatus,
+    this.reminderPauseReason,
   });
 
   final String id;
@@ -26,6 +28,8 @@ final class TaskViewModel {
   final String body;
   final bool soundEnabled;
   final bool vibrationEnabled;
+  final ReminderStatus? reminderStatus;
+  final ReminderPauseReason? reminderPauseReason;
 
   TaskViewModel copyWith({
     String? title,
@@ -37,6 +41,8 @@ final class TaskViewModel {
     String? body,
     bool? soundEnabled,
     bool? vibrationEnabled,
+    Object? reminderStatus = _unset,
+    Object? reminderPauseReason = _unset,
   }) {
     return TaskViewModel(
       id: id,
@@ -51,6 +57,12 @@ final class TaskViewModel {
       body: body ?? this.body,
       soundEnabled: soundEnabled ?? this.soundEnabled,
       vibrationEnabled: vibrationEnabled ?? this.vibrationEnabled,
+      reminderStatus: identical(reminderStatus, _unset)
+          ? this.reminderStatus
+          : reminderStatus as ReminderStatus?,
+      reminderPauseReason: identical(reminderPauseReason, _unset)
+          ? this.reminderPauseReason
+          : reminderPauseReason as ReminderPauseReason?,
     );
   }
 }

@@ -61,6 +61,48 @@ function Resolve-DartCommand {
     throw "Dart was not found beside Flutter or on PATH."
 }
 
+function Resolve-BundletoolJar {
+    $bundletoolVersion = "1.18.3"
+    $expectedSha256 = "A099CFA1543F55593BC2ED16A70A7C67FE54B1747BB7301F37FDFD6D91028E29"
+    $configuredPath = [Environment]::GetEnvironmentVariable("BUNDLETOOL_JAR")
+    $jarPath =
+        if ($configuredPath) {
+            [IO.Path]::GetFullPath($configuredPath)
+        }
+        else {
+            Join-Path ([IO.Path]::GetTempPath()) "bundletool-all-$bundletoolVersion.jar"
+        }
+
+    if (Test-Path -LiteralPath $jarPath -PathType Leaf) {
+        $actualSha256 = Get-FileHash -LiteralPath $jarPath -Algorithm SHA256 | Select-Object -ExpandProperty Hash
+        if ($actualSha256 -eq $expectedSha256) {
+            return $jarPath
+        }
+        if ($configuredPath) {
+            throw "Configured BUNDLETOOL_JAR does not match the pinned bundletool $bundletoolVersion SHA-256."
+        }
+        Remove-Item -LiteralPath $jarPath -Force
+    }
+    elseif ($configuredPath) {
+        throw "Configured BUNDLETOOL_JAR does not exist: $jarPath"
+    }
+
+    $downloadUri = "https://github.com/google/bundletool/releases/download/$bundletoolVersion/bundletool-all-$bundletoolVersion.jar"
+    $partialPath = "$jarPath.partial"
+    try {
+        Invoke-WebRequest -Uri $downloadUri -OutFile $partialPath
+        $actualSha256 = Get-FileHash -LiteralPath $partialPath -Algorithm SHA256 | Select-Object -ExpandProperty Hash
+        if ($actualSha256 -ne $expectedSha256) {
+            throw "Downloaded bundletool $bundletoolVersion failed SHA-256 verification."
+        }
+        Move-Item -LiteralPath $partialPath -Destination $jarPath -Force
+    }
+    finally {
+        Remove-Item -LiteralPath $partialPath -Force -ErrorAction SilentlyContinue
+    }
+    return $jarPath
+}
+
 $requiredSigningVariables = @(
     "DANGGUI_KEYSTORE_PATH",
     "DANGGUI_KEYSTORE_PASSWORD",
@@ -99,7 +141,14 @@ Invoke-Checked $flutter build apk --release --split-per-abi
 Invoke-Checked $flutter build appbundle --release
 
 $versionLine = Get-Content -LiteralPath (Join-Path $repoRoot "pubspec.yaml") | Where-Object { $_ -match "^version:\s*" } | Select-Object -First 1
-$version = if ($versionLine) { ($versionLine -replace "^version:\s*", "").Trim() } else { "unknown" }
+if (-not $versionLine) {
+    throw "pubspec.yaml does not declare a release version."
+}
+$version = ($versionLine -replace "^version:\s*", "").Trim()
+if ($version -notmatch "^(?<name>\d+\.\d+\.\d+)\+(?<code>[1-9]\d*)$") {
+    throw "pubspec.yaml version must use semantic-name+positive-build-number: $version"
+}
+$baseVersionCode = [int]$Matches["code"]
 $safeVersion = $version -replace "\+", "-"
 if (-not $OutputRoot) {
     $OutputRoot = Join-Path $repoRoot "dist/android/$safeVersion-$signingMode"
@@ -110,13 +159,13 @@ $universalApk = Join-Path $repoRoot "build/app/outputs/flutter-apk/app-release.a
 $stagedUniversal = Join-Path $OutputRoot "danggui-android-universal-$signingMode.apk"
 Copy-Item -LiteralPath $universalApk -Destination $stagedUniversal -Force
 
-$splitVersionCodes = [ordered]@{
-    "armeabi-v7a" = "1001"
-    "arm64-v8a" = "2001"
-    "x86_64" = "4001"
+$splitVersionOffsets = [ordered]@{
+    "armeabi-v7a" = 1000
+    "arm64-v8a" = 2000
+    "x86_64" = 4000
 }
 $stagedSplitApks = [ordered]@{}
-foreach ($abi in $splitVersionCodes.Keys) {
+foreach ($abi in $splitVersionOffsets.Keys) {
     $source = Join-Path $repoRoot "build/app/outputs/flutter-apk/app-$abi-release.apk"
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Expected split APK was not generated: $source"
@@ -130,10 +179,12 @@ $bundleSource = Join-Path $repoRoot "build/app/outputs/bundle/release/app-releas
 $stagedBundle = Join-Path $OutputRoot "danggui-android-$signingMode.aab"
 Copy-Item -LiteralPath $bundleSource -Destination $stagedBundle -Force
 
+$env:BUNDLETOOL_JAR = Resolve-BundletoolJar
 $verifier = Join-Path $PSScriptRoot "verify_android_artifacts.ps1"
-& $verifier -ApkPath $stagedUniversal -AabPath $stagedBundle -ExpectedVersionCode "1"
-foreach ($abi in $splitVersionCodes.Keys) {
-    & $verifier -ApkPath $stagedSplitApks[$abi] -ExpectedVersionCode $splitVersionCodes[$abi]
+& $verifier -ApkPath $stagedUniversal -AabPath $stagedBundle -ExpectedVersionCode $baseVersionCode
+foreach ($abi in $splitVersionOffsets.Keys) {
+    $splitVersionCode = $splitVersionOffsets[$abi] + $baseVersionCode
+    & $verifier -ApkPath $stagedSplitApks[$abi] -ExpectedVersionCode $splitVersionCode
 }
 
 Get-ChildItem -LiteralPath $OutputRoot -File |

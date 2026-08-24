@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 const String expectedApplicationId = 'com.danggui.memo';
-const String expectedVersion = '1.0.0+1';
 const int expectedAndroidMinSdk = 24;
 const int expectedAndroidTargetSdk = 36;
 const int expectedAndroidCompileSdk = 36;
@@ -35,6 +34,40 @@ const Set<String> approvedRuntimeDependencies = <String>{
   'timezone',
   'uuid',
 };
+
+final class ReleaseVersion {
+  const ReleaseVersion({required this.name, required this.buildNumber});
+
+  final String name;
+  final int buildNumber;
+
+  String get technical => '$name+$buildNumber';
+
+  static ReleaseVersion? tryParsePubspec(String pubspec) {
+    final match = RegExp(
+      r'^version:\s*(\d+\.\d+\.\d+)\+([1-9]\d*)\s*$',
+      multiLine: true,
+    ).firstMatch(pubspec);
+    if (match == null) return null;
+    return ReleaseVersion(
+      name: match.group(1)!,
+      buildNumber: int.parse(match.group(2)!),
+    );
+  }
+}
+
+ReleaseVersion readReleaseVersion(Directory root) {
+  final pubspec = File(
+    '${root.absolute.path}${Platform.pathSeparator}pubspec.yaml',
+  ).readAsStringSync();
+  final version = ReleaseVersion.tryParsePubspec(pubspec);
+  if (version == null) {
+    throw const FormatException(
+      'pubspec.yaml version must use semantic-name+positive-build-number.',
+    );
+  }
+  return version;
+}
 
 /// Result of the repository-level privacy and platform source audit.
 final class PrivacyPlatformAuditReport {
@@ -145,15 +178,29 @@ final class _Audit {
     final pubspec = _requiredText('pubspec.yaml');
     if (pubspec == null) return;
 
-    _expectMatch(
-      'pubspec.yaml',
-      pubspec,
-      RegExp(
-        '^version:\\s*${RegExp.escape(expectedVersion)}\\s*\$',
-        multiLine: true,
-      ),
-      'version must remain $expectedVersion',
+    final version = ReleaseVersion.tryParsePubspec(pubspec);
+    _expect(
+      version != null,
+      'pubspec release version is semantic and has a positive build number',
+      'pubspec.yaml version must use semantic-name+positive-build-number',
     );
+    if (version != null) {
+      final runtimeVersion = _requiredText('lib/src/core/app_version.dart');
+      if (runtimeVersion != null) {
+        _expectContains(
+          'lib/src/core/app_version.dart',
+          runtimeVersion,
+          "const String appVersionName = '${version.name}';",
+          'runtime product version must match pubspec.yaml',
+        );
+        _expectContains(
+          'lib/src/core/app_version.dart',
+          runtimeVersion,
+          'const int appBuildNumber = ${version.buildNumber};',
+          'runtime build number must match pubspec.yaml',
+        );
+      }
+    }
     _expectMatch(
       'pubspec.yaml',
       pubspec,
@@ -845,12 +892,72 @@ final class _Audit {
       'bash integration_test/android_emulator_infrastructure_self_test.sh',
       'bash tool/verify_android_artifacts.sh',
       'bash tool/build_ios_unsigned.sh',
+      'bash tool/build_ios_source_zip.sh',
     ]) {
       _expectContains(
         workflowPath,
         workflow,
         command,
         "CI must run ${command.split(' ').first} release gate: $command",
+      );
+    }
+
+    for (final scriptPath in <String>[
+      'tool/build_android_release.ps1',
+      'tool/verify_android_artifacts.ps1',
+      'tool/verify_android_artifacts.sh',
+      'tool/build_ios_unsigned.sh',
+      'tool/build_ios_source_zip.sh',
+    ]) {
+      _expectContains(
+        scriptPath,
+        _requiredText(scriptPath) ?? '',
+        'pubspec.yaml',
+        'release scripts must derive platform versions from pubspec.yaml',
+      );
+    }
+
+    final iosSourceArchive =
+        _requiredText('tool/build_ios_source_zip.sh') ?? '';
+    for (final archiveContract in <String>[
+      'git archive',
+      'danggui-ios-source-v',
+      'pubspec.lock',
+      'required_archive_entries',
+      'git ls-tree -r --name-only HEAD',
+      'archive_manifest',
+      '.github/workflows/mobile-ci.yml',
+      'android/app/build.gradle.kts',
+      'docs/architecture/ios-source-build.md',
+      'integration_test/app_cold_start_test.dart',
+      'test/platform/privacy_platform_config_test.dart',
+      r'\.dart_tool',
+      'keystore\\.properties',
+      'p12',
+      'mobileprovision',
+      'PRIVATE KEY',
+      'google-services\\.json',
+    ]) {
+      _expectContains(
+        'tool/build_ios_source_zip.sh',
+        iosSourceArchive,
+        archiveContract,
+        'deterministic iOS source delivery must be complete and secret-free',
+      );
+    }
+
+    for (final releaseAssetContract in <String>[
+      'gh release delete-asset',
+      'expected_assets',
+      'published_assets',
+      'existing_is_prerelease',
+      'already-promoted stable release',
+    ]) {
+      _expectContains(
+        workflowPath,
+        workflow,
+        releaseAssetContract,
+        'pre-release reruns must replace and verify the exact asset set',
       );
     }
 
@@ -862,6 +969,32 @@ final class _Audit {
         smoke,
         'bash integration_test/run_android_release_acceptance.sh',
         'successful device smoke must continue into release acceptance',
+      );
+      _expectContains(
+        smokePath,
+        smoke,
+        'bash integration_test/run_android_release_binary_smoke.sh',
+        'instrumented acceptance must continue into exact release-binary smoke',
+      );
+      final interactionAcceptanceIndex = smoke.indexOf(
+        'bash integration_test/run_android_release_acceptance.sh',
+      );
+      final releaseBinarySmokeIndex = smoke.indexOf(
+        'bash integration_test/run_android_release_binary_smoke.sh',
+      );
+      _expect(
+        interactionAcceptanceIndex >= 0 &&
+            releaseBinarySmokeIndex > interactionAcceptanceIndex &&
+            smoke.contains(r'${DANGGUI_RELEASE_APK:?'),
+        'exact release binary runs only after instrumented interaction acceptance',
+        '$smokePath must pass the downloaded universal APK to the host-only '
+            'release-binary smoke after the debug interaction phase succeeds',
+      );
+      _expectContains(
+        smokePath,
+        smoke,
+        'show_ime_with_hard_keyboard',
+        'device editor acceptance must expose a real soft-keyboard inset',
       );
       _expectContains(
         smokePath,
@@ -907,9 +1040,109 @@ final class _Audit {
       );
     }
 
+    const releaseBinarySmokePath =
+        'integration_test/run_android_release_binary_smoke.sh';
+    final releaseBinarySmoke = _requiredText(releaseBinarySmokePath);
+    if (releaseBinarySmoke != null) {
+      for (final contract in <String>[
+        'tool/verify_android_artifacts.sh',
+        'DANGGUI_RELEASE_ARTIFACT_SHA',
+        'DANGGUI_RELEASE_APK_SHA256',
+        'changed after the upstream artifact checksum gate',
+        'DANGGUI_RELEASE_SIGNING_MODE',
+        r'adb -s "${device_serial}"',
+        'install --no-streaming',
+        'manifest application-id',
+        'manifest version-name',
+        'manifest version-code',
+        'manifest min-sdk',
+        'manifest target-sdk',
+        'manifest debuggable',
+        'ro.build.version.sdk',
+        'shell am start -W -S',
+        'shell uiautomator dump',
+        'screen-specific marker',
+        'release-binary-crash-scan.json',
+        'host-adb-and-uiautomator-no-flutter-instrumentation',
+        'release-binary-smoke-complete',
+      ]) {
+        _expectContains(
+          releaseBinarySmokePath,
+          releaseBinarySmoke,
+          contract,
+          'release artifact smoke must remain exact, host-driven, and auditable',
+        );
+      }
+      _expect(
+        !releaseBinarySmoke.contains('flutter test') &&
+            !releaseBinarySmoke.contains('adb install -r'),
+        'release-binary smoke has no instrumentation or debug overlay upgrade',
+        '$releaseBinarySmokePath must uninstall the interaction package and '
+            'install the downloaded universal release-mode APK as a clean app',
+      );
+    }
+
+    final coldStartAcceptance =
+        _requiredText('integration_test/app_cold_start_test.dart') ?? '';
+    for (final keyboardContract in <String>[
+      'SystemChannels.textInput',
+      'view.viewInsets.bottom',
+      'usableBottom',
+      'task-creation-more-settings',
+      'past editor durable save',
+    ]) {
+      _expectContains(
+        'integration_test/app_cold_start_test.dart',
+        coldStartAcceptance,
+        keyboardContract,
+        'device cold-start acceptance must exercise real editor IME geometry',
+      );
+    }
+
+    final notificationCallbackAcceptance =
+        _requiredText('integration_test/release_acceptance_verify_test.dart') ??
+        '';
+    for (final callbackContract in <String>[
+      'handleNotificationAction',
+      '<int>[10, 30, 60]',
+      'nativeNotificationGateway',
+      'snooze-callback.json',
+    ]) {
+      _expectContains(
+        'integration_test/release_acceptance_verify_test.dart',
+        notificationCallbackAcceptance,
+        callbackContract,
+        'device acceptance must exercise all production snooze callbacks',
+      );
+    }
+
     const acceptancePath = 'integration_test/run_android_release_acceptance.sh';
     final acceptance = _requiredText(acceptancePath);
     if (acceptance != null) {
+      _expectContains(
+        acceptancePath,
+        acceptance,
+        'notification-click.json',
+        'device acceptance must prove a real notification content click',
+      );
+      _expectContains(
+        acceptancePath,
+        acceptance,
+        'exactTitleNodeCount',
+        'notification clicks must resolve exact SystemUI title-node bounds',
+      );
+      _expectContains(
+        acceptancePath,
+        acceptance,
+        'snooze-callback.json',
+        'device acceptance must retain production 10/30/60 callback evidence',
+      );
+      _expectContains(
+        acceptancePath,
+        acceptance,
+        'alarm-after-snooze-callback.txt',
+        'device acceptance must prove the final callback reached AlarmManager',
+      );
       final noUninstallCount = '--no-uninstall'.allMatches(acceptance).length;
       _expect(
         noUninstallCount >= 3,
@@ -1044,7 +1277,7 @@ final class _Audit {
         '.attempt == 1',
         '.ordinaryProductFailure == false',
         r'.status == "passed"',
-        r'.phase == "release-acceptance-complete"',
+        r'.phase == "release-binary-smoke-complete"',
         r'.exitStatus == 0',
         'seed-process-group-termination.json',
         'seed-log-quiescence.json',
@@ -1079,6 +1312,33 @@ final class _Audit {
       'CI has exactly two identically pinned emulator action invocations',
       '$workflowPath must contain one primary and at most one fresh-AVD retry',
     );
+    final emulatorJobStart = workflow.indexOf('\n  android-emulator-smoke:');
+    final emulatorJobEnd = workflow.indexOf(
+      '\n  ios-unsigned:',
+      emulatorJobStart < 0 ? 0 : emulatorJobStart,
+    );
+    final emulatorJob =
+        emulatorJobStart >= 0 && emulatorJobEnd > emulatorJobStart
+        ? workflow.substring(emulatorJobStart, emulatorJobEnd)
+        : '';
+    for (final contract in <String>[
+      'needs: [android-linux]',
+      'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c',
+      r'name: danggui-android-${{ github.sha }}',
+      'digest-mismatch: error',
+      r'danggui-android-universal-${signing_mode}.apk',
+      'sha256sum --check --strict SHA256SUMS',
+      'DANGGUI_RELEASE_APK=',
+      'DANGGUI_RELEASE_APK_SHA256=',
+      r'DANGGUI_RELEASE_ARTIFACT_SHA=${GITHUB_SHA}',
+    ]) {
+      _expectContains(
+        workflowPath,
+        emulatorJob,
+        contract,
+        'emulator required checks consume the exact android-linux artifact',
+      );
+    }
     for (final contract in <String>[
       r'avd-name: danggui-api-${{ matrix.api-level }}-attempt-1',
       r'avd-name: danggui-api-${{ matrix.api-level }}-attempt-2',
@@ -1180,15 +1440,45 @@ final class _Audit {
     );
 
     for (final splitContract in <String>[
-      '[armeabi-v7a]=1001',
-      '[arm64-v8a]=2001',
-      '[x86_64]=4001',
+      '[armeabi-v7a]=1000',
+      '[arm64-v8a]=2000',
+      '[x86_64]=4000',
     ]) {
       _expectContains(
         workflowPath,
         workflow,
         splitContract,
-        'CI must enumerate and verify every Flutter split APK version code',
+        'CI must enumerate every Flutter split APK version-code offset',
+      );
+    }
+    _expectContains(
+      workflowPath,
+      workflow,
+      'offset + version_code',
+      'CI must derive split APK version codes from pubspec.yaml',
+    );
+    for (final protectedTagContract in <String>[
+      'fetch-depth: 0',
+      'git merge-base --is-ancestor',
+      'refs/remotes/origin/main',
+    ]) {
+      _expectContains(
+        workflowPath,
+        workflow,
+        protectedTagContract,
+        'tag publishing must prove the tagged commit belongs to protected main',
+      );
+    }
+    for (final bundletoolContract in <String>[
+      'BUNDLETOOL_VERSION: 1.18.3',
+      'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29',
+      'sha256sum --check --strict',
+    ]) {
+      _expectContains(
+        workflowPath,
+        workflow,
+        bundletoolContract,
+        'CI must install the pinned, checksum-verified AAB metadata verifier',
       );
     }
 
@@ -1210,6 +1500,19 @@ final class _Audit {
         '-printcert -jarfile',
         'AAB verification must inspect the signing certificate',
       );
+      for (final metadataContract in <String>[
+        'dump manifest',
+        'uses-sdk',
+        'Unexpected AAB',
+        'DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION',
+      ]) {
+        _expectContains(
+          verifierPath,
+          verifier,
+          metadataContract,
+          'AAB verification must inspect identity, SDK levels, and permissions',
+        );
+      }
     }
 
     _expectContains(

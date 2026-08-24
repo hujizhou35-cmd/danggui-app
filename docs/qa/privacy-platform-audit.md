@@ -1,6 +1,6 @@
-# 当归 1.0.0 隐私与平台发布前审计
+# 当归 1.1.0 隐私与平台发布前审计
 
-- 审计日期：2026-08-22
+- 审计日期：2026-08-24
 - 审计对象：Android 与 iOS 的已检入源配置、Dart 生产源码、`pubspec.lock`，以及执行 `flutter pub get` 后解析到的移动端原生插件元数据。
 - 产品边界：本地优先；应用自身不联网，不包含账号、广告、分析、遥测、远程推送或云同步。
 
@@ -8,14 +8,14 @@
 
 当前源配置符合上述应用级离线边界。Android 源清单只有本地提醒所需的三个权限；iOS 没有 entitlement 文件、远程通知 entitlement、后台网络模式或联网能力；生产 Dart 与原生入口未发现网络 API 或硬编码远端地址；运行时依赖采用显式允许名单，锁文件中的托管包均带 SHA-256，且没有 git/path 依赖。
 
-这一结论是“源配置验证”，不是对尚未生成的最终 APK、AAB 或未来签名 IPA 的替代证明。最终 Android APK 必须继续通过 `tool/verify_android_artifacts.ps1` 或 CI 中对应的 shell 检查；iOS 当前只交付源码和未签名编译证据，不声明已完成签名 IPA 审计。
+这一结论是“源配置验证”，不是对尚未生成的最终 APK、AAB 或未来签名 IPA 的替代证明。最终 Android APK 必须继续通过 `tool/verify_android_artifacts.ps1` 或 CI 中对应的 shell 检查；iOS 当前只交付确定性源码 ZIP 和未签名编译证据，不声明已完成签名 IPA 审计。源码 ZIP 从干净标签的全部 Git 跟踪内容生成，保留跨平台工程与测试，并在打包后拒绝密钥、证书、描述文件、`.env`、缓存、`build` 和 `dist`。
 
 ## 审计矩阵
 
 | 范围 | 验证结果 | 自动化门禁 |
 | --- | --- | --- |
 | 应用身份 | Android `namespace`/`applicationId` 与 iOS bundle ID 均为 `com.danggui.memo` | Dart 审计 + 平台静态测试 + APK 检查 |
-| 版本 | `1.0.0+1`；平台构建值均来自 Flutter 版本变量 | Dart 审计 + APK 检查 + iOS 构建脚本 |
+| 版本 | `1.1.0+2`；设置显示产品版本 `1.1.0`，备份/导出记录技术版本；平台构建值均从 `pubspec.yaml` 派生 | Dart 审计 + APK 检查 + iOS 构建脚本 |
 | Android SDK | min 24、target 36、compile 36；Java/Kotlin 17 | Dart 审计 + APK 检查 |
 | iOS 目标 | iOS 15.0；iPhone/iPad 均只允许竖屏 | Dart 审计 + iOS 构建脚本 |
 | Android 权限 | 仅 `POST_NOTIFICATIONS`、`VIBRATE`、`RECEIVE_BOOT_COMPLETED` | 源清单精确集合 + 解析插件清单 + 最终 APK 精确集合 |
@@ -82,11 +82,11 @@ flutter test test/platform/privacy_platform_config_test.dart --reporter expanded
 - Apple 签名/描述文件不会在未来 IPA 中加入 entitlement；
 - 操作系统、用户选择的分享目标或系统级设备备份永不联网。
 
-因此 Android 构建后必须检查 universal APK 的最终合并清单、精确权限集合、ID/版本/SDK/debuggable、非导出 receiver 和签名证书；AAB 还要做 JAR 签名验证。iOS 未签名构建脚本会复查最终 `.app` 的 ID、版本、最低系统、方向、后台模式与远程通知标记；将来若制作签名 IPA，还必须对归档执行 `codesign -d --entitlements :-`、嵌入描述文件和最终 Privacy Manifest 的独立审计。
+因此 Android 构建后必须检查 universal APK 的最终合并清单、精确权限集合、ID/版本/SDK/debuggable、非导出 receiver 和签名证书；AAB 除 JAR 签名与证书外，还由固定版本且经 SHA-256 验证的 bundletool 独立解析 base manifest，复查 ID、产品版本、versionCode、min/target SDK 和精确权限集合。iOS 未签名构建脚本会复查最终 `.app` 的 ID、版本、最低系统、方向、后台模式与远程通知标记；将来若制作签名 IPA，还必须对归档执行 `codesign -d --entitlements :-`、嵌入描述文件和最终 Privacy Manifest 的独立审计。
 
 ## 发布判定
 
 - 源配置门禁：通过后才允许构建。
 - Android 安装包：只有最终 APK 检查和签名指纹检查均通过，才可称为官方安装包。
-- Android AAB：与已检查 APK 同一锁定源码/构建运行生成，并通过签名验证；若单独重建，需要重新生成 APK 做合并清单对照。
+- Android AAB：与已检查 APK 同一锁定源码/构建运行生成，并通过签名、证书与 bundletool base manifest 独立验证。
 - iOS：当前仅源码与未签名编译证据；不把 `.app.zip` 描述为可安装 IPA，也不声称已完成 App Store/TestFlight 发布审计。

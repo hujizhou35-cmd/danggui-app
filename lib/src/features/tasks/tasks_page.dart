@@ -9,6 +9,7 @@ import '../../application/app_store.dart';
 import '../../core/theme/theme.dart';
 import '../../domain/models.dart';
 import '../../ui/components/components.dart';
+import 'task_creation_sheet.dart';
 
 class TasksPage extends ConsumerStatefulWidget {
   const TasksPage({super.key});
@@ -280,18 +281,19 @@ class _TasksPageState extends ConsumerState<TasksPage> {
   }
 
   Future<void> _showQuickAdd(BuildContext context) async {
-    final result = await showModalBottomSheet<_QuickAddResult>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (context) => const _QuickAddSheet(),
-    );
+    final result = await showTaskCreationSheet(context);
     if (result == null || !context.mounted) return;
     try {
       final id = await ref
           .read(appStoreProvider.notifier)
-          .createTask(title: result.title, dueDate: result.dueDate);
+          .createTask(
+            title: result.title,
+            body: result.body,
+            dueDate: result.dueDate,
+          );
       if (result.openDetails && context.mounted) {
+        await settleTaskCreationKeyboard(context: context);
+        if (!context.mounted) return;
         await context.push('/tasks/$id');
       }
     } on FormatException {
@@ -316,149 +318,6 @@ class _TasksPageState extends ConsumerState<TasksPage> {
               ref.read(appStoreProvider.notifier).restoreTask(task.id),
         ),
       ),
-    );
-  }
-}
-
-final class _QuickAddResult {
-  const _QuickAddResult({
-    required this.title,
-    required this.dueDate,
-    required this.openDetails,
-  });
-
-  final String title;
-  final DateTime? dueDate;
-  final bool openDetails;
-}
-
-class _QuickAddSheet extends StatefulWidget {
-  const _QuickAddSheet();
-
-  @override
-  State<_QuickAddSheet> createState() => _QuickAddSheetState();
-}
-
-class _QuickAddSheetState extends State<_QuickAddSheet> {
-  final _titleController = TextEditingController();
-  DateTime? _dueDate;
-
-  @override
-  void dispose() {
-    _titleController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    final tokens = context.dangguiTheme;
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 180),
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Material(
-        color: tokens.paper2,
-        shape: RoundedRectangleBorder(borderRadius: tokens.sheetRadius),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Center(
-                child: Container(
-                  width: 42,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: tokens.lineDark,
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Text(
-                l10n.quickAdd,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _titleController,
-                autofocus: true,
-                maxLength: 160,
-                textInputAction: TextInputAction.done,
-                decoration: InputDecoration(hintText: l10n.taskTitleHint),
-                onSubmitted: (_) => _finish(false),
-              ),
-              const Divider(),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                minTileHeight: 52,
-                leading: const Icon(Icons.calendar_today_outlined),
-                title: Text(l10n.dueDate),
-                subtitle: Text(
-                  _dueDate == null
-                      ? l10n.noDate
-                      : DateFormat.yMMMd(
-                          Localizations.localeOf(context).toLanguageTag(),
-                        ).format(_dueDate!),
-                ),
-                onTap: _pickDate,
-                trailing: _dueDate == null
-                    ? const Icon(Icons.chevron_right_rounded)
-                    : IconButton(
-                        onPressed: () => setState(() => _dueDate = null),
-                        icon: const Icon(Icons.close_rounded),
-                      ),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                alignment: WrapAlignment.end,
-                spacing: 8,
-                runSpacing: 6,
-                children: <Widget>[
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: Text(l10n.cancel),
-                  ),
-                  TextButton(
-                    onPressed: () => _finish(true),
-                    child: Text(l10n.moreSettings),
-                  ),
-                  FilledButton(
-                    onPressed: () => _finish(false),
-                    child: Text(l10n.save),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _pickDate() async {
-    final now = DateTime.now();
-    final value = await showDatePicker(
-      context: context,
-      initialDate: _dueDate ?? now,
-      firstDate: DateTime(now.year - 10),
-      lastDate: DateTime(now.year + 20),
-    );
-    if (value != null) setState(() => _dueDate = value);
-  }
-
-  void _finish(bool details) {
-    final title = _titleController.text.trim();
-    if (title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(AppLocalizations.of(context).taskTitleHint)),
-      );
-      return;
-    }
-    Navigator.pop(
-      context,
-      _QuickAddResult(title: title, dueDate: _dueDate, openDetails: details),
     );
   }
 }

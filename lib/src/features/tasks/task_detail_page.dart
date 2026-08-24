@@ -11,7 +11,9 @@ import '../../../l10n/app_localizations.dart';
 import '../../application/app_state.dart';
 import '../../application/app_store.dart';
 import '../../core/theme/theme.dart';
+import '../../domain/models.dart';
 import '../../services/notifications/notification_coordinator.dart';
+import '../../services/notifications/notification_settings_launcher.dart';
 import '../../ui/components/components.dart';
 
 class TaskDetailPage extends ConsumerStatefulWidget {
@@ -21,12 +23,14 @@ class TaskDetailPage extends ConsumerStatefulWidget {
     this.autosaveDelay = const Duration(milliseconds: 650),
     this.autosaveRetryDelay = const Duration(seconds: 2),
     this.onPersist,
+    this.now,
   });
 
   final String taskId;
   final Duration autosaveDelay;
   final Duration autosaveRetryDelay;
   final Future<void> Function(TaskViewModel task)? onPersist;
+  final DateTime Function()? now;
 
   @override
   ConsumerState<TaskDetailPage> createState() => _TaskDetailPageState();
@@ -45,6 +49,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   bool _sound = true;
   bool _vibration = true;
   bool _allowPop = false;
+  bool _closing = false;
   String? _loadedId;
   TaskViewModel? _taskTemplate;
   DateTime? _persistedReminderAt;
@@ -52,6 +57,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   _TaskSaveDraft? _pendingDraft;
   Future<bool>? _saveOperation;
   Object? _lastObservedSignature;
+  bool _reminderFieldsDirty = false;
   var _nextRevision = 0;
   var _persistedRevision = 0;
   var _showSaveErrors = false;
@@ -90,6 +96,10 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshReminderPermissionState());
+      return;
+    }
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached ||
@@ -115,7 +125,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
       if (_loadedId != task.id) {
         _hydrate(task);
       } else {
-        _taskTemplate = task;
+        _mergeExternalTask(task);
       }
     }
     if (asyncState.isLoading && task == null) {
@@ -138,149 +148,142 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
       },
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        body: PaperBackground(
-          child: SafeArea(
-            child: Column(
-              children: <Widget>[
-                DangguiTopBar(
-                  leading: DangguiIconButton(
-                    icon: const Icon(Icons.arrow_back_rounded),
-                    semanticLabel: MaterialLocalizations.of(context)
-                        .backButtonTooltip,
-                    onPressed: _saveAndClose,
-                  ),
-                  actions: <Widget>[
-                    PopupMenuButton<String>(
-                      onSelected: (value) => _handleMenu(value, task),
-                      itemBuilder: (context) => <PopupMenuEntry<String>>[
-                        PopupMenuItem(value: 'copy', child: Text(l10n.copy)),
-                        PopupMenuItem(
-                          value: 'export',
-                          child: Text(l10n.export),
-                        ),
-                        PopupMenuItem(
-                          value: 'delete',
-                          child: Text(l10n.delete),
-                        ),
-                      ],
-                      child: DangguiIconButton(
-                        icon: const Icon(Icons.more_horiz_rounded),
-                        semanticLabel: MaterialLocalizations.of(context)
-                            .showMenuTooltip,
-                      ),
-                    ),
-                  ],
+        resizeToAvoidBottomInset: false,
+        body: EditorPageFrame(
+          topBar: DangguiTopBar(
+            leading: DangguiIconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              semanticLabel: MaterialLocalizations.of(context)
+                  .backButtonTooltip,
+              onPressed: _saveAndClose,
+            ),
+            actions: <Widget>[
+              PopupMenuButton<String>(
+                onSelected: (value) => _handleMenu(value, task),
+                itemBuilder: (context) => <PopupMenuEntry<String>>[
+                  PopupMenuItem(value: 'copy', child: Text(l10n.copy)),
+                  PopupMenuItem(value: 'export', child: Text(l10n.export)),
+                  PopupMenuItem(value: 'delete', child: Text(l10n.delete)),
+                ],
+                child: DangguiIconButton(
+                  icon: const Icon(Icons.more_horiz_rounded),
+                  semanticLabel: MaterialLocalizations.of(context)
+                      .showMenuTooltip,
                 ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(24, 4, 24, 92),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+              ),
+            ],
+          ),
+          editor: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                TextField(
+                  key: const Key('task-title-field'),
+                  controller: _titleController,
+                  minLines: 1,
+                  maxLines: 3,
+                  style: Theme.of(context).textTheme.titleLarge,
+                  decoration: InputDecoration(hintText: l10n.taskTitleHint),
+                ),
+                const SizedBox(height: 16),
+                _SmartField(
+                  key: const Key('task-due-date-field'),
+                  label: l10n.dueDate,
+                  value: _dueDate == null
+                      ? l10n.noDate
+                      : DateFormat.yMMMd(
+                          Localizations.localeOf(context).toLanguageTag(),
+                        ).format(_dueDate!),
+                  onTap: _pickDueDate,
+                  onClear: _dueDate == null
+                      ? null
+                      : () {
+                          setState(() => _dueDate = null);
+                          _onDraftChanged();
+                        },
+                ),
+                _SmartField(
+                  key: const Key('task-reminder-field'),
+                  label: l10n.reminder,
+                  value: _reminderAt == null
+                      ? l10n.noReminder
+                      : DateFormat.yMMMd(
+                          Localizations.localeOf(context).toLanguageTag(),
+                        ).add_Hm().format(_reminderAt!),
+                  onTap: _pickReminder,
+                  onClear: _reminderAt == null
+                      ? null
+                      : () {
+                          _reminderFieldsDirty = true;
+                          setState(() => _reminderAt = null);
+                          _onDraftChanged();
+                        },
+                ),
+                if (_reminderAt != null)
+                  _ReminderStatusRow(
+                    key: const Key('task-reminder-status'),
+                    label: _reminderStatusLabel(task, l10n),
+                    showSettingsAction: _isPermissionRestricted(task),
+                    settingsLabel: l10n.openNotificationSettings,
+                    onOpenSettings: _openNotificationSettings,
+                  ),
+                if (_reminderAt != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4, bottom: 8),
+                    child: Row(
                       children: <Widget>[
-                        TextField(
-                          controller: _titleController,
-                          minLines: 1,
-                          maxLines: 3,
-                          style: Theme.of(context).textTheme.titleLarge,
-                          decoration: InputDecoration(
-                            hintText: l10n.taskTitleHint,
+                        Expanded(
+                          child: _ReminderOption(
+                            label: l10n.sound,
+                            value: _sound,
+                            onChanged: (value) {
+                              _reminderFieldsDirty = true;
+                              setState(() => _sound = value);
+                              _onDraftChanged();
+                            },
                           ),
                         ),
-                        const SizedBox(height: 16),
-                        _SmartField(
-                          label: l10n.dueDate,
-                          value: _dueDate == null
-                              ? l10n.noDate
-                              : DateFormat.yMMMd(
-                                  Localizations.localeOf(context)
-                                      .toLanguageTag(),
-                                ).format(_dueDate!),
-                          onTap: _pickDueDate,
-                          onClear: _dueDate == null
-                              ? null
-                              : () {
-                                  setState(() => _dueDate = null);
-                                  _onDraftChanged();
-                                },
-                        ),
-                        _SmartField(
-                          label: l10n.reminder,
-                          value: _reminderAt == null
-                              ? l10n.noReminder
-                              : DateFormat.yMMMd(
-                                  Localizations.localeOf(context)
-                                      .toLanguageTag(),
-                                ).add_Hm().format(_reminderAt!),
-                          onTap: _pickReminder,
-                          onClear: _reminderAt == null
-                              ? null
-                              : () {
-                                  setState(() => _reminderAt = null);
-                                  _onDraftChanged();
-                                },
-                        ),
-                        if (_reminderAt != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4, bottom: 8),
-                            child: Row(
-                              children: <Widget>[
-                                Expanded(
-                                  child: _ReminderOption(
-                                    label: l10n.sound,
-                                    value: _sound,
-                                    onChanged: (value) {
-                                      setState(() => _sound = value);
-                                      _onDraftChanged();
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 18),
-                                Expanded(
-                                  child: _ReminderOption(
-                                    label: l10n.vibration,
-                                    value: _vibration,
-                                    onChanged: (value) {
-                                      setState(() => _vibration = value);
-                                      _onDraftChanged();
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
+                        const SizedBox(width: 18),
+                        Expanded(
+                          child: _ReminderOption(
+                            label: l10n.vibration,
+                            value: _vibration,
+                            onChanged: (value) {
+                              _reminderFieldsDirty = true;
+                              setState(() => _vibration = value);
+                              _onDraftChanged();
+                            },
                           ),
-                        const SizedBox(height: 6),
-                        Text(
-                          l10n.plan,
-                          style: Theme.of(context).textTheme.labelMedium,
-                        ),
-                        TextField(
-                          controller: _planController,
-                          minLines: 1,
-                          maxLines: 3,
-                          decoration: InputDecoration(hintText: l10n.planHint),
-                        ),
-                        const Divider(height: 28),
-                        TextField(
-                          controller: _bodyController,
-                          undoController: _bodyUndoController,
-                          minLines: 12,
-                          maxLines: null,
-                          keyboardType: TextInputType.multiline,
-                          decoration: InputDecoration(hintText: l10n.bodyHint),
-                          style: Theme.of(context).textTheme.bodyLarge,
                         ),
                       ],
                     ),
                   ),
+                const SizedBox(height: 6),
+                Text(l10n.plan, style: Theme.of(context).textTheme.labelMedium),
+                TextField(
+                  key: const Key('task-plan-field'),
+                  controller: _planController,
+                  minLines: 1,
+                  maxLines: 3,
+                  decoration: InputDecoration(hintText: l10n.planHint),
+                ),
+                const Divider(height: 28),
+                TextField(
+                  key: const Key('task-body-field'),
+                  controller: _bodyController,
+                  undoController: _bodyUndoController,
+                  minLines: 12,
+                  maxLines: null,
+                  keyboardType: TextInputType.multiline,
+                  decoration: InputDecoration(hintText: l10n.bodyHint),
+                  style: Theme.of(context).textTheme.bodyLarge,
                 ),
               ],
             ),
           ),
-        ),
-        bottomNavigationBar: SafeArea(
-          top: false,
-          minimum: const EdgeInsets.fromLTRB(18, 0, 18, 10),
-          child: EditorToolbar(
+          toolbar: EditorToolbar(
+            key: const Key('task-editor-toolbar'),
             items: <EditorToolbarItem>[
               EditorToolbarItem(
                 icon: const Icon(Icons.format_list_bulleted_rounded),
@@ -324,7 +327,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   }
 
   Future<void> _pickDueDate() async {
-    final now = DateTime.now();
+    final now = _now();
     final value = await showDatePicker(
       context: context,
       initialDate: _dueDate ?? now,
@@ -339,8 +342,21 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
 
   Future<void> _pickReminder() async {
     final isFirstReminder = _reminderAt == null;
-    var selectedDate = _reminderAt ?? _dueDate ?? DateTime.now();
-    final initialTime = TimeOfDay.fromDateTime(_reminderAt ?? DateTime.now());
+    final now = _now();
+    final suggested = nextReminderTime(now);
+    final existing = _reminderAt;
+    var selectedDate = existing ?? _dueDate ?? suggested;
+    final today = DateTime(now.year, now.month, now.day);
+    if (DateTime(
+      selectedDate.year,
+      selectedDate.month,
+      selectedDate.day,
+    ).isBefore(today)) {
+      selectedDate = suggested;
+    }
+    final initialTime = TimeOfDay.fromDateTime(
+      existing != null && existing.isAfter(now) ? existing : suggested,
+    );
     final result = await showDialog<DateTime>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -358,31 +374,44 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
             hourSemanticLabel: l10n.reminderHour,
             minuteSemanticLabel: l10n.reminderMinute,
             onDatePressed: () async {
+              final pickerNow = _now();
+              final firstDate = DateTime(
+                pickerNow.year,
+                pickerNow.month,
+                pickerNow.day,
+              );
               final value = await showDatePicker(
                 context: context,
                 initialDate: selectedDate,
-                firstDate: DateTime.now().subtract(const Duration(days: 3650)),
-                lastDate: DateTime.now().add(const Duration(days: 7300)),
+                firstDate: firstDate,
+                lastDate: firstDate.add(const Duration(days: 7300)),
               );
               if (value != null) setDialogState(() => selectedDate = value);
             },
             onCancel: () => Navigator.pop(dialogContext),
-            onConfirm: (time) => Navigator.pop(
-              dialogContext,
-              DateTime(
+            onConfirm: (time) {
+              final value = DateTime(
                 selectedDate.year,
                 selectedDate.month,
                 selectedDate.day,
                 time.hour,
                 time.minute,
-              ),
-            ),
+              );
+              if (!value.isAfter(_now())) {
+                ScaffoldMessenger.of(
+                  dialogContext,
+                ).showSnackBar(SnackBar(content: Text(l10n.reminderExpired)));
+                return;
+              }
+              Navigator.pop(dialogContext, value);
+            },
           );
         },
       ),
     );
     if (result != null) {
       final settings = ref.read(appStoreProvider).value?.settings;
+      _reminderFieldsDirty = true;
       setState(() {
         _reminderAt = result;
         if (isFirstReminder && settings != null) {
@@ -391,12 +420,49 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
         }
       });
       _onDraftChanged();
-      if (result.isBefore(DateTime.now()) && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(AppLocalizations.of(context).reminderExpired)),
-        );
-      }
     }
+  }
+
+  Future<void> _refreshReminderPermissionState() async {
+    try {
+      await _notifications.reconcile();
+      await _store.refresh();
+    } on Object {
+      // Returning from system settings must never interrupt draft editing.
+    }
+  }
+
+  Future<void> _openNotificationSettings() async {
+    try {
+      await ref.read(notificationSettingsLauncherProvider).open();
+    } on Object {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AppLocalizations.of(context).permissionDenied)),
+      );
+    }
+  }
+
+  bool _isPermissionRestricted(TaskViewModel task) =>
+      task.reminderStatus == ReminderStatus.permissionDenied ||
+      task.reminderPauseReason == ReminderPauseReason.permissionDenied;
+
+  String _reminderStatusLabel(TaskViewModel task, AppLocalizations l10n) {
+    if (task.status == TaskStatus.completionPending ||
+        task.reminderPauseReason == ReminderPauseReason.taskClosed) {
+      return l10n.reminderStatusTaskClosed;
+    }
+    if (task.reminderStatus == ReminderStatus.expired ||
+        (_reminderAt != null && !_reminderAt!.isAfter(_now()))) {
+      return l10n.reminderExpired;
+    }
+    if (_isPermissionRestricted(task)) {
+      return l10n.reminderStatusPermissionDenied;
+    }
+    if (task.reminderStatus == ReminderStatus.paused) {
+      return l10n.reminderStatusPaused;
+    }
+    return l10n.reminderScheduled;
   }
 
   void _hydrate(TaskViewModel task) {
@@ -412,11 +478,35 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
     _sound = task.soundEnabled;
     _vibration = task.vibrationEnabled;
     _persistedReminderAt = task.reminderAt;
+    _reminderFieldsDirty = false;
     _pendingDraft = null;
     _nextRevision = 0;
     _persistedRevision = 0;
     _lastObservedSignature = _draftSignature();
     _controllersReady = true;
+  }
+
+  void _mergeExternalTask(TaskViewModel task) {
+    _taskTemplate = task;
+    if (_reminderFieldsDirty) return;
+
+    _reminderAt = task.reminderAt;
+    _sound = task.soundEnabled;
+    _vibration = task.vibrationEnabled;
+    _persistedReminderAt = task.reminderAt;
+    final pending = _pendingDraft;
+    if (pending != null) {
+      _pendingDraft = _TaskSaveDraft(
+        revision: pending.revision,
+        reminderFieldsDirty: false,
+        task: pending.task.copyWith(
+          reminderAt: task.reminderAt,
+          soundEnabled: task.soundEnabled,
+          vibrationEnabled: task.vibrationEnabled,
+        ),
+      );
+    }
+    _lastObservedSignature = _draftSignature();
   }
 
   Object _draftSignature() => (
@@ -437,6 +527,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
     final revision = ++_nextRevision;
     _pendingDraft = _TaskSaveDraft(
       revision: revision,
+      reminderFieldsDirty: _reminderFieldsDirty,
       task: _taskTemplate!.copyWith(
         title: _titleController.text,
         dueDate: _dueDate,
@@ -504,19 +595,23 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
       }
       _persistedRevision = draft.revision;
       _persistedReminderAt = draft.task.reminderAt;
-      if (identical(_pendingDraft, draft)) _pendingDraft = null;
+      if (identical(_pendingDraft, draft)) {
+        if (draft.reminderFieldsDirty) _reminderFieldsDirty = false;
+        _pendingDraft = null;
+      }
     }
   }
 
   Future<void> _persistDraft(_TaskSaveDraft draft) async {
     final task = draft.task;
-    final isFirstFutureReminder =
-        _persistedReminderAt == null &&
+    final now = _now();
+    final activatesFutureReminder =
         task.reminderAt != null &&
-        task.reminderAt!.isAfter(DateTime.now());
-    final notifications = isFirstFutureReminder ? _notifications : null;
+        task.reminderAt!.isAfter(now) &&
+        (_persistedReminderAt == null || !_persistedReminderAt!.isAfter(now));
+    final notifications = activatesFutureReminder ? _notifications : null;
     bool? permissionGranted;
-    if (isFirstFutureReminder) {
+    if (activatesFutureReminder) {
       try {
         permissionGranted = await notifications!
             .ensurePermissionsForFutureReminder();
@@ -527,16 +622,29 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
     }
     final persist = widget.onPersist;
     if (persist == null) {
-      await _store.updateTask(task);
+      await _store.updateTask(task, updateReminder: draft.reminderFieldsDirty);
     } else {
       await persist(task);
     }
-    if (isFirstFutureReminder && permissionGranted != null) {
-      await notifications!.applyPermissionResultForTask(
-        task.id,
-        granted: permissionGranted,
-      );
-      await _store.refresh();
+    if (activatesFutureReminder && permissionGranted != null) {
+      try {
+        await notifications!.applyPermissionResultForTask(
+          task.id,
+          granted: permissionGranted,
+        );
+      } on Object {
+        // The task transaction above already committed. A platform/plugin
+        // error leaves a durable notification job for startup/foreground
+        // recovery and must not keep the editor in an unsaved retry loop.
+      }
+      try {
+        // applyPermissionResult commits before its platform reconciliation.
+        // Refresh independently so a later plugin error cannot leave the UI
+        // showing stale permission state.
+        await _store.refresh();
+      } on Object {
+        // The ordinary AppStore/lifecycle recovery path will retry this read.
+      }
       if (!permissionGranted && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -548,13 +656,28 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   }
 
   Future<void> _saveAndClose() async {
-    if (!await _flushSave(interactive: true)) return;
+    if (_closing) return;
+    _closing = true;
+    FocusManager.instance.primaryFocus?.unfocus();
+    if (!await _flushSave(interactive: true)) {
+      _closing = false;
+      return;
+    }
     if (!mounted) return;
-    setState(() => _allowPop = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.pop();
-    });
+    await _closeRouteAfterPopBarrier();
   }
+
+  Future<void> _closeRouteAfterPopBarrier() async {
+    if (!mounted) return;
+    final editorRoute = ModalRoute.of(context);
+    setState(() => _allowPop = true);
+    await waitForEditorRoutePopBarrier();
+    if (mounted && (editorRoute == null || editorRoute.isCurrent)) {
+      context.pop();
+    }
+  }
+
+  DateTime _now() => widget.now?.call() ?? DateTime.now();
 
   void _insertPrefix(String prefix) {
     final selection = _bodyController.selection;
@@ -602,19 +725,21 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
         _autosaveTimer?.cancel();
         _pendingDraft = null;
         await ref.read(appStoreProvider.notifier).deleteTask(task.id);
-        if (mounted) {
-          setState(() => _allowPop = true);
-          context.pop();
-        }
+        await _closeRouteAfterPopBarrier();
     }
   }
 }
 
 final class _TaskSaveDraft {
-  const _TaskSaveDraft({required this.revision, required this.task});
+  const _TaskSaveDraft({
+    required this.revision,
+    required this.task,
+    required this.reminderFieldsDirty,
+  });
 
   final int revision;
   final TaskViewModel task;
+  final bool reminderFieldsDirty;
 }
 
 class _ReminderOption extends StatelessWidget {
@@ -646,8 +771,82 @@ class _ReminderOption extends StatelessWidget {
   }
 }
 
+class _ReminderStatusRow extends StatelessWidget {
+  const _ReminderStatusRow({
+    super.key,
+    required this.label,
+    required this.showSettingsAction,
+    required this.settingsLabel,
+    required this.onOpenSettings,
+  });
+
+  final String label;
+  final bool showSettingsAction;
+  final String settingsLabel;
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.dangguiTheme;
+    final textStyle = Theme.of(context).textTheme.bodySmall
+        ?.copyWith(color: tokens.muted);
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final textScale = MediaQuery.textScalerOf(context).scale(1);
+          final stackSettingsAction =
+              showSettingsAction &&
+              (constraints.maxWidth < 360 || textScale > 1.4);
+          final status = Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Icon(
+                  Icons.info_outline_rounded,
+                  size: 17,
+                  color: tokens.muted,
+                ),
+              ),
+              const SizedBox(width: 7),
+              Expanded(child: Text(label, style: textStyle)),
+            ],
+          );
+          final settingsAction = TextButton(
+            key: const Key('task-reminder-open-settings'),
+            onPressed: onOpenSettings,
+            child: Text(settingsLabel),
+          );
+
+          if (stackSettingsAction) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                status,
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: settingsAction,
+                ),
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: <Widget>[
+              Expanded(child: status),
+              if (showSettingsAction) settingsAction,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
 class _SmartField extends StatelessWidget {
   const _SmartField({
+    super.key,
     required this.label,
     required this.value,
     required this.onTap,
@@ -694,4 +893,13 @@ class _SmartField extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The next five-minute boundary, guaranteed to be later than [now].
+DateTime nextReminderTime(DateTime now) {
+  final flooredMinute = now.minute - now.minute % 5;
+  final boundary = now.isUtc
+      ? DateTime.utc(now.year, now.month, now.day, now.hour, flooredMinute)
+      : DateTime(now.year, now.month, now.day, now.hour, flooredMinute);
+  return boundary.add(const Duration(minutes: 5));
 }

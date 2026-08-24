@@ -7,24 +7,31 @@ repository_root="$(cd "${script_dir}/.." && pwd)"
 
 run_case() {
   local scenario="$1"
-  local case_root output status retry_log event_log events expected_events
+  local case_root output status retry_log event_log release_apk events expected_events
   local expected_status=124 failed=0
   case_root="$(mktemp -d "${TMPDIR:-/tmp}/danggui-smoke-gate.XXXXXX")" || return 1
   retry_log="${case_root}/danggui-emulator-api-24/retry-after-adb-recovery.log"
   event_log="${case_root}/events.log"
+  release_apk="${case_root}/danggui-android-universal-debug-fallback.apk"
   : > "${event_log}"
+  : > "${release_apk}"
 
   output="$(
     cd "${repository_root}" || exit 98
     SCENARIO="${scenario}" RUNNER_TEMP="${case_root}" \
-      EVENT_LOG="${event_log}" bash -c '
+      EVENT_LOG="${event_log}" \
+      DANGGUI_RELEASE_APK="${release_apk}" \
+      DANGGUI_RELEASE_APK_SHA256='0000000000000000000000000000000000000000000000000000000000000000' \
+      DANGGUI_RELEASE_SIGNING_MODE='debug-fallback' \
+      DANGGUI_RELEASE_ARTIFACT_SHA='self-test-sha' bash -c '
       timeout() {
         case " $* " in
           *" flutter test "*)
             printf "%s\n" "flutter-test" >> "${EVENT_LOG}"
             flutter_invocations="$(grep -c "^flutter-test$" "${EVENT_LOG}")"
             if [[ "${SCENARIO}" == "clean" ||
-                  "${SCENARIO}" == "acceptance-failure" ]] &&
+                  "${SCENARIO}" == "acceptance-failure" ||
+                  "${SCENARIO}" == "release-binary-failure" ]] &&
                (( flutter_invocations == 2 )); then
               printf "%s\n" "All tests passed!"
               return 0
@@ -89,7 +96,7 @@ run_case() {
           *" pm list packages com.danggui.memo "*)
             printf "%s\n" "target-package-query" >> "${EVENT_LOG}"
             case "${SCENARIO}" in
-              clean|retry-failure|acceptance-failure)
+              clean|retry-failure|acceptance-failure|release-binary-failure)
                 # The historical bug queried the target through the unhealthy
                 # daemon before restart. Make that ordering fail closed.
                 grep -Fqx "start-server" "${EVENT_LOG}" || return 42
@@ -118,6 +125,11 @@ run_case() {
           [[ "${SCENARIO}" == "acceptance-failure" ]] && return 1
           return 0
         fi
+        if [[ "$1" == "integration_test/run_android_release_binary_smoke.sh" ]]; then
+          printf "%s\n" "release-binary-smoke" >> "${EVENT_LOG}"
+          [[ "${SCENARIO}" == "release-binary-failure" ]] && return 1
+          return 0
+        fi
         command bash "$@"
       }
       source integration_test/run_android_emulator_smoke.sh 24
@@ -128,14 +140,16 @@ run_case() {
 
   case "${scenario}" in
     clean) expected_status=0 ;;
-    ordinary-failure|retry-failure|acceptance-failure) expected_status=1 ;;
+    ordinary-failure|retry-failure|acceptance-failure|release-binary-failure)
+      expected_status=1
+      ;;
   esac
   if (( status != expected_status )); then
     failed=1
   fi
   case "${scenario}" in
     clean)
-      expected_events=$'flutter-test\nkill-server\nstart-server\nwait-for-device\nboot-query\nsystem-package-query\ntarget-package-query\nuninstall\ntarget-package-query\nflutter-test\nrelease-acceptance'
+      expected_events=$'flutter-test\nkill-server\nstart-server\nwait-for-device\nboot-query\nsystem-package-query\ntarget-package-query\nuninstall\ntarget-package-query\nflutter-test\nrelease-acceptance\nrelease-binary-smoke'
       [[ -f "${retry_log}" ]] || failed=1
       [[ "${output}" == *'performing one bounded ADB recovery'* ]] || failed=1
       [[ "${output}" != *'refusing to retry'* ]] || failed=1
@@ -146,6 +160,12 @@ run_case() {
       ;;
     acceptance-failure)
       expected_events=$'flutter-test\nkill-server\nstart-server\nwait-for-device\nboot-query\nsystem-package-query\ntarget-package-query\nuninstall\ntarget-package-query\nflutter-test\nrelease-acceptance'
+      [[ -f "${retry_log}" ]] || failed=1
+      [[ "${output}" == *'All tests passed!'* ]] || failed=1
+      [[ "${events}" == "${expected_events}" ]] || failed=1
+      ;;
+    release-binary-failure)
+      expected_events=$'flutter-test\nkill-server\nstart-server\nwait-for-device\nboot-query\nsystem-package-query\ntarget-package-query\nuninstall\ntarget-package-query\nflutter-test\nrelease-acceptance\nrelease-binary-smoke'
       [[ -f "${retry_log}" ]] || failed=1
       [[ "${output}" == *'All tests passed!'* ]] || failed=1
       [[ "${events}" == "${expected_events}" ]] || failed=1
@@ -178,7 +198,7 @@ run_case() {
 }
 
 for scenario in \
-  clean acceptance-failure retry-failure installed unknown system-pm-failure non-install-timeout \
+  clean acceptance-failure release-binary-failure retry-failure installed unknown system-pm-failure non-install-timeout \
   missing-built missing-installing missing-no-tests ordinary-failure; do
   run_case "${scenario}" || exit 1
 done

@@ -112,6 +112,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get moreSettings => '更多设置';
 
   @override
+  String get moreSettingsWithReminder => '更多设置（计划与提醒）';
+
+  @override
   String get cancel => '取消';
 
   @override
@@ -350,6 +353,18 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get reminderExpired => '提醒时间已过，不会补发。';
+
+  @override
+  String get reminderStatusPermissionDenied => '权限受限，提醒时间已保留';
+
+  @override
+  String get reminderStatusTaskClosed => '事项关闭，提醒已暂停';
+
+  @override
+  String get reminderStatusPaused => '提醒已暂停';
+
+  @override
+  String get openNotificationSettings => '打开通知设置';
 
   @override
   String get backupCreated => '备份已创建';

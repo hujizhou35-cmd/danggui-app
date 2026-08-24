@@ -107,6 +107,20 @@ if (( health_gate_status != 0 )); then
 fi
 danggui_set_acceptance_phase 'cold-start-smoke'
 
+# Pixel AVD profiles expose a hardware keyboard to the host. Force the system
+# soft keyboard to remain visible as well, so the production-route smoke test
+# observes real WindowInsets transitions instead of only injecting text through
+# Flutter's test channel.
+bounded_adb shell settings put secure show_ime_with_hard_keyboard 1
+soft_keyboard_setting="$(
+  bounded_adb shell settings get secure show_ime_with_hard_keyboard
+)"
+printf '%s\n' "${soft_keyboard_setting}" \
+  > "${evidence_dir}/soft-keyboard-setting.txt"
+soft_keyboard_setting="${soft_keyboard_setting//$'\r'/}"
+soft_keyboard_setting="${soft_keyboard_setting//[[:space:]]/}"
+[[ "${soft_keyboard_setting}" == '1' ]]
+
 run_flutter_test first-attempt
 test_status=$?
 
@@ -198,6 +212,19 @@ fi
 
 if (( test_status == 0 )); then
   bash integration_test/run_android_release_acceptance.sh "${api_level}"
+  acceptance_status=$?
+  if (( acceptance_status != 0 )); then
+    exit "${acceptance_status}"
+  fi
+
+  # The interaction acceptance above intentionally uses a debuggable test
+  # host. Only after it has completed do we uninstall that package and install
+  # the exact universal release-mode APK produced by android-linux for this
+  # workflow SHA. The second phase is host-driven and has no Flutter
+  # instrumentation or test-only manifest overlay.
+  bash integration_test/run_android_release_binary_smoke.sh \
+    "${api_level}" \
+    "${DANGGUI_RELEASE_APK:?DANGGUI_RELEASE_APK is not set}"
   exit $?
 fi
 

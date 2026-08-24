@@ -88,7 +88,16 @@ fi
 
 apk="$1"
 aab="${2:-}"
-expected_version_code="${3:-1}"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+technical_version="$(sed -n -E 's/^version:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p' "${repo_root}/pubspec.yaml" | head -n 1)"
+if [[ "${technical_version}" =~ ^([0-9]+\.[0-9]+\.[0-9]+)\+([1-9][0-9]*)$ ]]; then
+  expected_version_name="${BASH_REMATCH[1]}"
+  pubspec_version_code="${BASH_REMATCH[2]}"
+else
+  echo "pubspec.yaml version must use semantic-name+positive-build-number: ${technical_version}" >&2
+  exit 65
+fi
+expected_version_code="${3:-${pubspec_version_code}}"
 sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 
 if [[ ! -f "${apk}" ]]; then
@@ -146,7 +155,7 @@ done
 
 declare -A expected_manifest_values=(
   [application-id]=com.danggui.memo
-  [version-name]=1.0.0
+  [version-name]="${expected_version_name}"
   [version-code]="${expected_version_code}"
   [min-sdk]=24
   [target-sdk]=36
@@ -161,7 +170,8 @@ for field in application-id version-name version-code min-sdk target-sdk debugga
 done
 
 merged_manifest_file="$(mktemp)"
-trap 'rm -f "${merged_manifest_file}"' EXIT
+aab_manifest_file=""
+trap 'rm -f "${merged_manifest_file}" "${aab_manifest_file:-}"' EXIT
 "${apkanalyzer}" manifest print "${apk}" > "${merged_manifest_file}"
 python3 - "${merged_manifest_file}" <<'PY'
 import sys
@@ -226,6 +236,88 @@ if [[ -n "${aab}" ]]; then
     echo "AAB not found: ${aab}" >&2
     exit 66
   fi
+  bundletool_jar="${BUNDLETOOL_JAR:-}"
+  if [[ -z "${bundletool_jar}" || ! -f "${bundletool_jar}" ]]; then
+    echo "BUNDLETOOL_JAR must point to the pinned bundletool-all JAR for AAB metadata verification." >&2
+    exit 69
+  fi
+  if ! command -v java >/dev/null 2>&1; then
+    echo "Java is required for AAB metadata verification with bundletool." >&2
+    exit 69
+  fi
+  java -jar "${bundletool_jar}" validate --bundle="${aab}" >/dev/null
+  aab_manifest_file="$(mktemp)"
+  java -jar "${bundletool_jar}" dump manifest \
+    --bundle="${aab}" --module=base > "${aab_manifest_file}"
+  python3 - "${aab_manifest_file}" "${expected_version_name}" \
+    "${expected_version_code}" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+manifest_path, expected_version_name, expected_version_code_text = sys.argv[1:]
+android = "{http://schemas.android.com/apk/res/android}"
+root = ET.parse(manifest_path).getroot()
+
+
+def integer_attribute(element, name):
+    value = element.get(android + name)
+    if value is None:
+        raise SystemExit(f"AAB manifest is missing android:{name}.")
+    try:
+        return int(value[2:], 16) if value.lower().startswith("0x") else int(value, 10)
+    except ValueError as error:
+        raise SystemExit(
+            f"AAB manifest android:{name} is not an integer: {value!r}."
+        ) from error
+
+
+expected_identity = {
+    "package": "com.danggui.memo",
+    "version-name": expected_version_name,
+    "version-code": int(expected_version_code_text),
+    "min-sdk": 24,
+    "target-sdk": 36,
+}
+uses_sdk = root.find("uses-sdk")
+if uses_sdk is None:
+    raise SystemExit("AAB manifest has no uses-sdk element.")
+actual_identity = {
+    "package": root.get("package"),
+    "version-name": root.get(android + "versionName"),
+    "version-code": integer_attribute(root, "versionCode"),
+    "min-sdk": integer_attribute(uses_sdk, "minSdkVersion"),
+    "target-sdk": integer_attribute(uses_sdk, "targetSdkVersion"),
+}
+for field, expected in expected_identity.items():
+    actual = actual_identity[field]
+    if actual != expected:
+        raise SystemExit(
+            f"Unexpected AAB {field}: {actual!r} (expected {expected!r})."
+        )
+
+permission_elements = list(root.findall("uses-permission")) + list(
+    root.findall("uses-permission-sdk-23")
+)
+permissions = {
+    element.get(android + "name")
+    for element in permission_elements
+    if element.get(android + "name")
+}
+required_permissions = {
+    "android.permission.POST_NOTIFICATIONS",
+    "android.permission.RECEIVE_BOOT_COMPLETED",
+    "android.permission.VIBRATE",
+}
+allowed_permissions = required_permissions | {
+    "com.danggui.memo.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+}
+missing = sorted(required_permissions - permissions)
+unexpected = sorted(permissions - allowed_permissions)
+if missing:
+    raise SystemExit(f"AAB is missing required permission(s): {', '.join(missing)}.")
+if unexpected:
+    raise SystemExit(f"AAB contains unapproved permission(s): {', '.join(unexpected)}.")
+PY
   signature_entries="$(jar tf "${aab}" | tr -d '\r')"
   if ! grep -Eiq '^META-INF/[^/]+\.SF$' <<<"${signature_entries}" ||
      ! grep -Eiq '^META-INF/[^/]+\.(RSA|DSA|EC)$' <<<"${signature_entries}"; then

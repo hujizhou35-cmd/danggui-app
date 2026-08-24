@@ -3,6 +3,36 @@
 All notable changes to Danggui are documented here. The project follows
 [Semantic Versioning](https://semver.org/) for public releases.
 
+## 1.1.0 - editor and reminder reliability pre-release (2026-08-24)
+
+The [v1.1.0 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0)
+is built only by the protected tag workflow. It remains a pre-release until the
+official v1.0.0 Android package has passed representative physical-device
+overlay-upgrade and notification acceptance.
+
+### Fixed
+
+- Kept Task, Note, and Past editors visible and editable through Android IME
+  open/close transitions, including bounded focus hand-off from quick-create
+  sheets and forced autosave flush before leaving an editor.
+- Defaulted every new-task entry point to the current local day while retaining
+  an explicit no-date option for users and preserving existing undated tasks.
+- Exposed reminder creation and lifecycle state in Task details, including
+  permission-limited, paused, expired, rescheduled, sound, and vibration states.
+- Restored the full watercolor ball-and-sprout launch composition, dynamic
+  title/seal/privacy/loading overlays, a one-second minimum display, and a
+  single transition into Tasks after successful local initialization.
+
+### Delivery
+
+- Set product version `1.1.0`, build number `2`, universal Android version code
+  `2`, and split APK codes `1002`, `2002`, and `4002` from `pubspec.yaml`.
+- Added a deterministic `danggui-ios-source-v1.1.0.zip`, retained unsigned
+  `Runner.app` evidence, and made protected `v*` tag CI assemble downloadable
+  Android/iOS assets, hashes, and the public signing-certificate fingerprint.
+- Centralized runtime version metadata so Settings shows `1.1.0` while backup,
+  export, and diagnostics record `1.1.0+2`.
+
 ## 1.0.0 - public pre-release (2026-08-23)
 
 The public [v1.0.0 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0)

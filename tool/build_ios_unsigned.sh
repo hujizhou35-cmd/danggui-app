@@ -9,6 +9,15 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
 
+technical_version="$(sed -n -E 's/^version:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p' pubspec.yaml | head -n 1)"
+if [[ "${technical_version}" =~ ^([0-9]+\.[0-9]+\.[0-9]+)\+([1-9][0-9]*)$ ]]; then
+  expected_version_name="${BASH_REMATCH[1]}"
+  expected_version_code="${BASH_REMATCH[2]}"
+else
+  echo "pubspec.yaml version must use semantic-name+positive-build-number: ${technical_version}" >&2
+  exit 65
+fi
+
 flutter build ios --release --no-codesign
 
 app_path="build/ios/iphoneos/Runner.app"
@@ -26,7 +35,8 @@ fi
 version_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${app_path}/Info.plist")"
 version_code="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${app_path}/Info.plist")"
 minimum_os="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "${app_path}/Info.plist")"
-if [[ "${version_name}" != "1.0.0" || "${version_code}" != "1" ]]; then
+if [[ "${version_name}" != "${expected_version_name}" || \
+      "${version_code}" != "${expected_version_code}" ]]; then
   echo "Unexpected iOS version: ${version_name}+${version_code}" >&2
   exit 1
 fi

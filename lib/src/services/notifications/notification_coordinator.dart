@@ -11,17 +11,37 @@ import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../../../l10n/app_localizations.dart';
-import '../../application/app_store.dart';
 import '../../data/database.dart';
+import '../../data/database_provider.dart';
 import '../../domain/models.dart';
 
 const _snoozeActionPrefix = 'danggui.snooze.';
 const _supportedSnoozeMinutes = <int>[10, 30, 60];
 
+final notificationStateRevisionProvider =
+    NotifierProvider<NotificationStateRevision, int>(
+      NotificationStateRevision.new,
+    );
+
+final class NotificationStateRevision extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void bump() => state++;
+}
+
 final notificationCoordinatorProvider = Provider<NotificationCoordinator>((
   ref,
 ) {
-  return NotificationCoordinator(() => ref.read(databaseProvider.future));
+  final coordinator = NotificationCoordinator(
+    () => ref.read(databaseProvider.future),
+    onStateChanged: () {
+      final notifier = ref.read(notificationStateRevisionProvider.notifier);
+      notifier.bump();
+    },
+  );
+  ref.onDispose(coordinator.dispose);
+  return coordinator;
 });
 
 /// Narrow platform seam that keeps reminder behaviour testable without a
@@ -35,6 +55,7 @@ abstract interface class NotificationGateway {
   });
   Future<bool> requestPermissions();
   Future<bool?> permissionsGranted();
+  Future<Set<int>> pendingNotificationIds();
   Future<void> schedule(LocalNotificationRequest request);
   Future<void> cancel(int notificationId);
 }
@@ -90,6 +111,8 @@ final class NotificationCoordinator {
     NotificationGateway? gateway,
     DateTime Function()? nowUtc,
     String Function()? systemLocaleName,
+    this._onStateChanged,
+    this._retryBaseDelay = const Duration(minutes: 1),
   }) : _gateway = gateway ?? _FlutterNotificationGateway(),
        _nowUtc = nowUtc ?? _systemNowUtc,
        _systemLocaleName = systemLocaleName ?? _platformLocaleName;
@@ -98,12 +121,23 @@ final class NotificationCoordinator {
   final NotificationGateway _gateway;
   final DateTime Function() _nowUtc;
   final String Function() _systemLocaleName;
+  final FutureOr<void> Function()? _onStateChanged;
+  final Duration _retryBaseDelay;
   String? _initializedLocaleTag;
   NotificationPresentation? _presentation;
   bool _reconciling = false;
   bool _reconcileRequested = false;
+  Completer<void>? _reconcileIdle;
   bool _interruptedJobsRecovered = false;
   bool _startupRescheduleComplete = false;
+  Timer? _retryTimer;
+  bool _disposed = false;
+
+  void dispose() {
+    _disposed = true;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+  }
 
   Future<void> initialize() async {
     if (!_gateway.isSupported) return;
@@ -247,7 +281,8 @@ final class NotificationCoordinator {
       }
       final reminder = await database
           .customSelect(
-            'SELECT r.id, r.schedule_revision, t.status AS task_status '
+            'SELECT r.id, r.schedule_revision, r.status AS reminder_status, '
+            't.status AS task_status '
             'FROM reminders r JOIN tasks t ON t.id = r.task_id '
             'WHERE r.task_id = ?',
             variables: <Variable<Object>>[Variable.withString(taskId)],
@@ -255,6 +290,11 @@ final class NotificationCoordinator {
           .getSingleOrNull();
       if (reminder == null ||
           reminder.read<String>('task_status') != TaskStatus.active.name) {
+        return;
+      }
+      final reminderStatus = reminder.read<String>('reminder_status');
+      if (reminderStatus != ReminderStatus.scheduled.name &&
+          reminderStatus != ReminderStatus.expired.name) {
         return;
       }
       final reminderId = reminder.read<String>('id');
@@ -294,7 +334,10 @@ final class NotificationCoordinator {
       );
       changed = true;
     });
-    if (changed) await reconcile();
+    if (changed) {
+      await reconcile();
+      await _onStateChanged?.call();
+    }
     return changed;
   }
 
@@ -303,22 +346,32 @@ final class NotificationCoordinator {
     if (!_gateway.isSupported) return;
     if (_reconciling) {
       _reconcileRequested = true;
+      await _reconcileIdle?.future;
       return;
     }
     _reconciling = true;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    final idle = Completer<void>();
+    _reconcileIdle = idle;
     try {
       do {
         _reconcileRequested = false;
         await _reconcileOnce();
       } while (_reconcileRequested);
+      await _armRetryTimer();
     } finally {
       _reconciling = false;
+      _reconcileIdle = null;
+      idle.complete();
     }
   }
 
   Future<void> _reconcileOnce() async {
     final database = await _readDatabase();
     await _initializeForDatabase(database);
+    final expirationCutoff = _nowMicros();
+    await _expirePastReminders(database, expirationCutoff);
     final permission = await _gateway.permissionsGranted();
     if (permission == false) {
       await _markScheduledRemindersPermissionDenied(database);
@@ -327,6 +380,9 @@ final class NotificationCoordinator {
       // instead of returning through the in-app permission button.
       await _restorePermissionDeniedReminders();
     }
+    // Permission recovery can enqueue a job using a timestamp later than the
+    // expiration cutoff above. Take a fresh value so that newly-created jobs
+    // are drained during this same reconciliation pass.
     final now = _nowMicros();
     if (!_interruptedJobsRecovered) {
       await _recoverInterruptedJobs(database, now);
@@ -363,6 +419,73 @@ final class NotificationCoordinator {
       await _runJob(database, row, now);
     }
     if (rows.length == 64) _reconcileRequested = true;
+  }
+
+  /// Makes an elapsed reminder a durable historical state instead of leaving
+  /// it looking scheduled forever after the operating system has fired it.
+  /// Permission-denied reminders also expire without catch-up delivery.
+  Future<void> _expirePastReminders(DangguiDatabase database, int now) async {
+    final rows = await database
+        .customSelect(
+          'SELECT r.id, r.schedule_revision '
+          'FROM reminders r JOIN tasks t ON t.id = r.task_id '
+          'WHERE r.scheduled_at_utc <= ? AND r.status IN (?, ?) '
+          'AND t.status = ?',
+          variables: <Variable<Object>>[
+            Variable.withInt(now),
+            Variable.withString(ReminderStatus.scheduled.name),
+            Variable.withString(ReminderStatus.permissionDenied.name),
+            Variable.withString(TaskStatus.active.name),
+          ],
+        )
+        .get();
+    if (rows.isEmpty) return;
+
+    // A one-shot request disappears from the plugin's pending list when the
+    // platform receiver has displayed it. Cancelling only IDs that are still
+    // pending prevents an inexact alarm delayed by Doze from appearing after
+    // the reminder is marked expired, while preserving an already-visible
+    // notification and its 10/30/60-minute snooze actions.
+    final pendingIds = await _gateway.pendingNotificationIds();
+    for (final row in rows) {
+      final notificationId = _notificationId(row.read<String>('id'));
+      if (pendingIds.contains(notificationId)) {
+        await _gateway.cancel(notificationId);
+      }
+    }
+
+    await database.transaction(() async {
+      for (final row in rows) {
+        final reminderId = row.read<String>('id');
+        final previousRevision = row.read<int>('schedule_revision');
+        final revision = previousRevision + 1;
+        final changed = await database.customUpdate(
+          'UPDATE reminders SET status = ?, pause_reason = NULL, '
+          'schedule_revision = ?, updated_at_utc = ?, '
+          'row_version = row_version + 1 WHERE id = ? '
+          'AND schedule_revision = ? AND scheduled_at_utc <= ? '
+          'AND status IN (?, ?)',
+          variables: <Variable<Object>>[
+            Variable.withString(ReminderStatus.expired.name),
+            Variable.withInt(revision),
+            Variable.withInt(now),
+            Variable.withString(reminderId),
+            Variable.withInt(previousRevision),
+            Variable.withInt(now),
+            Variable.withString(ReminderStatus.scheduled.name),
+            Variable.withString(ReminderStatus.permissionDenied.name),
+          ],
+          updates: <TableInfo<Table, Object?>>{database.reminders},
+        );
+        if (changed == 1) {
+          await database.customStatement(
+            'DELETE FROM notification_registrations WHERE reminder_id = ? '
+            'AND schedule_revision <= ?',
+            <Object?>[reminderId, previousRevision],
+          );
+        }
+      }
+    });
   }
 
   /// A persisted `running` row can only belong to an interrupted coordinator
@@ -483,8 +606,8 @@ final class NotificationCoordinator {
       await _finishJob(database, jobId, now, code: completionCode);
     } on Object catch (error) {
       final cappedAttempts = attempts.clamp(1, 8);
-      final retryAt =
-          now + Duration(minutes: 1 << (cappedAttempts - 1)).inMicroseconds;
+      final retryDelay = _retryBaseDelay * (1 << (cappedAttempts - 1));
+      final retryAt = now + retryDelay.inMicroseconds;
       await database.customStatement(
         'UPDATE platform_jobs SET status = ?, next_attempt_at_utc = ?, '
         'last_error_code = ?, updated_at_utc = ? WHERE id = ?',
@@ -496,6 +619,46 @@ final class NotificationCoordinator {
           jobId,
         ],
       );
+    }
+  }
+
+  Future<void> _armRetryTimer() async {
+    if (_disposed) return;
+    final database = await _readDatabase();
+    final row = await database
+        .customSelect(
+          'SELECT MIN(next_attempt_at_utc) AS retry_at FROM platform_jobs '
+          'WHERE status IN (?, ?)',
+          variables: <Variable<Object>>[
+            Variable.withString(PlatformJobStatus.pending.name),
+            Variable.withString(PlatformJobStatus.failed.name),
+          ],
+        )
+        .getSingle();
+    final retryAt = row.readNullable<int>('retry_at');
+    if (retryAt == null || _disposed) return;
+    final delayMicros = retryAt - _nowMicros();
+    final delay = Duration(microseconds: delayMicros > 0 ? delayMicros : 0);
+    _retryTimer = Timer(delay, () {
+      _retryTimer = null;
+      if (!_disposed) unawaited(_retryAfterTimer());
+    });
+  }
+
+  Future<void> _retryAfterTimer() async {
+    try {
+      await reconcile();
+    } on Object {
+      // Failures before an individual outbox job is claimed (database open,
+      // plugin initialization, permission query) are not recorded by _runJob.
+      // Keep a bounded process-local wake-up instead of leaking an unhandled
+      // Future or abandoning the durable queue until the next lifecycle event.
+      if (_disposed) return;
+      _retryTimer?.cancel();
+      _retryTimer = Timer(_retryBaseDelay, () {
+        _retryTimer = null;
+        if (!_disposed) unawaited(_retryAfterTimer());
+      });
     }
   }
 
@@ -818,6 +981,12 @@ final class _FlutterNotificationGateway implements NotificationGateway {
         >()
         ?.checkPermissions();
     return options?.isEnabled;
+  }
+
+  @override
+  Future<Set<int>> pendingNotificationIds() async {
+    final requests = await _plugin.pendingNotificationRequests();
+    return <int>{for (final request in requests) request.id};
   }
 
   @override

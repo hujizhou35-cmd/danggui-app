@@ -34,7 +34,10 @@ void main() {
     );
   });
 
-  tearDown(() => database.close());
+  tearDown(() async {
+    coordinator.dispose();
+    await database.close();
+  });
 
   test(
     'reconcile schedules inexact-capable request with persisted defaults',
@@ -108,6 +111,69 @@ void main() {
   );
 
   test(
+    'reconcile preserves an already-delivered notification when it expires',
+    () async {
+      await _createFutureReminder(tasks, nowUtc);
+      await coordinator.reconcile();
+      final registration = await database
+          .select(database.notificationRegistrations)
+          .getSingle();
+      expect(gateway.scheduled, hasLength(1));
+
+      gateway.markDelivered(registration.platformNotificationId);
+      nowUtc = nowUtc.add(const Duration(hours: 3));
+      await coordinator.reconcile();
+
+      final reminder = await database.select(database.reminders).getSingle();
+      expect(reminder.status, ReminderStatus.expired);
+      expect(reminder.pauseReason, isNull);
+      expect(gateway.scheduled, hasLength(1));
+      expect(
+        gateway.cancelled,
+        isNot(contains(registration.platformNotificationId)),
+        reason: 'the fired notification must remain available for snooze',
+      );
+      expect(
+        await database.select(database.notificationRegistrations).get(),
+        isEmpty,
+      );
+      final jobs = await database.select(database.platformJobs).get();
+      expect(jobs, hasLength(1));
+      expect(jobs.single.status, PlatformJobStatus.succeeded);
+    },
+  );
+
+  test(
+    'reconcile cancels a delayed pending alarm before it can catch up',
+    () async {
+      await _createFutureReminder(tasks, nowUtc);
+      await coordinator.reconcile();
+      final registration = await database
+          .select(database.notificationRegistrations)
+          .getSingle();
+      expect(
+        gateway.pendingNotificationIdsValue,
+        contains(registration.platformNotificationId),
+      );
+
+      nowUtc = nowUtc.add(const Duration(hours: 3));
+      await coordinator.reconcile();
+
+      final reminder = await database.select(database.reminders).getSingle();
+      expect(reminder.status, ReminderStatus.expired);
+      expect(gateway.cancelled, contains(registration.platformNotificationId));
+      expect(
+        gateway.pendingNotificationIdsValue,
+        isNot(contains(registration.platformNotificationId)),
+      );
+      expect(
+        await database.select(database.notificationRegistrations).get(),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
     'failed startup reschedule retries without creating another outbox job',
     () async {
       await _createFutureReminder(tasks, nowUtc);
@@ -145,6 +211,37 @@ void main() {
       expect(jobs.single.status, PlatformJobStatus.succeeded);
     },
   );
+
+  test('failed outbox jobs wake and retry while the app stays alive', () async {
+    gateway.scheduleFailuresRemaining = 1;
+    coordinator = NotificationCoordinator(
+      () async => database,
+      gateway: gateway,
+      nowUtc: () => nowUtc,
+      systemLocaleName: () => 'zh_CN',
+      retryBaseDelay: const Duration(milliseconds: 30),
+    );
+    await _createFutureReminder(tasks, nowUtc);
+
+    await coordinator.reconcile();
+    expect(gateway.scheduleCalls, 1);
+    var job = await database.select(database.platformJobs).getSingle();
+    expect(job.status, PlatformJobStatus.failed);
+
+    gateway.permissionFailuresRemaining = 1;
+    nowUtc = nowUtc.add(const Duration(milliseconds: 30));
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (gateway.scheduled.isEmpty) {
+      if (DateTime.now().isAfter(deadline)) {
+        throw StateError('Automatic notification retry did not wake.');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    expect(gateway.scheduleCalls, 2);
+    job = await database.select(database.platformJobs).getSingle();
+    expect(job.status, PlatformJobStatus.succeeded);
+  });
 
   test(
     'new coordinator recovers an interrupted running job exactly once',
@@ -574,6 +671,7 @@ Future<TaskModel> _createFutureReminder(
 final class FakeNotificationGateway implements NotificationGateway {
   bool get initialized => presentations.isNotEmpty;
   bool permissionGranted = true;
+  int permissionFailuresRemaining = 0;
   bool permissionRequestResult = true;
   int permissionRequests = 0;
   int scheduleCalls = 0;
@@ -583,6 +681,7 @@ final class FakeNotificationGateway implements NotificationGateway {
   final List<LocalNotificationRequest> scheduled = [];
   final List<int> cancelled = [];
   final List<NotificationPresentation> presentations = [];
+  final Set<int> pendingNotificationIdsValue = <int>{};
 
   @override
   bool get isSupported => true;
@@ -600,13 +699,23 @@ final class FakeNotificationGateway implements NotificationGateway {
   }
 
   @override
-  Future<bool?> permissionsGranted() async => permissionGranted;
+  Future<bool?> permissionsGranted() async {
+    if (permissionFailuresRemaining > 0) {
+      permissionFailuresRemaining--;
+      throw StateError('simulated permission query failure');
+    }
+    return permissionGranted;
+  }
 
   @override
   Future<bool> requestPermissions() async {
     permissionRequests += 1;
     return permissionRequestResult;
   }
+
+  @override
+  Future<Set<int>> pendingNotificationIds() async =>
+      Set<int>.of(pendingNotificationIdsValue);
 
   @override
   Future<void> schedule(LocalNotificationRequest request) async {
@@ -616,12 +725,18 @@ final class FakeNotificationGateway implements NotificationGateway {
       throw StateError('simulated schedule failure');
     }
     scheduled.add(request);
+    pendingNotificationIdsValue.add(request.notificationId);
     await onSchedule?.call(request);
   }
 
   @override
   Future<void> cancel(int notificationId) async {
     cancelled.add(notificationId);
+    pendingNotificationIdsValue.remove(notificationId);
+  }
+
+  void markDelivered(int notificationId) {
+    pendingNotificationIdsValue.remove(notificationId);
   }
 }
 

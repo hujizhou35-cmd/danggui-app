@@ -2,8 +2,10 @@ import 'dart:convert';
 
 import 'package:danggui/main.dart' as app;
 import 'package:danggui/src/application/app_store.dart';
+import 'package:danggui/src/data/database.dart';
 import 'package:danggui/src/features/tasks/tasks_page.dart';
 import 'package:danggui/src/services/notifications/notification_coordinator.dart';
+import 'package:drift/drift.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
@@ -170,7 +172,169 @@ void main() {
       reason: 'Every same-version overlay retention assertion must pass.',
     );
     await waitForReleaseAcceptanceHostSignal();
+
+    // The host has now observed the real scheduled notification and captured
+    // the shade. Exercise the exact action ids delivered by the native plugin
+    // callback without using brittle coordinate-based SystemUI taps. This
+    // still uses the production database, coordinator and native gateway, so a
+    // successful return includes durable mutation and platform rescheduling.
+    final snoozeActions = <Map<String, Object?>>[];
+    var previous = await _readSnoozeState(database, taskId);
+    for (final minutes in <int>[10, 30, 60]) {
+      final callStarted = DateTime.now().toUtc();
+      final handled = await coordinator.handleNotificationAction(
+        'danggui.snooze.$minutes',
+        'task:$taskId',
+      );
+      final callCompleted = DateTime.now().toUtc();
+      final current = await _waitForSnoozeState(
+        database,
+        coordinator,
+        taskId,
+        expectedSnoozeCount: (previous['snoozeCount']! as int) + 1,
+        expectedRevision: (previous['scheduleRevision']! as int) + 1,
+      );
+      final scheduledAt = DateTime.fromMicrosecondsSinceEpoch(
+        current['scheduledAtUtcMicros']! as int,
+        isUtc: true,
+      );
+      final earliest = callStarted
+          .add(Duration(minutes: minutes))
+          .subtract(const Duration(seconds: 2));
+      final latest = callCompleted
+          .add(Duration(minutes: minutes))
+          .add(const Duration(seconds: 2));
+      final assertions = <String, bool>{
+        'handled': handled,
+        'snoozeCountIncremented':
+            current['snoozeCount'] == (previous['snoozeCount']! as int) + 1,
+        'revisionIncremented':
+            current['scheduleRevision'] ==
+            (previous['scheduleRevision']! as int) + 1,
+        'scheduledAtMatchesSnoozedUntil':
+            current['scheduledAtUtcMicros'] == current['snoozedUntilUtcMicros'],
+        'scheduledAtWithinCallbackWindow':
+            !scheduledAt.isBefore(earliest) && !scheduledAt.isAfter(latest),
+        'reminderScheduled': current['status'] == 'scheduled',
+        'registrationRevisionMatches':
+            current['registrationRevision'] == current['scheduleRevision'],
+        'platformNotificationIdPresent':
+            current['platformNotificationId'] != null,
+        'platformNotificationIdStable':
+            previous['platformNotificationId'] == null ||
+            current['platformNotificationId'] ==
+                previous['platformNotificationId'],
+        'platformOutboxSucceeded': current['nonSucceededPlatformJobCount'] == 0,
+      };
+      expect(
+        assertions.entries
+            .where((entry) => !entry.value)
+            .map((entry) => entry.key),
+        isEmpty,
+        reason: '$minutes-minute notification callback must reschedule once.',
+      );
+      snoozeActions.add(<String, Object?>{
+        'minutes': minutes,
+        'actionId': 'danggui.snooze.$minutes',
+        'payload': 'task:$taskId',
+        'callStartedAtUtc': callStarted.toIso8601String(),
+        'callCompletedAtUtc': callCompleted.toIso8601String(),
+        ...current,
+        'assertions': assertions,
+      });
+      previous = current;
+    }
+    await writeReleaseAcceptanceEvidence(
+      'snooze-callback.json',
+      <String, Object?>{
+        'contractVersion': releaseAcceptanceContractVersion,
+        'phase': 'production-notification-action-callbacks',
+        'apiLevel': apiLevel,
+        'scope': <String, Object?>{
+          'productionCoordinator': true,
+          'productionDatabase': true,
+          'nativeNotificationGateway': true,
+          'systemNotificationPreviouslyObserved': true,
+          'systemUiActionClickClaimed': false,
+        },
+        'actions': snoozeActions,
+      },
+    );
+    await database.customStatement('PRAGMA wal_checkpoint(FULL)');
+
+    // Keep the instrumented process alive until the host has observed the
+    // native AlarmManager registration produced by the final callback. The
+    // Flutter test runner force-stops the app during teardown, which removes
+    // alarms and would otherwise turn a successful reschedule into a false
+    // negative in the host-side acceptance script.
+    await waitForReleaseAcceptanceHostSignal(
+      signalName: 'snooze-alarm-observed.signal',
+      phase: 'snooze alarm evidence',
+    );
   });
+}
+
+Future<Map<String, Object?>> _waitForSnoozeState(
+  DangguiDatabase database,
+  NotificationCoordinator coordinator,
+  String taskId, {
+  required int expectedSnoozeCount,
+  required int expectedRevision,
+}) async {
+  for (var attempt = 0; attempt < 150; attempt += 1) {
+    await coordinator.reconcile();
+    final state = await _readSnoozeState(database, taskId);
+    if (state['snoozeCount'] == expectedSnoozeCount &&
+        state['scheduleRevision'] == expectedRevision &&
+        state['registrationRevision'] == expectedRevision &&
+        state['platformNotificationId'] != null &&
+        state['nonSucceededPlatformJobCount'] == 0) {
+      return state;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+  throw StateError(
+    'The production notification gateway did not settle snooze revision '
+    '$expectedRevision.',
+  );
+}
+
+Future<Map<String, Object?>> _readSnoozeState(
+  DangguiDatabase database,
+  String taskId,
+) async {
+  final reminder = await database
+      .customSelect(
+        'SELECT r.scheduled_at_utc, r.snoozed_until_utc, r.snooze_count, '
+        'r.schedule_revision, r.status, nr.platform_notification_id, '
+        'nr.schedule_revision AS registration_revision '
+        'FROM reminders r LEFT JOIN notification_registrations nr '
+        'ON nr.reminder_id = r.id AND nr.platform = ? '
+        'WHERE r.task_id = ?',
+        variables: <Variable<Object>>[
+          Variable.withString('android'),
+          Variable.withString(taskId),
+        ],
+      )
+      .getSingle();
+  final failedJobs = await database
+      .customSelect(
+        'SELECT COUNT(*) AS value FROM platform_jobs WHERE status <> ?',
+        variables: <Variable<Object>>[Variable.withString('succeeded')],
+      )
+      .getSingle();
+  return <String, Object?>{
+    'scheduledAtUtcMicros': reminder.read<int>('scheduled_at_utc'),
+    'snoozedUntilUtcMicros': reminder.readNullable<int>('snoozed_until_utc'),
+    'snoozeCount': reminder.read<int>('snooze_count'),
+    'scheduleRevision': reminder.read<int>('schedule_revision'),
+    'status': reminder.read<String>('status'),
+    'platformNotificationId': reminder.readNullable<int>(
+      'platform_notification_id',
+    ),
+    'registrationRevision': reminder.readNullable<int>('registration_revision'),
+    'nonSucceededPlatformJobCount': failedJobs.read<int>('value'),
+  };
 }
 
 bool _isQuickCheckOk(Object? value) {

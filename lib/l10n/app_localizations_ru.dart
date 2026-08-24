@@ -112,6 +112,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get moreSettings => 'Больше настроек';
 
   @override
+  String get moreSettingsWithReminder => 'Больше настроек (план и напоминание)';
+
+  @override
   String get cancel => 'Отмена';
 
   @override
@@ -356,6 +359,20 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get reminderExpired =>
       'Это время прошло; запоздалого уведомления не будет.';
+
+  @override
+  String get reminderStatusPermissionDenied =>
+      'Доступ ограничен; время напоминания сохранено';
+
+  @override
+  String get reminderStatusTaskClosed =>
+      'Дело закрыто; напоминание приостановлено';
+
+  @override
+  String get reminderStatusPaused => 'Напоминание приостановлено';
+
+  @override
+  String get openNotificationSettings => 'Открыть настройки уведомлений';
 
   @override
   String get backupCreated => 'Резервная копия создана';

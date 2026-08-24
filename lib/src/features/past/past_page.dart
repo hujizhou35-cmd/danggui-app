@@ -2,16 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
+import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../application/app_state.dart';
 import '../../application/app_store.dart';
-import '../../core/theme/theme.dart';
 import '../../domain/models.dart';
 import '../../services/export/portable_export_service.dart';
 import '../../ui/components/components.dart';
+import '../tasks/task_creation_sheet.dart';
 
 class PastPage extends ConsumerStatefulWidget {
   const PastPage({
@@ -119,87 +119,74 @@ class _PastPageState extends ConsumerState<PastPage>
     if (asyncState.hasValue) {
       _synchronizeDocument(asyncState.requireValue.pastBlocks);
     }
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: PaperBackground(
-        child: SafeArea(
-          bottom: false,
-          child: Column(
-            children: <Widget>[
-              DangguiTopBar(
-                content: TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    hintText: l10n.searchHint,
-                    prefixIcon: const Icon(Icons.search_rounded),
-                  ),
-                  textInputAction: TextInputAction.search,
-                  onChanged: _locateQuery,
-                ),
-                actions: <Widget>[
-                  DangguiIconButton(
-                    icon: const Icon(Icons.ios_share_rounded),
-                    semanticLabel: l10n.export,
-                    onPressed: asyncState.hasValue
-                        ? () => _showExport(asyncState.requireValue.pastBlocks)
-                        : null,
-                  ),
-                  DangguiIconButton(
-                    icon: const Icon(Icons.add_rounded),
-                    semanticLabel: l10n.addPastText,
-                    onPressed: _appendParagraph,
-                  ),
-                ],
-              ),
-              Expanded(
-                child: asyncState.when(
-                  loading: () =>
-                      const Center(child: CircularProgressIndicator()),
-                  error: (error, stack) =>
-                      Center(child: Text(l10n.bootstrapError)),
-                  data: (state) => _buildDocumentEditor(l10n),
-                ),
-              ),
-            ],
+    return EditorPageFrame(
+      key: const Key('past-editor-page'),
+      includeBottomSafeArea: false,
+      topBar: DangguiTopBar(
+        key: const Key('past-editor-top-bar'),
+        content: TextField(
+          key: const Key('past-search-field'),
+          controller: _searchController,
+          decoration: InputDecoration(
+            hintText: l10n.searchHint,
+            prefixIcon: const Icon(Icons.search_rounded),
           ),
+          textInputAction: TextInputAction.search,
+          onChanged: _locateQuery,
         ),
+        actions: <Widget>[
+          DangguiIconButton(
+            icon: const Icon(Icons.ios_share_rounded),
+            semanticLabel: l10n.export,
+            onPressed: asyncState.hasValue
+                ? () => _showExport(asyncState.requireValue.pastBlocks)
+                : null,
+          ),
+          DangguiIconButton(
+            icon: const Icon(Icons.add_rounded),
+            semanticLabel: l10n.addPastText,
+            onPressed: _appendParagraph,
+          ),
+        ],
       ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        minimum: const EdgeInsets.fromLTRB(18, 0, 18, 10),
-        child: EditorToolbar(
-          items: <EditorToolbarItem>[
-            EditorToolbarItem(
-              icon: const Icon(Icons.format_list_bulleted_rounded),
-              semanticLabel: l10n.bulletedList,
-              onPressed: () => _insertPrefix('• '),
-            ),
-            EditorToolbarItem(
-              icon: const Icon(Icons.format_list_numbered_rounded),
-              semanticLabel: l10n.numberedList,
-              onPressed: () => _insertPrefix('1. '),
-            ),
-            EditorToolbarItem(
-              icon: const Icon(Icons.check_box_outlined),
-              semanticLabel: l10n.checklist,
-              onPressed: () => _insertPrefix('☐ '),
-            ),
-            EditorToolbarItem(
-              icon: const Icon(Icons.undo_rounded),
-              semanticLabel: l10n.undo,
-              onPressed: _undoController.value.canUndo
-                  ? _undoController.undo
-                  : null,
-            ),
-            EditorToolbarItem(
-              icon: const Icon(Icons.redo_rounded),
-              semanticLabel: l10n.redo,
-              onPressed: _undoController.value.canRedo
-                  ? _undoController.redo
-                  : null,
-            ),
-          ],
-        ),
+      editor: asyncState.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, stack) => Center(child: Text(l10n.bootstrapError)),
+        data: (state) => _buildDocumentEditor(l10n),
+      ),
+      toolbar: EditorToolbar(
+        key: const Key('past-editor-toolbar'),
+        items: <EditorToolbarItem>[
+          EditorToolbarItem(
+            icon: const Icon(Icons.format_list_bulleted_rounded),
+            semanticLabel: l10n.bulletedList,
+            onPressed: () => _insertPrefix('• '),
+          ),
+          EditorToolbarItem(
+            icon: const Icon(Icons.format_list_numbered_rounded),
+            semanticLabel: l10n.numberedList,
+            onPressed: () => _insertPrefix('1. '),
+          ),
+          EditorToolbarItem(
+            icon: const Icon(Icons.check_box_outlined),
+            semanticLabel: l10n.checklist,
+            onPressed: () => _insertPrefix('☐ '),
+          ),
+          EditorToolbarItem(
+            icon: const Icon(Icons.undo_rounded),
+            semanticLabel: l10n.undo,
+            onPressed: _undoController.value.canUndo
+                ? _undoController.undo
+                : null,
+          ),
+          EditorToolbarItem(
+            icon: const Icon(Icons.redo_rounded),
+            semanticLabel: l10n.redo,
+            onPressed: _undoController.value.canRedo
+                ? _undoController.redo
+                : null,
+          ),
+        ],
       ),
     );
   }
@@ -314,7 +301,7 @@ class _PastPageState extends ConsumerState<PastPage>
         // Keep the failed draft intact. Background failures are retried when
         // the app resumes; foreground failures also receive a bounded retry.
         if (!_disposed && _isForeground) {
-          if (mounted) {
+          if (mounted && Scaffold.maybeOf(context) != null) {
             ScaffoldMessenger.of(context)
                 .showSnackBar(SnackBar(content: Text(error.toString())));
           }
@@ -396,24 +383,24 @@ class _PastPageState extends ConsumerState<PastPage>
         .where((line) => line.isNotEmpty)
         .toList(growable: false);
     if (lines.isEmpty || !mounted) return;
-    final result = await showModalBottomSheet<_TaskFromPastResult>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (context) => _TaskFromPastSheet(
-        initialTitle: lines.first,
-        initialBody: lines.skip(1).join('\n'),
-      ),
+    final result = await showTaskCreationSheet(
+      context,
+      initialTitle: lines.first,
+      initialBody: lines.skip(1).join('\n'),
     );
     if (result == null || !mounted) return;
-    await ref
+    if (!await _flushSave() || !mounted) return;
+    final taskId = await ref
         .read(appStoreProvider.notifier)
         .createTask(
           title: result.title,
           body: result.body,
           dueDate: result.dueDate,
         );
-    if (mounted) {
+    if (result.openDetails && mounted) {
+      await settleTaskCreationKeyboard(context: context);
+      if (mounted) await context.push('/tasks/$taskId');
+    } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(AppLocalizations.of(context).addTask)),
       );
@@ -532,136 +519,4 @@ final class _PastSaveDraft {
 
   final int revision;
   final String text;
-}
-
-final class _TaskFromPastResult {
-  const _TaskFromPastResult({
-    required this.title,
-    required this.body,
-    this.dueDate,
-  });
-
-  final String title;
-  final String body;
-  final DateTime? dueDate;
-}
-
-class _TaskFromPastSheet extends StatefulWidget {
-  const _TaskFromPastSheet({
-    required this.initialTitle,
-    required this.initialBody,
-  });
-
-  final String initialTitle;
-  final String initialBody;
-
-  @override
-  State<_TaskFromPastSheet> createState() => _TaskFromPastSheetState();
-}
-
-class _TaskFromPastSheetState extends State<_TaskFromPastSheet> {
-  late final TextEditingController _titleController;
-  late final TextEditingController _bodyController;
-  DateTime? _dueDate;
-
-  @override
-  void initState() {
-    super.initState();
-    _titleController = TextEditingController(text: widget.initialTitle);
-    _bodyController = TextEditingController(text: widget.initialBody);
-  }
-
-  @override
-  void dispose() {
-    _titleController.dispose();
-    _bodyController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 180),
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Material(
-        color: context.dangguiTheme.paper2,
-        shape: RoundedRectangleBorder(
-          borderRadius: context.dangguiTheme.sheetRadius,
-        ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Text(
-                l10n.convertToTask,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _titleController,
-                maxLength: 160,
-                decoration: InputDecoration(hintText: l10n.taskTitleHint),
-              ),
-              TextField(
-                controller: _bodyController,
-                minLines: 2,
-                maxLines: 6,
-                decoration: InputDecoration(hintText: l10n.bodyHint),
-              ),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(l10n.dueDate),
-                subtitle: Text(
-                  _dueDate == null
-                      ? l10n.noDate
-                      : DateFormat.yMMMd(
-                          Localizations.localeOf(context).toLanguageTag(),
-                        ).format(_dueDate!),
-                ),
-                onTap: _pickDate,
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: <Widget>[
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: Text(l10n.cancel),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton(onPressed: _submit, child: Text(l10n.save)),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _pickDate() async {
-    final now = DateTime.now();
-    final selected = await showDatePicker(
-      context: context,
-      initialDate: _dueDate ?? now,
-      firstDate: DateTime(now.year - 10),
-      lastDate: DateTime(now.year + 20),
-    );
-    if (selected != null) setState(() => _dueDate = selected);
-  }
-
-  void _submit() {
-    final title = _titleController.text.trim();
-    if (title.isEmpty) return;
-    Navigator.pop(
-      context,
-      _TaskFromPastResult(
-        title: title,
-        body: _bodyController.text,
-        dueDate: _dueDate,
-      ),
-    );
-  }
 }

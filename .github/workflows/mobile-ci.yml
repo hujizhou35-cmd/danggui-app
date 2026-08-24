@@ -20,6 +20,8 @@ env:
   ANDROID_COMPILE_SDK: "36"
   ANDROID_BUILD_TOOLS: 36.0.0
   ANDROID_NDK_VERSION: 28.2.13676358
+  BUNDLETOOL_VERSION: 1.18.3
+  BUNDLETOOL_SHA256: a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29
 
 jobs:
   android-linux:
@@ -177,18 +179,38 @@ jobs:
       - name: Build app bundle
         run: flutter build appbundle --release
 
+      - name: Install pinned bundletool verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundletool_jar="${RUNNER_TEMP}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          curl --fail --location --retry 3 --retry-all-errors \
+            --output "${bundletool_jar}" \
+            "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          printf '%s  %s\n' "${BUNDLETOOL_SHA256}" "${bundletool_jar}" \
+            | sha256sum --check --strict
+          echo "BUNDLETOOL_JAR=${bundletool_jar}" >> "${GITHUB_ENV}"
+          java -jar "${bundletool_jar}" version
+
       - name: Stage and verify Android artifacts
         shell: bash
         run: |
           set -euo pipefail
+          technical_version="$(sed -n -E 's/^version:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p' pubspec.yaml | head -n 1)"
+          if [[ "${technical_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+([1-9][0-9]*)$ ]]; then
+            version_code="${BASH_REMATCH[1]}"
+          else
+            echo "Invalid pubspec release version: ${technical_version}" >&2
+            exit 65
+          fi
           mkdir -p dist/android
           cp build/app/outputs/flutter-apk/app-release.apk \
             "dist/android/danggui-android-universal-${ANDROID_SIGNING_MODE}.apk"
 
-          declare -A split_version_codes=(
-            [armeabi-v7a]=1001
-            [arm64-v8a]=2001
-            [x86_64]=4001
+          declare -A split_version_offsets=(
+            [armeabi-v7a]=1000
+            [arm64-v8a]=2000
+            [x86_64]=4000
           )
           for abi in armeabi-v7a arm64-v8a x86_64; do
             source="build/app/outputs/flutter-apk/app-${abi}-release.apk"
@@ -205,18 +227,27 @@ jobs:
           bash tool/verify_android_artifacts.sh \
             "dist/android/danggui-android-universal-${ANDROID_SIGNING_MODE}.apk" \
             "dist/android/danggui-android-${ANDROID_SIGNING_MODE}.aab" \
-            1
+            "${version_code}"
           for abi in armeabi-v7a arm64-v8a x86_64; do
+            offset="${split_version_offsets[$abi]}"
             bash tool/verify_android_artifacts.sh \
               "dist/android/danggui-android-${abi}-${ANDROID_SIGNING_MODE}.apk" \
               "" \
-              "${split_version_codes[$abi]}"
+              "$((offset + version_code))"
           done
 
           (
             cd dist/android
             sha256sum ./*.apk ./*.aab > SHA256SUMS
             printf '%s\n' "${ANDROID_SIGNING_MODE}" > SIGNING_MODE.txt
+            "${ANDROID_SDK_ROOT}/build-tools/${ANDROID_BUILD_TOOLS}/apksigner" \
+              verify --verbose --print-certs \
+              "danggui-android-universal-${ANDROID_SIGNING_MODE}.apk" \
+              > SIGNING_CERTIFICATE.txt
+            if [[ -n "${DANGGUI_EXPECTED_CERT_SHA256:-}" ]]; then
+              printf '%s\n' "${DANGGUI_EXPECTED_CERT_SHA256}" \
+                > SIGNING_CERTIFICATE_SHA256.txt
+            fi
             flutter --version > TOOLCHAIN.txt
           )
 
@@ -236,6 +267,7 @@ jobs:
   android-emulator-smoke:
     # Keep these display names stable: main branch protection requires them.
     name: Android cold-start smoke (API ${{ matrix.api-level }})
+    needs: [android-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -263,9 +295,49 @@ jobs:
           printf '%s\n' 'not captured' \
             > "${evidence_dir}/notification-after.txt"
           : > "${evidence_dir}/notification-shade.png"
+          printf '%s\n' \
+            '{"status":"not-run","phase":"awaiting-android-artifact"}' \
+            > "${evidence_dir}/release-binary-smoke.json"
+          : > "${evidence_dir}/release-binary-apk.sha256"
 
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download exact Android release-mode artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: danggui-android-${{ github.sha }}
+          path: ${{ runner.temp }}/danggui-android-${{ github.sha }}
+          digest-mismatch: error
+
+      - name: Verify and select universal release-mode APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/danggui-android-${GITHUB_SHA}"
+          evidence_dir="${RUNNER_TEMP}/danggui-emulator-api-${{ matrix.api-level }}"
+          signing_mode="$(tr -d '\r\n' < "${artifact_dir}/SIGNING_MODE.txt")"
+          if [[ "${signing_mode}" != 'release' &&
+                "${signing_mode}" != 'debug-fallback' ]]; then
+            echo "Unsupported downloaded signing mode: ${signing_mode}" >&2
+            exit 1
+          fi
+          release_apk="${artifact_dir}/danggui-android-universal-${signing_mode}.apk"
+          [[ -s "${release_apk}" ]]
+          (
+            cd "${artifact_dir}"
+            sha256sum --check --strict SHA256SUMS
+          )
+          release_apk_sha256="$(sha256sum "${release_apk}" | awk '{print $1}')"
+          printf '%s  %s\n' \
+            "${release_apk_sha256}" "$(basename -- "${release_apk}")" \
+            > "${evidence_dir}/release-binary-apk.sha256"
+          printf '%s\n' \
+            "DANGGUI_RELEASE_APK=${release_apk}" \
+            "DANGGUI_RELEASE_APK_SHA256=${release_apk_sha256}" \
+            "DANGGUI_RELEASE_SIGNING_MODE=${signing_mode}" \
+            "DANGGUI_RELEASE_ARTIFACT_SHA=${GITHUB_SHA}" \
+            >> "${GITHUB_ENV}"
 
       - name: Normalize executable bits from Windows-authored commits
         run: chmod +x android/gradlew
@@ -331,7 +403,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run primary cold-start and release acceptance on API ${{ matrix.api-level }}
+      - name: Run primary instrumented acceptance and exact release-binary smoke on API ${{ matrix.api-level }}
         id: emulator-primary
         continue-on-error: true
         # ReactiveCircus/android-emulator-runner v2.38.0, pinned to its immutable commit.
@@ -363,7 +435,7 @@ jobs:
           bash integration_test/android_emulator_retry_gate.sh prepare
           "${{ matrix.api-level }}"
 
-      - name: Run sole fresh-AVD retry on API ${{ matrix.api-level }}
+      - name: Run sole fresh-AVD interaction and release-binary retry on API ${{ matrix.api-level }}
         id: emulator-retry
         if: >-
           always() &&
@@ -421,6 +493,9 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Build deterministic iOS source archive
+        run: bash tool/build_ios_source_zip.sh
+
       - name: Set up Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
@@ -442,6 +517,15 @@ jobs:
       - name: Build unsigned iOS app
         run: bash tool/build_ios_unsigned.sh
 
+      - name: Finalize iOS archive checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd dist/ios
+            shasum -a 256 ./*.zip > SHA256SUMS
+          )
+
       - name: Upload unsigned iOS build evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -449,3 +533,131 @@ jobs:
           path: dist/ios/
           if-no-files-found: error
           retention-days: 14
+
+  publish-prerelease:
+    name: Publish protected tag pre-release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: [android-linux, android-emulator-smoke, ios-unsigned]
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag against pubspec and protected main
+        shell: bash
+        run: |
+          set -euo pipefail
+          technical_version="$(sed -n -E 's/^version:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p' pubspec.yaml | head -n 1)"
+          version_name="${technical_version%%+*}"
+          if [[ "${GITHUB_REF_NAME}" != "v${version_name}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match pubspec ${technical_version}." >&2
+            exit 1
+          fi
+          git fetch --no-tags --prune origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          tag_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if ! git merge-base --is-ancestor \
+            "${tag_commit}" refs/remotes/origin/main; then
+            echo "Tag commit ${tag_commit} is not reachable from protected origin/main." >&2
+            exit 1
+          fi
+
+      - name: Download gated build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging/android staging/ios release
+          gh run download "${GITHUB_RUN_ID}" \
+            --name "danggui-android-${GITHUB_SHA}" \
+            --dir staging/android
+          gh run download "${GITHUB_RUN_ID}" \
+            --name "danggui-ios-unsigned-${GITHUB_SHA}" \
+            --dir staging/ios
+
+      - name: Assemble pre-release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(tr -d '\r\n' < staging/android/SIGNING_MODE.txt)" != "release" ]]; then
+            echo "A protected version tag must publish release-signed Android artifacts." >&2
+            exit 1
+          fi
+          cp staging/android/*.apk release/
+          cp staging/android/*.aab release/
+          cp staging/android/SIGNING_CERTIFICATE.txt release/
+          cp staging/android/SIGNING_CERTIFICATE_SHA256.txt release/
+          cp staging/ios/danggui-ios-source-v*.zip release/
+          cp staging/ios/danggui-ios-unsigned.app.zip release/
+          cp staging/ios/PLATFORM_AUDIT.txt release/IOS_PLATFORM_AUDIT.txt
+          cp staging/ios/UNSIGNED.txt release/IOS_UNSIGNED.txt
+          cp staging/ios/XCODE.txt release/
+          cp staging/ios/TOOLCHAIN.txt release/IOS_TOOLCHAIN.txt
+          cp staging/ios/SOURCE_COMMIT.txt release/
+          cp staging/ios/SOURCE_ARCHIVE_CONTENTS.txt release/
+          (
+            cd release
+            sha256sum ./* | sort -k2 > SHA256SUMS
+          )
+          printf '%s\n' \
+            "Danggui ${GITHUB_REF_NAME} pre-release" \
+            "" \
+            "Android packages are protected-release signed. The iOS app archive is unsigned build evidence, not an IPA; the iOS source ZIP is the buildable source delivery." \
+            "" \
+            "This remains a pre-release until representative physical-device acceptance is signed off." \
+            > release-notes.md
+
+      - name: Create or refresh GitHub pre-release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find release -maxdepth 1 -type f -print | sort)
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            existing_is_prerelease="$(
+              gh release view "${GITHUB_REF_NAME}" \
+                --json isPrerelease --jq '.isPrerelease'
+            )"
+            if [[ "${existing_is_prerelease}" != 'true' ]]; then
+              echo "Refusing to replace assets on an already-promoted stable release." >&2
+              exit 1
+            fi
+            gh release edit "${GITHUB_REF_NAME}" \
+              --prerelease \
+              --title "当归 ${GITHUB_REF_NAME}" \
+              --notes-file release-notes.md
+            # A rerun must not leave stale attachments that are absent from the
+            # newly generated SHA256SUMS. Replace the complete asset set.
+            mapfile -t existing_assets < <(
+              gh release view "${GITHUB_REF_NAME}" \
+                --json assets --jq '.assets[].name'
+            )
+            for asset_name in "${existing_assets[@]}"; do
+              gh release delete-asset "${GITHUB_REF_NAME}" \
+                "${asset_name}" --yes
+            done
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}"
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --verify-tag \
+              --prerelease \
+              --title "当归 ${GITHUB_REF_NAME}" \
+              --notes-file release-notes.md \
+              "${assets[@]}"
+          fi
+          mapfile -t expected_assets < <(
+            printf '%s\n' "${assets[@]##*/}" | sort
+          )
+          mapfile -t published_assets < <(
+            gh release view "${GITHUB_REF_NAME}" \
+              --json assets --jq '.assets[].name' | sort
+          )
+          diff -u \
+            <(printf '%s\n' "${expected_assets[@]}") \
+            <(printf '%s\n' "${published_assets[@]}")
