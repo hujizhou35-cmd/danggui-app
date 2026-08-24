@@ -167,12 +167,18 @@ screen_markers = {
 }
 bounds_pattern = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
 root = ET.parse(source_path).getroot()
-visible_values = {
-    value
-    for node in root.iter("node")
-    for value in (node.attrib.get("content-desc"), node.attrib.get("text"))
-    if value
-}
+visible_values = set()
+for node in root.iter("node"):
+    for value in (node.attrib.get("content-desc"), node.attrib.get("text")):
+        if not value:
+            continue
+        visible_values.add(value.strip())
+        # Flutter can merge an entire section into one multiline semantics
+        # node in release mode. Keep exact line matching so the page marker is
+        # recognized without accepting an arbitrary substring.
+        visible_values.update(
+            line.strip() for line in value.splitlines() if line.strip()
+        )
 matches = {key: [] for key in labels}
 for node in root.iter("node"):
     value = node.attrib.get("content-desc") or node.attrib.get("text") or ""

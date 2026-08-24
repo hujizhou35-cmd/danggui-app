@@ -418,19 +418,20 @@ Future<Map<String, Object?>> databaseSnapshot(
   };
 }
 
-Future<void> waitForReleaseAcceptanceHostSignal() async {
+Future<void> waitForReleaseAcceptanceHostSignal({
+  String signalName = 'notification-observed.signal',
+  String phase = 'notification evidence',
+}) async {
   const timeout = Duration(minutes: 18);
   const interval = Duration(milliseconds: 250);
   final deadline = DateTime.now().add(timeout);
-  final signal = await releaseAcceptanceEvidenceFile(
-    'notification-observed.signal',
-  );
+  final signal = await releaseAcceptanceEvidenceFile(signalName);
   while (DateTime.now().isBefore(deadline)) {
     if (await signal.exists()) return;
     await Future<void>.delayed(interval);
   }
   throw StateError(
-    'Host notification evidence signal did not arrive within '
+    'Host $phase signal did not arrive within '
     '${timeout.inMinutes} minutes.',
   );
 }

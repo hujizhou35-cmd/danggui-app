@@ -686,6 +686,46 @@ run_retry_gate_tests() {
   rm -rf -- "${case_root}"
 }
 
+run_alarm_dump_contract_tests() {
+  local case_root
+  local active_dump
+  local cancellation_dump
+  # Most infrastructure tests source the helpers inside isolated subshells;
+  # this small pure-parser contract runs in the parent shell.
+  source "${script_dir}/android_emulator_infrastructure.sh"
+  case_root="$(mktemp -d "${TMPDIR:-/tmp}/danggui-alarm-contract.XXXXXX")"
+  active_dump="${case_root}/active.txt"
+  cancellation_dump="${case_root}/cancellation.txt"
+
+  printf '%s\n' \
+    'Pending alarm batches:' \
+    '  RTC_WAKEUP #0: Alarm{26da1f8 type 0 when 1787517843000 com.danggui.memo}' \
+    '    tag=*walarm*:com.danggui.memo/com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver' \
+    > "${active_dump}"
+  danggui_alarm_dump_has_scheduled_notification \
+    "${active_dump}" com.danggui.memo 1787517843000
+  if danggui_alarm_dump_has_scheduled_notification \
+       "${active_dump}" com.danggui.memo 1787517844000; then
+    echo 'A different scheduled instant was incorrectly accepted.' >&2
+    return 1
+  fi
+
+  printf '%s\n' \
+    'Exact Alarm Candidates:' \
+    '  com.danggui.memo' \
+    'Removal history:' \
+    '  #1: Reason=pi_cancelled' \
+    '    Snapshot:' \
+    '      type=RTC_WAKEUP tag=*walarm*:com.danggui.memo/com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver' \
+    > "${cancellation_dump}"
+  if danggui_alarm_dump_has_scheduled_notification \
+       "${cancellation_dump}" com.danggui.memo 1787517843000; then
+    echo 'Cancellation history was incorrectly accepted as a pending alarm.' >&2
+    return 1
+  fi
+  rm -rf -- "${case_root}"
+}
+
 run_health_case healthy 1 0 false
 run_health_case launcher-then-systemui 1 0 false
 run_health_case all-launcher 1 75 true
@@ -702,6 +742,7 @@ run_health_case app-query-failure 1 1 false
 run_health_case timeout 2 75 false
 run_classifier_contract_tests
 run_product_failure_precedence_tests
+run_alarm_dump_contract_tests
 if command -v setsid >/dev/null; then
   run_process_group_termination_test
 else

@@ -261,6 +261,16 @@ void main() {
       },
     );
     await database.customStatement('PRAGMA wal_checkpoint(FULL)');
+
+    // Keep the instrumented process alive until the host has observed the
+    // native AlarmManager registration produced by the final callback. The
+    // Flutter test runner force-stops the app during teardown, which removes
+    // alarms and would otherwise turn a successful reschedule into a false
+    // negative in the host-side acceptance script.
+    await waitForReleaseAcceptanceHostSignal(
+      signalName: 'snooze-alarm-observed.signal',
+      phase: 'snooze alarm evidence',
+    );
   });
 }
 

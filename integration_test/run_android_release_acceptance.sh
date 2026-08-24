@@ -19,6 +19,7 @@ readonly acceptance_define="DANGGUI_ACCEPTANCE_API_LEVEL=${api_level}"
 readonly build_apk='build/app/outputs/flutter-apk/app-debug.apk'
 readonly app_evidence_path='files/danggui/release-acceptance'
 readonly host_signal_name='notification-observed.signal'
+readonly snooze_alarm_signal_name='snooze-alarm-observed.signal'
 mkdir -p "${evidence_dir}"
 
 verify_pid=''
@@ -70,11 +71,12 @@ capture_notification_dump() {
 
 capture_alarm_when_scheduled() {
   local destination="$1"
+  local expected_epoch_millis="$2"
   local deadline=$(( SECONDS + 30 ))
   while true; do
     bounded_adb shell dumpsys alarm > "${destination}"
-    if grep -Fq "${package_name}" "${destination}" &&
-       grep -Fq 'flutterlocalnotifications' "${destination}"; then
+    if danggui_alarm_dump_has_scheduled_notification \
+         "${destination}" "${package_name}" "${expected_epoch_millis}"; then
       return 0
     fi
     if (( SECONDS >= deadline )); then
@@ -145,7 +147,9 @@ run_flutter_logged() {
 
 start_verify_logged() {
   bounded_adb shell run-as "${package_name}" rm -f \
-    "${app_evidence_path}/${host_signal_name}"
+    "${app_evidence_path}/${host_signal_name}" \
+    "${app_evidence_path}/${snooze_alarm_signal_name}" \
+    "${app_evidence_path}/snooze-callback.json"
   (
     set -o pipefail
     timeout --signal=TERM --kill-after=30s 20m \
@@ -160,13 +164,15 @@ start_verify_logged() {
 
 wait_for_verify_evidence() {
   local destination="$1"
+  local evidence_name="${2:-after.json}"
   local deadline=$(( SECONDS + 180 ))
   local candidate="${destination}.partial"
   local read_status
   while (( SECONDS < deadline )); do
     set +e
     bounded_adb exec-out run-as "${package_name}" \
-      cat "${app_evidence_path}/after.json" > "${candidate}" 2>/dev/null
+      cat "${app_evidence_path}/${evidence_name}" \
+      > "${candidate}" 2>/dev/null
     read_status=$?
     set -e
     if (( read_status == 0 )) && jq -e . "${candidate}" >/dev/null 2>&1; then
@@ -184,7 +190,7 @@ wait_for_verify_evidence() {
     fi
     sleep 1
   done
-  echo 'Verify integration test did not publish after.json within 180 seconds.' >&2
+  echo "Verify integration test did not publish ${evidence_name} within 180 seconds." >&2
   return 1
 }
 
@@ -609,7 +615,8 @@ else
 fi
 bounded_adb shell dumpsys package "${package_name}" \
   > "${evidence_dir}/package-after-verify.txt"
-capture_alarm_when_scheduled "${evidence_dir}/alarm-after-verify.txt"
+capture_alarm_when_scheduled \
+  "${evidence_dir}/alarm-after-verify.txt" "$(( scheduled_seconds * 1000 ))"
 printf '%s\n' \
   "{\"platformNotificationId\":${platform_notification_id},\"scheduledEpochSeconds\":${scheduled_seconds},\"solePersistedReminder\":true,\"observedAfterVerifyProductionStartup\":true,\"recoverySourceAttributed\":false,\"alarmDump\":\"alarm-after-verify.txt\",\"overlayPreLaunchDump\":\"alarm-after-explicit-overlay.txt\"}" \
   > "${evidence_dir}/alarm-contract.json"
@@ -786,8 +793,8 @@ jq -e \
 
 bounded_adb shell run-as "${package_name}" touch \
   "${app_evidence_path}/${host_signal_name}"
-finish_verify_logged
-extract_app_evidence snooze-callback.json "${snooze_callback_json}"
+danggui_set_acceptance_phase 'production-notification-action-callbacks'
+wait_for_verify_evidence "${snooze_callback_json}" 'snooze-callback.json'
 jq -e \
   --argjson api "${api_level}" '
     .phase == "production-notification-action-callbacks" and
@@ -800,7 +807,23 @@ jq -e \
     [.actions[].minutes] == [10, 30, 60] and
     ([.actions[].assertions[]] | all)
   ' "${snooze_callback_json}" >/dev/null
-capture_alarm_when_scheduled "${evidence_dir}/alarm-after-snooze-callback.txt"
+snooze_scheduled_micros="$(
+  jq -er '.actions[-1].scheduledAtUtcMicros' "${snooze_callback_json}"
+)"
+[[ "${snooze_scheduled_micros}" =~ ^[0-9]+$ ]]
+snooze_scheduled_millis=$(( (snooze_scheduled_micros / 1000000) * 1000 ))
+capture_alarm_when_scheduled \
+  "${evidence_dir}/alarm-after-snooze-callback.txt" \
+  "${snooze_scheduled_millis}"
+printf '%s\n' \
+  "{\"status\":\"passed\",\"expectedEpochMillis\":${snooze_scheduled_millis},\"activePendingAlarmObserved\":true,\"capturedBeforeFlutterTeardown\":true}" \
+  > "${evidence_dir}/snooze-alarm-contract.json"
+jq -e '.status == "passed" and .activePendingAlarmObserved == true and
+  .capturedBeforeFlutterTeardown == true' \
+  "${evidence_dir}/snooze-alarm-contract.json" >/dev/null
+bounded_adb shell run-as "${package_name}" touch \
+  "${app_evidence_path}/${snooze_alarm_signal_name}"
+finish_verify_logged
 
 printf '%s\n' 'release acceptance passed' \
   > "${evidence_dir}/acceptance-result.txt"

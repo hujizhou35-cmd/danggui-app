@@ -8,6 +8,42 @@
 readonly DANGGUI_INFRA_RETRY_EXIT_STATUS=75
 readonly DANGGUI_INFRA_RETRY_SIGNAL='DANGGUI_FRESH_AVD_RETRY_V1'
 
+danggui_alarm_dump_has_scheduled_notification() {
+  local source_path="$1"
+  local package_name="$2"
+  local expected_epoch_millis="$3"
+
+  [[ -s "${source_path}" ]] || return 1
+  [[ -n "${package_name}" ]] || return 1
+  [[ "${expected_epoch_millis}" =~ ^[0-9]+$ ]] || return 1
+
+  # Match an active Alarm entry and its immediately following notification
+  # receiver tag. Package allowlists and cancellation-history snapshots can
+  # contain the same strings, so independent whole-file greps are not proof of
+  # a currently pending alarm.
+  awk \
+    -v package_name="${package_name}" \
+    -v expected_epoch_millis="${expected_epoch_millis}" '
+      index($0, "Alarm{") &&
+      index($0, package_name) &&
+      index($0, expected_epoch_millis) {
+        candidate_line = NR
+        next
+      }
+      candidate_line > 0 &&
+      NR > candidate_line &&
+      NR - candidate_line <= 3 &&
+      index($0, "flutterlocalnotifications") {
+        found = 1
+        exit
+      }
+      candidate_line > 0 && NR - candidate_line > 3 {
+        candidate_line = 0
+      }
+      END { exit(found ? 0 : 1) }
+    ' "${source_path}"
+}
+
 danggui_terminate_process_group() {
   local process_group_id="$1"
   local leader_pid="$2"
