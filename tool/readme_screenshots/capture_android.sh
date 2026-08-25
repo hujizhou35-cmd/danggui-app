@@ -16,6 +16,7 @@ timeout --signal=INT --kill-after=30s 20m flutter drive \
   --driver=integration_test/support/readme_screenshot_driver.dart \
   --target=integration_test/readme_screenshots_test.dart \
   --device-id="${ANDROID_SERIAL}" \
+  --dart-define="README_SCREENSHOT_MODE=true" \
   --dart-define="README_SCREENSHOT_LOCALE=${README_SCREENSHOT_LOCALE}"
 
 dart run tool/readme_screenshots/verify_outputs.dart \

@@ -8,6 +8,10 @@ import '../../../l10n/app_localizations.dart';
 import '../../application/app_store.dart';
 import '../../core/theme/theme.dart';
 
+const _holdStartupForReadmeScreenshot = bool.fromEnvironment(
+  'README_SCREENSHOT_MODE',
+);
+
 /// Branded initialization surface shown between the native splash and Tasks.
 ///
 /// [minimumDisplayDuration] is injectable so widget tests can advance a fake
@@ -143,7 +147,8 @@ class _StartupPageState extends ConsumerState<StartupPage> {
   }
 
   void _queueNavigationWhenReady(AsyncValue<Object?> bootstrap) {
-    if (_navigationQueued ||
+    if (_holdStartupForReadmeScreenshot ||
+        _navigationQueued ||
         !_minimumDisplayElapsed ||
         bootstrap.isLoading ||
         bootstrap.hasError ||

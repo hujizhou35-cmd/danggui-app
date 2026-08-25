@@ -163,7 +163,7 @@ Future<void> captureReadmeScreenshot(
   required ReadmeScreenshotFrame frame,
   required Finder readyWhen,
   required String phase,
-  Duration stabilizeFor = const Duration(milliseconds: 250),
+  Duration stabilizeFor = const Duration(milliseconds: 700),
 }) async {
   await waitForReadmeScreenshotFinder(
     tester,
@@ -173,6 +173,11 @@ Future<void> captureReadmeScreenshot(
   if (stabilizeFor > Duration.zero) {
     await tester.pump(stabilizeFor);
   }
+  // GoRouter may have built the destination while Android's converted Flutter
+  // surface is still presenting the previous route. Pump one more frame after
+  // the transition window so the platform screenshot sees the same scene as
+  // the widget tree assertions above.
+  await tester.pump();
   expect(
     tester.takeException(),
     isNull,
