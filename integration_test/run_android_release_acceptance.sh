@@ -605,6 +605,7 @@ platform_notification_id="$(
 scheduled_micros="$(jq -er '.task.reminderScheduledAtUtcMicros' "${before_json}")"
 [[ "${scheduled_micros}" =~ ^[0-9]+$ ]]
 scheduled_seconds=$(( scheduled_micros / 1000000 ))
+scheduled_millis=$(( scheduled_micros / 1000 ))
 
 start_verify_logged
 wait_for_verify_evidence "${after_json}"
@@ -629,9 +630,9 @@ fi
 bounded_adb shell dumpsys package "${package_name}" \
   > "${evidence_dir}/package-after-verify.txt"
 capture_alarm_when_scheduled \
-  "${evidence_dir}/alarm-after-verify.txt" "$(( scheduled_seconds * 1000 ))"
+  "${evidence_dir}/alarm-after-verify.txt" "${scheduled_millis}"
 printf '%s\n' \
-  "{\"platformNotificationId\":${platform_notification_id},\"scheduledEpochSeconds\":${scheduled_seconds},\"solePersistedReminder\":true,\"observedAfterVerifyProductionStartup\":true,\"recoverySourceAttributed\":false,\"alarmDump\":\"alarm-after-verify.txt\",\"overlayPreLaunchDump\":\"alarm-after-explicit-overlay.txt\"}" \
+  "{\"platformNotificationId\":${platform_notification_id},\"scheduledEpochSeconds\":${scheduled_seconds},\"scheduledEpochMillis\":${scheduled_millis},\"solePersistedReminder\":true,\"observedAfterVerifyProductionStartup\":true,\"recoverySourceAttributed\":false,\"alarmDump\":\"alarm-after-verify.txt\",\"overlayPreLaunchDump\":\"alarm-after-explicit-overlay.txt\"}" \
   > "${evidence_dir}/alarm-contract.json"
 jq -e . "${evidence_dir}/alarm-contract.json" >/dev/null
 sha256sum "${evidence_dir}/alarm-after-explicit-overlay.txt" \
@@ -824,7 +825,7 @@ snooze_scheduled_micros="$(
   jq -er '.actions[-1].scheduledAtUtcMicros' "${snooze_callback_json}"
 )"
 [[ "${snooze_scheduled_micros}" =~ ^[0-9]+$ ]]
-snooze_scheduled_millis=$(( (snooze_scheduled_micros / 1000000) * 1000 ))
+snooze_scheduled_millis=$(( snooze_scheduled_micros / 1000 ))
 capture_alarm_when_scheduled \
   "${evidence_dir}/alarm-after-snooze-callback.txt" \
   "${snooze_scheduled_millis}"

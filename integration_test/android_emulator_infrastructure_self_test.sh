@@ -690,6 +690,8 @@ run_alarm_dump_contract_tests() (
   local case_root
   local active_dump
   local cancellation_dump
+  local native_dump
+  local unrelated_dump
   # Most infrastructure tests source the helpers inside isolated subshells;
   # this small pure-parser contract runs in the parent shell.
   source "${script_dir}/android_emulator_infrastructure.sh"
@@ -710,13 +712,40 @@ run_alarm_dump_contract_tests() (
     return 1
   fi
 
+  native_dump="${case_root}/native.txt"
+  printf '%s\n' \
+    'Pending alarm batches:' \
+    '  RTC_WAKEUP #1: Alarm{d491318 type 0 origWhen 1787517843563 whenElapsed 651307 com.danggui.memo}' \
+    '    tag=*walarm*:com.danggui.memo.action.FIRE_ALARM' \
+    '    type=RTC_WAKEUP origWhen=2026-08-23 20:44:03.563 window=0 exactAllowReason=permission' \
+    > "${native_dump}"
+  danggui_alarm_dump_has_scheduled_notification \
+    "${native_dump}" com.danggui.memo 1787517843563
+  if danggui_alarm_dump_has_scheduled_notification \
+       "${native_dump}" com.danggui.memo 1787517843000; then
+    echo 'A millisecond-truncated native alarm instant was incorrectly accepted.' >&2
+    return 1
+  fi
+
+  unrelated_dump="${case_root}/unrelated.txt"
+  printf '%s\n' \
+    'Pending alarm batches:' \
+    '  RTC_WAKEUP #1: Alarm{d491318 type 0 origWhen 1787517843563 whenElapsed 651307 com.danggui.memo}' \
+    '    tag=*walarm*:com.danggui.memo.action.UNRELATED' \
+    > "${unrelated_dump}"
+  if danggui_alarm_dump_has_scheduled_notification \
+       "${unrelated_dump}" com.danggui.memo 1787517843563; then
+    echo 'An unrelated native alarm action was incorrectly accepted.' >&2
+    return 1
+  fi
+
   printf '%s\n' \
     'Exact Alarm Candidates:' \
     '  com.danggui.memo' \
     'Removal history:' \
     '  #1: Reason=pi_cancelled' \
     '    Snapshot:' \
-    '      type=RTC_WAKEUP tag=*walarm*:com.danggui.memo/com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver' \
+    '      type=RTC_WAKEUP tag=*walarm*:com.danggui.memo.action.FIRE_ALARM' \
     > "${cancellation_dump}"
   if danggui_alarm_dump_has_scheduled_notification \
        "${cancellation_dump}" com.danggui.memo 1787517843000; then
