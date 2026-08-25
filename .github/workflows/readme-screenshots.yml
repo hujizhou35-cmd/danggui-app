@@ -39,7 +39,7 @@ jobs:
         locale: [zh, en]
     env:
       README_SCREENSHOT_LOCALE: ${{ matrix.locale }}
-      DANGGUI_README_SCREENSHOT_OUTPUT: ${{ runner.temp }}/danggui-readme-screenshots/${{ matrix.locale }}
+      DANGGUI_README_SCREENSHOT_OUTPUT: ${{ github.workspace }}/build/readme-screenshots/${{ matrix.locale }}
       ANDROID_SERIAL: emulator-5554
     steps:
       - name: Check out source
