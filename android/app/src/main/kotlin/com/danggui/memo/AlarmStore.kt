@@ -393,9 +393,8 @@ internal class AlarmStore(context: Context) {
             devicePreferences: SharedPreferences,
         ) {
             if (devicePreferences.getBoolean(KEY_DEVICE_STORAGE_MIGRATED, false)) return
-            val credentialContext = context.createCredentialProtectedStorageContext()
             val credentialPreferences =
-                credentialContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+                context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
             val deviceRecords =
                 decodeRecords(devicePreferences.getString(KEY_RECORDS, null))
 
