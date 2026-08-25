@@ -9,7 +9,8 @@
 - [ ] Relevant Golden screenshots were reviewed
 - [ ] Database migrations include old-version fixtures, if applicable
 - [ ] Simplified Chinese, English, Japanese, and Russian strings are complete
-- [ ] No account, telemetry, ads, runtime AI, or remote user-data upload was added
+- [ ] No account, telemetry, ads, built-in AI, or automatic user-data upload was added
+- [ ] Any export or external-analysis change keeps the destination under explicit user control
 - [ ] No real notes, backups, passwords, certificates, or signing files are included
 
 ## Screenshots / 截图

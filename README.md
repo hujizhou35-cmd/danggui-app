@@ -1,77 +1,116 @@
 <p align="center">
-  <img src="docs/assets/brand/danggui-app-icon-source.png" width="152" alt="当归应用图标" />
+  <img src="docs/assets/brand/danggui-readme-hero.png" width="100%" alt="小球沿着点滴轨迹走向幼苗的当归手绘横幅" />
 </p>
 
 <h1 align="center">当归</h1>
 
-<p align="center"><strong>本地记录 · 不上传 · 不调用 AI</strong></p>
+<p align="center">
+  <strong>一点一滴，长成自己的轨迹。</strong><br />
+  把计划、提醒、行动、过往与笔记连成一条安静的本地工作流。
+</p>
 
 <p align="center">
-  <a href="README.md">简体中文</a> ·
+  <strong>简体中文</strong> ·
   <a href="docs/readme/README.en.md">English</a> ·
   <a href="docs/readme/README.ja.md">日本語</a> ·
   <a href="docs/readme/README.ru.md">Русский</a>
 </p>
 
 <p align="center">
-  <img alt="状态：v1.1.2 公开预发布" src="https://img.shields.io/badge/状态-v1.1.2%20公开预发布-B5684C?style=flat-square" />
+  <img alt="版本：v1.1.2 公开预发布" src="https://img.shields.io/badge/版本-v1.1.2%20公开预发布-B5684C?style=flat-square" />
   <img alt="平台：Android 与 iOS 源码" src="https://img.shields.io/badge/平台-Android%20%7C%20iOS%20源码-6F8068?style=flat-square" />
-  <img alt="隐私：离线优先" src="https://img.shields.io/badge/隐私-离线优先-81786F?style=flat-square" />
-  <img alt="语言：中英日俄" src="https://img.shields.io/badge/语言-中%20%7C%20英%20%7C%20日%20%7C%20俄-D8CEC1?style=flat-square&labelColor=81786F" />
+  <img alt="数据：本地优先、可读导出" src="https://img.shields.io/badge/数据-本地优先%20%7C%20可读导出-81786F?style=flat-square" />
   <img alt="许可证：Apache 2.0" src="https://img.shields.io/badge/代码许可-Apache--2.0-2E2925?style=flat-square" />
 </p>
 
-> [!IMPORTANT]
-> 当归 [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) 以独立 **Pre-release（预发布版）**交付。Android 提供正式签名的安装包；iOS 提供确定性源码压缩包和无签名构建证据，不提供 IPA 或 TestFlight。本版本尚未完成实体机发布验收，请勿视为稳定版；已上传的 v1.1.0 及其附件继续保留。
+<p align="center">
+  <a href="https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2"><strong>下载 Android</strong></a> ·
+  <a href="#产品预览">产品预览</a> ·
+  <a href="#数据与隐私">数据与隐私</a> ·
+  <a href="#参与项目">参与项目</a>
+</p>
 
-## 为什么是当归
+## 不只是列出要做什么
 
-当归是一款温和、安静、完全本地的事项与笔记应用。它把待办、完成后的过往记录和独立笔记放在同一个连续工作流里，同时明确坚持：不创建账号、不上传内容、不调用 AI、不做用户画像。
+有些工具只关心还没发生的事，有些工具只保存已经发生的事。当归把两端接在一起：写下计划，在合适的时刻收到本地提醒，完成后留下可回看的过往，再用笔记继续思考。
 
-- **事项**：日期、计划、清单与单次提醒；卡片直接显示提醒时间。
-- **过往**：完成事项汇入一篇持续生长、可以自由编辑的长文档。
-- **笔记**：单层文件夹、置顶、列表、勾选项和事项转换。
-- **可靠数据**：SQLite 事务、版本迁移、可选加密的 `.dgbak` 备份、合并/替换恢复，以及 Markdown + JSON 可读导出。
-- **四种语言与离线帮助**：简体中文、English、日本語、Русский；默认跟随系统，也可手动切换，设置页内置详细操作说明。
-- **1.1.2 精准提醒与紧凑过往**：提醒可精确到每分钟，保存操作有明确反馈，过往按事件单行排列；原生阶段只显示暖纸底，完整品牌启动页由 Flutter 唯一展示至少 1.2 秒。
+计划不会在勾选后消失，记录也不必永远沉睡。日复一日的小事会逐渐成为一份只属于你的、能够阅读和迁移的生活材料。
+
+| 计划 | 行动 | 回望 | 理解自己 |
+| --- | --- | --- | --- |
+| 用日期、清单与提醒安排下一步 | 在事项里推进、完成与复盘 | 把完成记录汇入可编辑的“过往” | 导出 Markdown + JSON，由你决定如何归档或分析 |
+
+> 当归不内置 AI，也不会把数据自动上传给任何 AI 服务。应用只负责在本地整理并导出可读数据；是否把导出文件交给外部 AI、使用哪个工具、分析什么，始终由你决定。
 
 ## 产品预览
 
 <p align="center">
-  <img src="docs/assets/screenshots/danggui-ui-overview-v1.png" width="920" alt="当归 13 个核心界面总览" />
+  <img src="docs/assets/screenshots/v1.1.2/zh/01-plan.png" width="880" alt="当归启动页、事项与提醒工作流" />
 </p>
+<p align="center"><sub>从小球与幼苗开始，把想法变成今天可以行动的一步。</sub></p>
 
-界面采用暖纸色、鼠尾草绿和陶土红，以舒展的卡片间距和克制的动效减少记录压力。自动 Golden 截图、文本缩放和真机视觉检查属于发布门禁，不以设计稿代替最终验收。
+<p align="center">
+  <img src="docs/assets/screenshots/v1.1.2/zh/02-reflect.png" width="880" alt="当归完成事项与过往回顾工作流" />
+</p>
+<p align="center"><sub>完成不是清空：行动会沉淀为可以继续编辑的过往。</sub></p>
 
-## 下载与构建
+<p align="center">
+  <img src="docs/assets/screenshots/v1.1.2/zh/03-export.png" width="880" alt="当归笔记与可读数据导出工作流" />
+</p>
+<p align="center"><sub>笔记留下思考，可读导出让数据真正归你。</sub></p>
 
-| 平台 | v1.1.2 预发布交付 | 获取方式 |
-| --- | --- | --- |
-| Android | 正式签名通用 APK、分架构 APK、AAB | 从 [v1.1.2 预发布页](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) 下载 |
-| iOS | `danggui-ios-source-v1.1.2.zip`、Xcode 工程与无签名 `Runner.app` 构建证据 | 按[源码包构建说明](docs/architecture/ios-source-build.md)自行编译；本次不提供 IPA/TestFlight |
+界面采用暖纸色、鼠尾草绿与陶土红，以克制的动效和留白减少记录压力。截图来自 v1.1.2 的实际应用界面，不使用设计稿代替产品。
 
-普通 Android 用户请下载 `danggui-android-universal-release.apk`；分架构 APK 面向了解设备 ABI 的用户，AAB 面向应用商店或受控分发。预发布页同时提供 `SHA256SUMS` 和签名证书 SHA-256 指纹，安装前应核对二者。完整交付边界与验证步骤见[平台、签名与交付架构](docs/architecture/platform-delivery.md)；当前发布状态见 [v1.1.2 发布检查表](docs/release/v1.1.2-release-checklist.md)。
+## 一条完整的个人工作流
 
-## 预发布验收状态
+- **事项与提醒**：日期、计划、清单和单次本地提醒；提醒时间直接显示在卡片上。
+- **完成与过往**：完成事项时进行回顾，并将记录汇入一篇持续生长、可以自由编辑的“过往”。
+- **笔记与行动互转**：用文件夹、置顶、列表和勾选项整理笔记，也可以把内容转成事项。
+- **数据可带走**：生成包含 Markdown 与 JSON 的可读 ZIP，便于长期归档、迁移或交给你选择的外部工具分析；完整恢复则使用可选加密的 `.dgbak` 备份。
+- **离线也完整**：应用内置帮助，界面支持简体中文、English、日本語与 Русский，可跟随系统或手动切换。
 
-自动验收已在 Android API 24 与 API 36 上完成同版本、同签名覆盖安装，验证六个数据域共 37 项数据保留断言、SQLite `quick_check` 与外键完整性、AlarmManager 调度、真实系统通知，以及 API 36 的真实通知权限流程。
+## 数据与隐私
 
-实体 Android 设备上的不同 OEM 行为、锁屏通知、声音、振动与稍后提醒（snooze），以及从已公开 v1.1.0 正式签名包覆盖升级的最终签署仍未完成。因此 v1.1.2 保持 Pre-release，不是稳定版。
+当归的隐私不是一句口号，而是可以检查的产品边界：
 
-## 隐私承诺
-
-- 应用运行时不需要账号或业务服务器。
-- 不集成广告、分析、崩溃遥测、Firebase 或用户追踪 SDK。
+- 不需要账号，也不依赖业务服务器运行。
+- 不集成广告、分析、崩溃遥测、Firebase、AI 或用户追踪 SDK。
 - Android 正式清单不声明 `INTERNET` 权限。
-- 用户数据只保存在应用沙箱和用户主动选择的本地备份位置。
-- GitHub 仅用于源码、文档和安装包发布，应用不会自动上传内容到 GitHub。
+- 内容保存在应用沙箱和你主动选择的本地备份位置；应用不会自动上传到 GitHub 或其他服务。
+- 可读导出只在本地生成。它刻意保持为未加密 ZIP，便于阅读与迁移；敏感文件应妥善保管，需要加密存档时请使用 `.dgbak` 备份。
+
+格式细节见[可读导出规范](docs/portable-export-format.md)，平台边界与验证结果见[隐私平台审计](docs/qa/privacy-platform-audit.md)。
+
+## 下载
+
+| 平台 | 推荐入口 | 当前交付 |
+| --- | --- | --- |
+| Android 7.0+ | [v1.1.2 公开预发布](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | 正式签名的通用 APK；多数用户下载 `danggui-android-universal-release.apk` |
+| iOS | [源码构建说明](docs/architecture/ios-source-build.md) | 完整 Xcode 源码与无签名构建证据；不提供 IPA 或 TestFlight |
+
+v1.1.2 仍标记为 **Pre-release**：自动化验收已经通过，但不同厂商 Android 实体机上的通知、锁屏、声音、振动和覆盖升级仍在继续验证。安装前建议备份已有数据，并使用 Release 中的 `SHA256SUMS` 核对下载文件。分架构 APK、AAB、iOS 构建证据、签名证书与校验记录统一收在 `danggui-developer-assets-v1.1.2.zip`，普通用户不需要下载；完整边界见[交付说明](docs/architecture/platform-delivery.md)与 [v1.1.2 检查表](docs/release/v1.1.2-release-checklist.md)。
+
+## 版本演进
+
+| 版本 | 这一点滴带来了什么 |
+| --- | --- |
+| [v1.0.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0) | 建立事项、提醒、过往、笔记、备份与可读导出的完整本地基础。 |
+| [v1.1.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0) | 加固编辑器与提醒生命周期，并恢复小球与幼苗的完整启动体验。 |
+| [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | 支持每分钟选择提醒，增加明确保存反馈，压紧过往排版，并消除重复启动画面。 |
+
+完整变化见 [CHANGELOG](CHANGELOG.md)。
 
 ## 参与项目
 
-项目开放查看、讨论和代码贡献。提交问题前请先阅读贡献与安全说明；任何真实笔记、备份、密码、证书或个人信息都不应出现在 Issue、PR 或示例数据中。
+当归欢迎不同形式的参与：
 
-如果你认同“工具应当安静地属于用户”，欢迎 Star、试用已通过门禁的 Release，或帮助检查翻译和无障碍体验。
+- 在 [Issues](https://github.com/hujizhou35-cmd/danggui-app/issues) 报告可复现问题或提出功能建议。
+- 在 [Discussions](https://github.com/hujizhou35-cmd/danggui-app/discussions) 分享工作流、提问或讨论想法。
+- Fork 仓库，在自己的分支完成修改，再提交 Pull Request；陌生贡献者不会获得主仓库的直接写权限。
+- 帮助校对四语文案、无障碍体验和不同 Android 设备上的提醒行为。
+
+开始前请阅读[贡献指南](CONTRIBUTING.md)与[安全说明](SECURITY.md)。Issue、Discussion 和 PR 中请勿上传真实事项、笔记、数据库、备份、密码、证书或个人信息。
 
 ## 许可证与品牌
 
-源代码采用 [Apache License 2.0](LICENSE)。第三方依赖与字体遵循各自许可证，见 [第三方许可说明](THIRD_PARTY_NOTICES.md)。“当归”名称、应用图标、启动插画及其他品牌视觉不包含在 Apache-2.0 授权中，相关权利保留；分发修改版时必须移除或替换这些品牌资产，详见 [品牌与商标说明](TRADEMARKS.md)。
+源代码采用 [Apache License 2.0](LICENSE)。第三方依赖与字体遵循各自许可证，见[第三方许可说明](THIRD_PARTY_NOTICES.md)。“当归”名称、应用图标、启动插画及其他品牌视觉不包含在 Apache-2.0 授权中，相关权利保留；分发修改版时必须移除或替换这些品牌资产，详见[品牌与商标说明](TRADEMARKS.md)。

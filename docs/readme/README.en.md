@@ -1,10 +1,13 @@
 <p align="center">
-  <img src="../assets/brand/danggui-app-icon-source.png" width="152" alt="Danggui app icon" />
+  <img src="../assets/brand/danggui-readme-hero.png" width="100%" alt="Hand-drawn Danggui banner with a small ball following a dotted path toward a sprout" />
 </p>
 
 <h1 align="center">当归</h1>
 
-<p align="center"><strong>Local records · No uploads · No AI</strong></p>
+<p align="center">
+  <strong>Small steps become a life you can read.</strong><br />
+  A quiet, local-first workflow for plans, reminders, actions, history, and notes.
+</p>
 
 <p align="center">
   <a href="../../README.md">简体中文</a> ·
@@ -13,41 +16,101 @@
   <a href="README.ru.md">Русский</a>
 </p>
 
-> [!IMPORTANT]
-> Danggui [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) is delivered as a separate **Pre-release**. Android receives formally signed install packages. iOS receives a deterministic source archive and unsigned build evidence only—no IPA or TestFlight distribution. Physical-device release acceptance is not yet complete, so this is not a stable release. The existing v1.1.0 release and its files remain available.
+<p align="center">
+  <img alt="Version: v1.1.2 public pre-release" src="https://img.shields.io/badge/version-v1.1.2%20pre--release-B5684C?style=flat-square" />
+  <img alt="Platforms: Android and iOS source" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20source-6F8068?style=flat-square" />
+  <img alt="Data: local-first and portable" src="https://img.shields.io/badge/data-local--first%20%7C%20portable-81786F?style=flat-square" />
+  <img alt="License: Apache 2.0" src="https://img.shields.io/badge/code-Apache--2.0-2E2925?style=flat-square" />
+</p>
 
-## A quiet, local-first place for plans and memories
+<p align="center">
+  <a href="https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2"><strong>Download for Android</strong></a> ·
+  <a href="#preview">Preview</a> ·
+  <a href="#your-data-stays-yours">Privacy</a> ·
+  <a href="#contributing">Contributing</a>
+</p>
 
-Danggui combines tasks, a continuously growing history document, and independent notes without accounts, uploads, AI, analytics, ads, or profiling.
+## More than a list of things to do
 
-- Tasks with dates, plans, checklists, and one local reminder shown directly on each card.
-- Completed tasks can be appended to an editable long-form history.
-- Notes with one-level folders, pinning, lists, checkboxes, and task conversion.
-- Transactional SQLite storage, migrations, integrity checks, optionally encrypted `.dgbak` backups, merge/replace restore, and readable Markdown + JSON exports.
-- Detailed offline Help plus Simplified Chinese, English, Japanese, and Russian UI, with system-following and manual language selection.
-- v1.1.2 adds minute-precise reminders, explicit save feedback, and one-line Past events. A paper-only native hand-off now leads to the sole complete Flutter launch composition for at least 1.2 seconds.
+Some tools look only at what has not happened yet. Others preserve only what already has. Danggui connects both ends: make a plan, receive a local reminder when it matters, keep a trace when the work is done, and continue thinking in your notes.
+
+Plans do not vanish when you check them off, and records do not have to sleep in a journal forever. Small daily actions gradually become a personal record you can read, carry with you, and understand on your own terms.
+
+| Plan | Act | Reflect | Understand |
+| --- | --- | --- | --- |
+| Set the next step with dates, checklists, and reminders | Work through a task, complete it, and review | Append completed work to an editable Past | Export Markdown + JSON for the archive or analysis you choose |
+
+> Danggui has no built-in AI and never uploads your data to an AI service automatically. It organizes and exports readable data locally. Whether to share an export with an external AI, which tool to use, and what to analyze are always your decisions.
 
 ## Preview
 
 <p align="center">
-  <img src="../assets/screenshots/danggui-ui-overview-v1.png" width="920" alt="Overview of Danggui's 13 core screens" />
+  <img src="../assets/screenshots/v1.1.2/en/01-plan.png" width="880" alt="Danggui launch, tasks, and reminders workflow" />
 </p>
+<p align="center"><sub>Begin with the ball and sprout, then turn an idea into a step you can take today.</sub></p>
 
-## Distribution
+<p align="center">
+  <img src="../assets/screenshots/v1.1.2/en/02-reflect.png" width="880" alt="Danggui completion and Past workflow" />
+</p>
+<p align="center"><sub>Completion is not deletion: actions settle into an editable Past.</sub></p>
 
-| Platform | Delivery |
+<p align="center">
+  <img src="../assets/screenshots/v1.1.2/en/03-export.png" width="880" alt="Danggui notes and portable export workflow" />
+</p>
+<p align="center"><sub>Notes preserve the thinking; readable exports keep the data truly yours.</sub></p>
+
+Danggui uses warm paper, sage green, and terracotta red, with restrained motion and generous space to make recording feel lighter. These images come from the real v1.1.2 app rather than a design mockup.
+
+## One continuous personal workflow
+
+- **Tasks and reminders:** dates, plans, checklists, and one local reminder, with its time visible on the task card.
+- **Completion and Past:** review work as you complete it, then append it to a continuously growing, freely editable Past.
+- **Notes that can become action:** organize notes with folders, pinning, lists, and checkboxes, or turn content into a task.
+- **Data you can take with you:** create a readable Markdown + JSON ZIP for long-term archiving, migration, or analysis in an external tool you select. Use an optionally encrypted `.dgbak` backup for full restoration.
+- **Complete while offline:** built-in Help and a UI in Simplified Chinese, English, Japanese, and Russian, with system-following or manual language selection.
+
+## Your data stays yours
+
+Danggui's privacy position is a product boundary you can inspect:
+
+- No account is required, and the app needs no application backend to run.
+- No advertising, analytics, crash telemetry, Firebase, AI, or user-tracking SDK is integrated.
+- The production Android manifest does not declare the `INTERNET` permission.
+- Content remains in the app sandbox and local backup destinations you explicitly choose. The app does not upload it to GitHub or another service.
+- Readable exports are generated locally. They are deliberately unencrypted ZIP files for portability, so protect sensitive exports; use an encrypted `.dgbak` backup when you need encrypted storage.
+
+See the [portable export specification](../portable-export-format.md) and [platform privacy audit](../qa/privacy-platform-audit.md) for the verifiable details.
+
+## Download
+
+| Platform | Recommended entry | Current delivery |
+| --- | --- | --- |
+| Android 7.0+ | [v1.1.2 public pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | Formally signed universal APK; most users want `danggui-android-universal-release.apk` |
+| iOS | [Source build guide](../architecture/ios-source-build.md) | Complete Xcode source and unsigned build evidence; no IPA or TestFlight distribution |
+
+v1.1.2 remains a **Pre-release**. Automated acceptance has passed, while notification delivery, lock-screen behavior, sound, vibration, and overlay upgrades are still being checked across physical Android devices from different manufacturers. Back up existing data before installing and verify the file against `SHA256SUMS` in the Release. Split APKs, the AAB, iOS build evidence, and signing certificate and verification records are grouped in `danggui-developer-assets-v1.1.2.zip`; most users do not need it. See the [delivery guide](../architecture/platform-delivery.md) and [v1.1.2 checklist](../release/v1.1.2-release-checklist.md) for the full boundary.
+
+## Version journey
+
+| Version | What this step added |
 | --- | --- |
-| Android | Formally signed universal and split APKs plus AAB from the [v1.1.2 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) |
-| iOS | Deterministic `danggui-ios-source-v1.1.2.zip`, Xcode project, and unsigned `Runner.app` build evidence; no IPA or TestFlight distribution |
+| [v1.0.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0) | Established the local foundation for tasks, reminders, Past, notes, backups, and readable exports. |
+| [v1.1.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0) | Strengthened editor and reminder lifecycle reliability and restored the complete ball-and-sprout launch experience. |
+| [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | Added minute-by-minute reminder selection and explicit save feedback, compacted Past, and removed the duplicate launch composition. |
 
-Most Android users should download `danggui-android-universal-release.apk`; split APKs are for users who know their device ABI, and the AAB is for store or managed distribution. The Pre-release also includes `SHA256SUMS` and the signing certificate SHA-256 fingerprint, both of which should be checked before installation. See the [platform delivery guide](../architecture/platform-delivery.md), [iOS source build guide](../architecture/ios-source-build.md), and [v1.1.2 release checklist](../release/v1.1.2-release-checklist.md).
+See the full [CHANGELOG](../../CHANGELOG.md).
 
-## Pre-release acceptance status
+## Contributing
 
-Automated acceptance has exercised same-version, same-signature overlay installation on Android API 24 and API 36. It verifies 37 retention assertions across six data domains, SQLite `quick_check` and foreign-key integrity, AlarmManager scheduling, a real system notification, and the real notification-permission flow on API 36.
+There are several ways to help Danggui grow:
 
-Acceptance is still outstanding for physical Android devices across OEM variants, lock-screen delivery, sound, vibration, and snooze, plus final sign-off of an overlay upgrade from the published v1.1.0 package. v1.1.2 therefore remains a Pre-release rather than a stable release.
+- Report a reproducible problem or propose a focused feature in [Issues](https://github.com/hujizhou35-cmd/danggui-app/issues).
+- Share a workflow, ask a question, or explore an idea in [Discussions](https://github.com/hujizhou35-cmd/danggui-app/discussions).
+- Fork the repository, make changes on your own branch, and open a Pull Request. Outside contributors do not receive direct write access to the main repository.
+- Help review translations, accessibility, and reminder behavior on different Android devices.
 
-## Privacy and license
+Read the [contribution guide](../../CONTRIBUTING.md) and [security policy](../../SECURITY.md) first. Never include real tasks, notes, databases, backups, passwords, certificates, or personal information in an Issue, Discussion, or Pull Request.
 
-The app does not require an account or runtime backend. It contains no advertising, analytics, Firebase, AI, or user-tracking SDK. User content stays in the app sandbox and user-selected local backups; Android packages do not request `INTERNET`. Source code is licensed under [Apache-2.0](../../LICENSE). Third-party software and the bundled font retain their own licenses; see [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md). The Danggui name, icon, launch artwork, and other brand assets are not covered by Apache-2.0 and remain reserved; see [TRADEMARKS.md](../../TRADEMARKS.md).
+## License and brand
+
+Source code is licensed under [Apache License 2.0](../../LICENSE). Third-party software and the bundled font retain their own licenses; see [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md). The Danggui name, icon, launch artwork, and other brand assets are not covered by Apache-2.0 and remain reserved. Distributors of modified builds must remove or replace those assets as described in [TRADEMARKS.md](../../TRADEMARKS.md).

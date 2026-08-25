@@ -82,6 +82,11 @@ jobs:
       - name: Test Android certificate report parser
         run: bash tool/verify_android_artifacts.sh --self-test
 
+      - name: Test exact public release asset contract
+        run: |
+          bash tool/assemble_release_assets.sh --self-test
+          bash tool/render_release_notes.sh --self-test
+
       - name: Test Android emulator retry gate
         run: bash integration_test/run_android_emulator_smoke_self_test.sh
 
@@ -586,39 +591,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$(tr -d '\r\n' < staging/android/SIGNING_MODE.txt)" != "release" ]]; then
-            echo "A protected version tag must publish release-signed Android artifacts." >&2
-            exit 1
-          fi
-          cp staging/android/*.apk release/
-          cp staging/android/*.aab release/
-          cp staging/android/SIGNING_CERTIFICATE.txt release/
-          cp staging/android/SIGNING_CERTIFICATE_SHA256.txt release/
-          cp staging/ios/danggui-ios-source-v*.zip release/
-          cp staging/ios/danggui-ios-unsigned.app.zip release/
-          cp staging/ios/PLATFORM_AUDIT.txt release/IOS_PLATFORM_AUDIT.txt
-          cp staging/ios/UNSIGNED.txt release/IOS_UNSIGNED.txt
-          cp staging/ios/XCODE.txt release/
-          cp staging/ios/TOOLCHAIN.txt release/IOS_TOOLCHAIN.txt
-          cp staging/ios/SOURCE_COMMIT.txt release/
-          cp staging/ios/SOURCE_ARCHIVE_CONTENTS.txt release/
-          (
-            cd release
-            sha256sum ./* | sort -k2 > SHA256SUMS
-          )
-          printf '%s\n' \
-            "Danggui ${GITHUB_REF_NAME} pre-release" \
-            "" \
-            "Android packages are protected-release signed. The iOS app archive is unsigned build evidence, not an IPA; the iOS source ZIP is the buildable source delivery." \
-            "" \
-            "This remains a pre-release until representative physical-device acceptance is signed off." \
-            > release-notes.md
+          bash tool/assemble_release_assets.sh \
+            "${GITHUB_REF_NAME}" staging/android staging/ios release
+          bash tool/render_release_notes.sh \
+            "${GITHUB_REF_NAME}" \
+            "docs/release/notes/${GITHUB_REF_NAME}.md" \
+            staging/android/SIGNING_CERTIFICATE_SHA256.txt \
+            release-notes.md
 
       - name: Create or refresh GitHub pre-release
         shell: bash
         run: |
           set -euo pipefail
           mapfile -t assets < <(find release -maxdepth 1 -type f -print | sort)
+          mapfile -t expected_assets < <(
+            printf '%s\n' "${assets[@]##*/}" | sort
+          )
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             existing_is_prerelease="$(
               gh release view "${GITHUB_REF_NAME}" \
@@ -628,21 +616,25 @@ jobs:
               echo "Refusing to replace assets on an already-promoted stable release." >&2
               exit 1
             fi
-            gh release edit "${GITHUB_REF_NAME}" \
-              --prerelease \
-              --title "当归 ${GITHUB_REF_NAME}" \
-              --notes-file release-notes.md
-            # A rerun must not leave stale attachments that are absent from the
-            # newly generated SHA256SUMS. Replace the complete asset set.
+
+            # Upload the complete verified set first. Only after every expected
+            # asset succeeds do we remove stale files from an older contract.
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
             mapfile -t existing_assets < <(
               gh release view "${GITHUB_REF_NAME}" \
                 --json assets --jq '.assets[].name'
             )
             for asset_name in "${existing_assets[@]}"; do
-              gh release delete-asset "${GITHUB_REF_NAME}" \
-                "${asset_name}" --yes
+              if ! printf '%s\n' "${expected_assets[@]}" |
+                grep -Fqx -- "${asset_name}"; then
+                gh release delete-asset "${GITHUB_REF_NAME}" \
+                  "${asset_name}" --yes
+              fi
             done
-            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}"
+            gh release edit "${GITHUB_REF_NAME}" \
+              --prerelease \
+              --title "当归 ${GITHUB_REF_NAME}" \
+              --notes-file release-notes.md
           else
             gh release create "${GITHUB_REF_NAME}" \
               --verify-tag \
@@ -651,9 +643,6 @@ jobs:
               --notes-file release-notes.md \
               "${assets[@]}"
           fi
-          mapfile -t expected_assets < <(
-            printf '%s\n' "${assets[@]##*/}" | sort
-          )
           mapfile -t published_assets < <(
             gh release view "${GITHUB_REF_NAME}" \
               --json assets --jq '.assets[].name' | sort
@@ -661,3 +650,9 @@ jobs:
           diff -u \
             <(printf '%s\n' "${expected_assets[@]}") \
             <(printf '%s\n' "${published_assets[@]}")
+
+          published_verification="$(mktemp -d)"
+          gh release download "${GITHUB_REF_NAME}" \
+            --pattern SHA256SUMS \
+            --dir "${published_verification}"
+          cmp release/SHA256SUMS "${published_verification}/SHA256SUMS"
