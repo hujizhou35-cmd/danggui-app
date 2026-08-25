@@ -177,7 +177,7 @@ Future<void> captureReadmeScreenshot(
   // surface is still presenting the previous route. Pump one more frame after
   // the transition window so the platform screenshot sees the same scene as
   // the widget tree assertions above.
-  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 100));
   expect(
     tester.takeException(),
     isNull,

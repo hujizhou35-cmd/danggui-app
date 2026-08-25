@@ -36,15 +36,23 @@ void main() {
     final fixture = ReadmeScreenshotFixture.forLocale(_locale);
 
     // Exercise the production entry point, database, services, router and UI.
+    // Screenshot mode keeps the real startup composition visible until this
+    // test explicitly advances to Tasks.
     app.main();
     await waitForReadmeScreenshotFinder(
       tester,
-      find.byType(TasksPage),
+      find.byType(StartupPage),
       phase: 'production cold start',
       timeout: const Duration(seconds: 40),
     );
-    final tasksContext = tester.element(find.byType(TasksPage));
-    final container = ProviderScope.containerOf(tasksContext);
+    final startupContext = tester.element(find.byType(StartupPage));
+    final container = ProviderScope.containerOf(startupContext);
+    await waitForReadmeScreenshotCondition(
+      tester,
+      () => container.read(appStoreProvider).hasValue,
+      phase: 'local store initialization',
+      timeout: const Duration(seconds: 40),
+    );
     final controller = container.read(appStoreProvider.notifier);
     final database = await container.read(databaseProvider.future);
 
@@ -78,7 +86,7 @@ void main() {
     await waitForReadmeScreenshotCondition(
       tester,
       () =>
-          Localizations.localeOf(tester.element(find.byType(TasksPage)))
+          Localizations.localeOf(tester.element(find.byType(StartupPage)))
               .languageCode ==
           _locale,
       phase: 'explicit screenshot locale',
@@ -97,8 +105,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
 
     final router = container.read(routerProvider);
-    router.go('/launch');
-    await tester.pump();
     await captureReadmeScreenshot(
       binding,
       tester,
@@ -108,7 +114,6 @@ void main() {
         const ValueKey<String>('startup-watercolor-decoded-frame'),
       ),
       phase: 'branded startup',
-      stabilizeFor: Duration.zero,
     );
     expect(find.byType(StartupPage), findsOneWidget);
 
@@ -118,6 +123,11 @@ void main() {
       tester,
       find.text(fixture.reminderTaskTitle),
       phase: 'seeded task list',
+    );
+    await waitForReadmeScreenshotCondition(
+      tester,
+      () => find.byType(StartupPage).evaluate().isEmpty,
+      phase: 'startup route disposal',
     );
     expect(find.textContaining('19:30'), findsAtLeastNWidgets(1));
     await captureReadmeScreenshot(
@@ -160,6 +170,11 @@ void main() {
       tester,
       find.byType(PastPage),
       phase: 'Past route',
+    );
+    await waitForReadmeScreenshotCondition(
+      tester,
+      () => find.byType(TaskDetailPage).evaluate().isEmpty,
+      phase: 'task detail route disposal',
     );
     expect(
       _textFieldValue(tester, const Key('past-continuous-document-editor')),
