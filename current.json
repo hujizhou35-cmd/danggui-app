@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "repository": "hujizhou35-cmd/danggui-app",
+  "generatedAt": "2026-08-25T15:15:04.031Z",
+  "stable": null,
+  "preview": {
+    "releaseId": 376461451,
+    "version": "1.1.3",
+    "tag": "v1.1.3",
+    "channel": "preview",
+    "prerelease": true,
+    "publishedAt": "2026-08-25T14:16:57Z",
+    "sourceCommit": "6ff8da384eee69496bc9f506e2440321c28eaf18",
+    "releaseUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3",
+    "assets": {
+      "android": {
+        "name": "danggui-android-universal-release.apk",
+        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.3/danggui-android-universal-release.apk",
+        "size": 95445109,
+        "digest": "sha256:90512f199f34b4cec95579d6c050c25c482c368b753298c1a5dcb7ee20598718"
+      },
+      "iosSource": {
+        "name": "danggui-ios-source-v1.1.3.zip",
+        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.3/danggui-ios-source-v1.1.3.zip",
+        "size": 57156274,
+        "digest": "sha256:08517a122b8e5058885f2e070faf4794c6b24a4496696ce811adb65f8e199cc9"
+      },
+      "developer": {
+        "name": "danggui-developer-assets-v1.1.3.zip",
+        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.3/danggui-developer-assets-v1.1.3.zip",
+        "size": 237647420,
+        "digest": "sha256:1a2beed2d93c82654ba0dbe0e2d6499b3b016d5c4916e0f5b873521e4dcafb6b"
+      },
+      "checksums": {
+        "name": "SHA256SUMS",
+        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.3/SHA256SUMS",
+        "size": 302,
+        "digest": "sha256:80508ab4077a3171c4dd9028ca16d71fcbc8942320d493b96cb0317d473b44d2"
+      }
+    }
+  },
+  "recommended": "preview"
+}
