@@ -539,12 +539,28 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  release-channel-contract:
+    name: Verify public release channel contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run release channel fixtures
+        run: node --test tool/test/sync_release_channel.test.mjs
+
   publish-prerelease:
     name: Publish protected tag pre-release
     if: startsWith(github.ref, 'refs/tags/v')
+    concurrency:
+      group: danggui-release-channel
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: [android-linux, android-emulator-smoke, ios-unsigned]
+    needs: [android-linux, android-emulator-smoke, ios-unsigned, release-channel-contract]
     permissions:
       actions: read
       contents: write
@@ -661,3 +677,13 @@ jobs:
             --pattern SHA256SUMS \
             --dir "${published_verification}"
           cmp release/SHA256SUMS "${published_verification}/SHA256SUMS"
+
+      - name: Publish verified website release channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tool/sync_release_channel.mjs \
+            --repository "${GITHUB_REPOSITORY}" \
+            --verify-git \
+            --output release-channel/current.json
+          bash tool/publish_release_channel.sh release-channel/current.json
