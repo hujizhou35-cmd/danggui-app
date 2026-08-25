@@ -998,15 +998,32 @@ enum DangguiAlarmKitController {
       stringLiteral: record.title.isEmpty ? "当归提醒" : record.title
     )
     let buttonLabels = localizedButtonLabels(localeTag: record.localeTag)
-    let alert = AlarmPresentation.Alert(
-      title: label,
-      secondaryButton: AlarmButton(
-        text: LocalizedStringResource(stringLiteral: buttonLabels.snooze),
-        textColor: .white,
-        systemImageName: "clock.arrow.circlepath"
-      ),
-      secondaryButtonBehavior: .custom
+    let secondaryButton = AlarmButton(
+      text: LocalizedStringResource(stringLiteral: buttonLabels.snooze),
+      textColor: .white,
+      systemImageName: "clock.arrow.circlepath"
     )
+    let alert: AlarmPresentation.Alert
+    if #available(iOS 26.1, *) {
+      // iOS 26.1 supplies the stop control itself. Keep this newer API behind
+      // its exact availability boundary so AlarmKit still works on iOS 26.0.
+      alert = AlarmPresentation.Alert(
+        title: label,
+        secondaryButton: secondaryButton,
+        secondaryButtonBehavior: .custom
+      )
+    } else {
+      alert = AlarmPresentation.Alert(
+        title: label,
+        stopButton: AlarmButton(
+          text: LocalizedStringResource(stringLiteral: buttonLabels.stop),
+          textColor: .white,
+          systemImageName: "stop.circle.fill"
+        ),
+        secondaryButton: secondaryButton,
+        secondaryButtonBehavior: .custom
+      )
+    }
     let attributes = AlarmAttributes(
       presentation: AlarmPresentation(alert: alert),
       metadata: DangguiAlarmMetadata(
