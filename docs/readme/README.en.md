@@ -88,7 +88,7 @@ See the [portable export specification](../portable-export-format.md) and [platf
 | Android 7.0+ | [v1.1.2 public pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | Formally signed universal APK; most users want `danggui-android-universal-release.apk` |
 | iOS | [Source build guide](../architecture/ios-source-build.md) | Complete Xcode source and unsigned build evidence; no IPA or TestFlight distribution |
 
-v1.1.2 remains a **Pre-release**. Automated acceptance has passed, while notification delivery, lock-screen behavior, sound, vibration, and overlay upgrades are still being checked across physical Android devices from different manufacturers. Back up existing data before installing and verify the file against `SHA256SUMS` in the Release. Split APKs, the AAB, iOS build evidence, and signing material are grouped in `danggui-developer-assets-v1.1.2.zip`; most users do not need it. See the [delivery guide](../architecture/platform-delivery.md) and [v1.1.2 checklist](../release/v1.1.2-release-checklist.md) for the full boundary.
+v1.1.2 remains a **Pre-release**. Automated acceptance has passed, while notification delivery, lock-screen behavior, sound, vibration, and overlay upgrades are still being checked across physical Android devices from different manufacturers. Back up existing data before installing and verify the file against `SHA256SUMS` in the Release. Split APKs, the AAB, iOS build evidence, and signing certificate and verification records are grouped in `danggui-developer-assets-v1.1.2.zip`; most users do not need it. See the [delivery guide](../architecture/platform-delivery.md) and [v1.1.2 checklist](../release/v1.1.2-release-checklist.md) for the full boundary.
 
 ## Version journey
 

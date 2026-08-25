@@ -67,7 +67,7 @@ Topics 使用用户会搜索的品类、场景和价值词。`drift` 等实现�
 - 通用 Android APK：页面上唯一推荐给普通 Android 用户的安装包。
 - iOS 源码包：明确需要自行构建，不伪装成可安装的 IPA。
 - `SHA256SUMS`：给下载者快速核验。
-- Developer Assets：集中收纳分架构 APK、AAB、unsigned iOS 构建证据、签名材料、工具链与平台审计。
+- Developer Assets：集中收纳分架构 APK、AAB、unsigned iOS 构建证据、签名证书与校验记录、工具链与平台审计。
 - GitHub 自动生成的标签源码归档保持可用，不再重复上传相同用途的零散压缩包。
 
 Release 正文顺序固定为：本版最重要的用户变化、推荐下载、校验方式、升级/已知限制、开发者附件、与上一版的完整对比。历史附件只有在被验证并收入可恢复的 Developer Assets 后才清理。

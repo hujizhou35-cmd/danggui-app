@@ -52,6 +52,7 @@ Future<void> main(List<String> arguments) async {
     }
 
     final files = <Map<String, Object?>>[];
+    final digestOwners = <String, String>{};
     int? sharedWidth;
     int? sharedHeight;
     for (var index = 0; index < expectedNames.length; index += 1) {
@@ -75,7 +76,15 @@ Future<void> main(List<String> arguments) async {
           '${sharedWidth}x$sharedHeight.',
         );
       }
-      final digest = await Sha256().hash(bytes);
+      final digest = _hex((await Sha256().hash(bytes)).bytes);
+      final duplicate = digestOwners[digest];
+      if (duplicate != null) {
+        throw StateError(
+          '$name is byte-for-byte identical to $duplicate; '
+          'each README screenshot must show a distinct scene.',
+        );
+      }
+      digestOwners[digest] = name;
       files.add(<String, Object?>{
         'order': index + 1,
         'id': _screenSlugs[index],
@@ -83,7 +92,7 @@ Future<void> main(List<String> arguments) async {
         'width': dimensions.width,
         'height': dimensions.height,
         'bytes': bytes.length,
-        'sha256': _hex(digest.bytes),
+        'sha256': digest,
       });
     }
 

@@ -88,7 +88,7 @@
 | Android 7.0 以降 | [v1.1.2 公開プレリリース](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | 正式署名済み汎用 APK。通常は `danggui-android-universal-release.apk` を選択 |
 | iOS | [ソースビルド手順](../architecture/ios-source-build.md) | 完全な Xcode ソースと未署名ビルド証跡。IPA/TestFlight は提供しない |
 
-v1.1.2 は引き続き **Pre-release** です。自動受け入れ試験は通過していますが、メーカーの異なる Android 実機での通知、ロック画面、音、バイブレーション、上書き更新は検証中です。インストール前に既存データをバックアップし、Release の `SHA256SUMS` とダウンロードファイルを照合してください。ABI 別 APK、AAB、iOS ビルド証跡、署名資料は `danggui-developer-assets-v1.1.2.zip` にまとめられており、一般ユーザーには不要です。全体の境界は[配布ガイド](../architecture/platform-delivery.md)と [v1.1.2 チェックリスト](../release/v1.1.2-release-checklist.md)に記載しています。
+v1.1.2 は引き続き **Pre-release** です。自動受け入れ試験は通過していますが、メーカーの異なる Android 実機での通知、ロック画面、音、バイブレーション、上書き更新は検証中です。インストール前に既存データをバックアップし、Release の `SHA256SUMS` とダウンロードファイルを照合してください。ABI 別 APK、AAB、iOS ビルド証跡、署名証明書と検証記録は `danggui-developer-assets-v1.1.2.zip` にまとめられており、一般ユーザーには不要です。全体の境界は[配布ガイド](../architecture/platform-delivery.md)と [v1.1.2 チェックリスト](../release/v1.1.2-release-checklist.md)に記載しています。
 
 ## バージョンの歩み
 

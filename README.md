@@ -88,7 +88,7 @@
 | Android 7.0+ | [v1.1.2 公开预发布](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | 正式签名的通用 APK；多数用户下载 `danggui-android-universal-release.apk` |
 | iOS | [源码构建说明](docs/architecture/ios-source-build.md) | 完整 Xcode 源码与无签名构建证据；不提供 IPA 或 TestFlight |
 
-v1.1.2 仍标记为 **Pre-release**：自动化验收已经通过，但不同厂商 Android 实体机上的通知、锁屏、声音、振动和覆盖升级仍在继续验证。安装前建议备份已有数据，并使用 Release 中的 `SHA256SUMS` 核对下载文件。分架构 APK、AAB、iOS 构建证据和签名材料统一收在 `danggui-developer-assets-v1.1.2.zip`，普通用户不需要下载；完整边界见[交付说明](docs/architecture/platform-delivery.md)与 [v1.1.2 检查表](docs/release/v1.1.2-release-checklist.md)。
+v1.1.2 仍标记为 **Pre-release**：自动化验收已经通过，但不同厂商 Android 实体机上的通知、锁屏、声音、振动和覆盖升级仍在继续验证。安装前建议备份已有数据，并使用 Release 中的 `SHA256SUMS` 核对下载文件。分架构 APK、AAB、iOS 构建证据、签名证书与校验记录统一收在 `danggui-developer-assets-v1.1.2.zip`，普通用户不需要下载；完整边界见[交付说明](docs/architecture/platform-delivery.md)与 [v1.1.2 检查表](docs/release/v1.1.2-release-checklist.md)。
 
 ## 版本演进
 

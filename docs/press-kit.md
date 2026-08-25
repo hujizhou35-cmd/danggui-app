@@ -94,7 +94,7 @@ Release 摘要按以下顺序组织：
 5. iOS 源码及 Developer Assets 的用途。
 6. 与上一版本的完整变更链接。
 
-公开附件优先保持四个清晰入口：通用 Android APK、iOS 源码 ZIP、`SHA256SUMS`、Developer Assets。Developer Assets 集中收纳分架构 APK、AAB、unsigned iOS 构建证据、签名材料、工具链、源码清单与平台审计。GitHub 自动生成的标签源码包继续可用。
+公开附件优先保持四个清晰入口：通用 Android APK、iOS 源码 ZIP、`SHA256SUMS`、Developer Assets。Developer Assets 集中收纳分架构 APK、AAB、unsigned iOS 构建证据、签名证书与校验记录、工具链、源码清单与平台审计。GitHub 自动生成的标签源码包继续可用。
 
 自动化验收可以准确写作：Android API 24/36 已完成六个数据域 37/37 项保留断言，并覆盖 SQLite 完整性、AlarmManager、系统通知和 API 36 通知权限流程。不得把这一结果扩写成代表性实体机、所有 OEM 行为或旧 schema 迁移均已验收。
 
