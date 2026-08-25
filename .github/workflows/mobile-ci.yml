@@ -603,6 +603,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          release_title="$(
+            sed -n -E 's/^#[[:space:]]+(.+)$/\1/p' release-notes.md |
+              head -n 1
+          )"
+          [[ -n "${release_title}" ]]
           mapfile -t assets < <(find release -maxdepth 1 -type f -print | sort)
           mapfile -t expected_assets < <(
             printf '%s\n' "${assets[@]##*/}" | sort
@@ -633,13 +638,13 @@ jobs:
             done
             gh release edit "${GITHUB_REF_NAME}" \
               --prerelease \
-              --title "当归 ${GITHUB_REF_NAME}" \
+              --title "${release_title}" \
               --notes-file release-notes.md
           else
             gh release create "${GITHUB_REF_NAME}" \
               --verify-tag \
               --prerelease \
-              --title "当归 ${GITHUB_REF_NAME}" \
+              --title "${release_title}" \
               --notes-file release-notes.md \
               "${assets[@]}"
           fi
