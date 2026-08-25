@@ -310,11 +310,19 @@ run_process_group_termination_test() {
     source "${REPOSITORY_ROOT}/integration_test/android_emulator_infrastructure.sh"
     log_path="${evidence_dir}/host-test.log"
     completion_path="${evidence_dir}/host-test-natural-completion.json"
-    setsid bash \
+    # Hold the child in the inherited runner PGID before execing setsid. This
+    # deterministically covers the launch race seen on API 36, where an
+    # immediate ps sample can precede the setsid transition.
+    bash -c '\''
+      sleep 0.2
+      exec setsid bash "$@"
+    '\'' _ \
       "${REPOSITORY_ROOT}/integration_test/android_emulator_infrastructure_self_test.sh" \
       __process-group-pipeline "${log_path}" "${completion_path}" &
     leader_pid=$!
-    process_group_id="$(ps -o pgid= -p "${leader_pid}" | tr -d "[:space:]")"
+    process_group_id="$(
+      danggui_wait_for_independent_process_group "${leader_pid}" 5
+    )"
     [[ "${process_group_id}" == "${leader_pid}" ]]
     sleep 1
     ps -eo pid=,pgid=,comm= \

@@ -50,6 +50,37 @@ danggui_alarm_dump_has_scheduled_notification() {
     ' "${source_path}"
 }
 
+danggui_wait_for_independent_process_group() {
+  local leader_pid="$1"
+  local timeout_seconds="${2:-5}"
+  local deadline
+  local process_group_id=''
+
+  [[ "${leader_pid}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${timeout_seconds}" =~ ^[1-9][0-9]*$ ]] || return 1
+
+  # The background child initially inherits the runner shell's process group
+  # and only becomes its own group leader when setsid executes. A single ps
+  # sample can therefore observe a valid but transitional parent PGID. Wait
+  # for the fail-closed invariant that the tracked PID is also the group ID.
+  deadline=$(( SECONDS + timeout_seconds ))
+  while (( SECONDS <= deadline )); do
+    process_group_id="$(
+      ps -o pgid= -p "${leader_pid}" 2>/dev/null | tr -d '[:space:]'
+    )" || process_group_id=''
+    if [[ "${process_group_id}" == "${leader_pid}" ]]; then
+      printf '%s\n' "${process_group_id}"
+      return 0
+    fi
+    if ! kill -0 "${leader_pid}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  printf '%s\n' "${process_group_id}"
+  return 1
+}
+
 danggui_terminate_process_group() {
   local process_group_id="$1"
   local leader_pid="$2"

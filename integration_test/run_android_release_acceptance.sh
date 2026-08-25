@@ -246,16 +246,16 @@ run_seed_with_permission_contract() {
   local test_pid=$!
   natural_completion_partial_path="${natural_completion_path}.partial.${test_pid}"
   local test_pgid=''
-  local process_probe
-  for process_probe in 1 2 3 4 5; do
-    test_pgid="$(ps -o pgid= -p "${test_pid}" 2>/dev/null | tr -d '[:space:]')"
-    [[ -n "${test_pgid}" ]] && break
-    sleep 1
-  done
+  local process_group_ready=0
+  if test_pgid="$(
+    danggui_wait_for_independent_process_group "${test_pid}" 5
+  )"; then
+    process_group_ready=1
+  fi
   printf '%s\n' \
     "{\"leaderPid\":${test_pid},\"processGroupId\":${test_pgid:-0},\"independent\":$([[ "${test_pgid}" == "${test_pid}" ]] && echo true || echo false)}" \
     > "${evidence_dir}/seed-process-group.json"
-  if [[ "${test_pgid}" != "${test_pid}" ]]; then
+  if (( process_group_ready != 1 )) || [[ "${test_pgid}" != "${test_pid}" ]]; then
     kill -TERM "${test_pid}" 2>/dev/null || true
     set +e
     wait "${test_pid}"
