@@ -22,10 +22,9 @@ const _locale = String.fromEnvironment(
   defaultValue: 'en',
 );
 
-final IntegrationTestWidgetsFlutterBinding _binding =
-    IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-
 void main() {
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
   testWidgets('capture deterministic README product screenshots', (
     tester,
   ) async {
@@ -94,14 +93,14 @@ void main() {
 
     // Android renders Flutter on a SurfaceView by default. Convert it once so
     // IntegrationTestWidgetsFlutterBinding can return actual device PNGs.
-    await _binding.convertFlutterSurfaceToImage();
+    await binding.convertFlutterSurfaceToImage();
     await tester.pump(const Duration(milliseconds: 400));
 
     final router = container.read(routerProvider);
     router.go('/launch');
     await tester.pump();
     await captureReadmeScreenshot(
-      _binding,
+      binding,
       tester,
       locale: _locale,
       frame: ReadmeScreenshotFrame.startup,
@@ -122,7 +121,7 @@ void main() {
     );
     expect(find.textContaining('19:30'), findsAtLeastNWidgets(1));
     await captureReadmeScreenshot(
-      _binding,
+      binding,
       tester,
       locale: _locale,
       frame: ReadmeScreenshotFrame.tasksReminders,
@@ -146,7 +145,7 @@ void main() {
       fixture.detailTaskPlan,
     );
     await captureReadmeScreenshot(
-      _binding,
+      binding,
       tester,
       locale: _locale,
       frame: ReadmeScreenshotFrame.taskDetail,
@@ -167,7 +166,7 @@ void main() {
       contains('2032-05-12'),
     );
     await captureReadmeScreenshot(
-      _binding,
+      binding,
       tester,
       locale: _locale,
       frame: ReadmeScreenshotFrame.past,
@@ -184,7 +183,7 @@ void main() {
     );
     expect(find.text(fixture.primaryFolder), findsOneWidget);
     await captureReadmeScreenshot(
-      _binding,
+      binding,
       tester,
       locale: _locale,
       frame: ReadmeScreenshotFrame.notes,
@@ -212,7 +211,7 @@ void main() {
       scrollable: settingsScrollable,
     );
     await captureReadmeScreenshot(
-      _binding,
+      binding,
       tester,
       locale: _locale,
       frame: ReadmeScreenshotFrame.exportSettings,
@@ -227,7 +226,7 @@ void main() {
     );
     expect(find.text(l10n.localOnlySummary), findsOneWidget);
     await captureReadmeScreenshot(
-      _binding,
+      binding,
       tester,
       locale: _locale,
       frame: ReadmeScreenshotFrame.privacySettings,

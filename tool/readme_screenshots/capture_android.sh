@@ -12,7 +12,7 @@ adb shell wm density 420
 adb shell settings put system font_scale 1.0
 adb shell settings put system time_12_24 24
 
-flutter drive \
+timeout --signal=INT --kill-after=30s 20m flutter drive \
   --driver=integration_test/support/readme_screenshot_driver.dart \
   --target=integration_test/readme_screenshots_test.dart \
   --device-id="${ANDROID_SERIAL}" \
