@@ -110,23 +110,7 @@ jobs:
             -no-boot-anim -camera-back none -camera-front none
           disable-animations: true
           disable-spellchecker: true
-          script: |
-            bash -euo pipefail <<'BASH'
-            set -euo pipefail
-            mkdir -p "${DANGGUI_README_SCREENSHOT_OUTPUT}"
-            adb shell wm size 1080x2400
-            adb shell wm density 420
-            adb shell settings put system font_scale 1.0
-            adb shell settings put system time_12_24 24
-            flutter drive \
-              --driver=integration_test/support/readme_screenshot_driver.dart \
-              --target=integration_test/readme_screenshots_test.dart \
-              --device-id="${ANDROID_SERIAL}" \
-              --dart-define="README_SCREENSHOT_LOCALE=${README_SCREENSHOT_LOCALE}"
-            dart run tool/readme_screenshots/verify_outputs.dart \
-              --locale "${README_SCREENSHOT_LOCALE}" \
-              --directory "${DANGGUI_README_SCREENSHOT_OUTPUT}"
-            BASH
+          script: bash tool/readme_screenshots/capture_android.sh
 
       - name: Upload raw PNGs and manifest
         if: always()
