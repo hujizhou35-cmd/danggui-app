@@ -18,17 +18,21 @@ void main() {
     expect(report.checks.length, greaterThanOrEqualTo(50));
     expect(expectedApplicationId, 'com.danggui.memo');
     final version = readReleaseVersion(repositoryRoot);
-    expect(version.name, '1.1.2');
-    expect(version.buildNumber, 3);
-    expect(version.technical, '1.1.2+3');
+    expect(version.name, '1.1.3');
+    expect(version.buildNumber, 4);
+    expect(version.technical, '1.1.3+4');
     expect(appVersionName, version.name);
     expect(appBuildNumber, version.buildNumber);
     expect(appTechnicalVersion, version.technical);
     expect(expectedAndroidPermissions, <String>{
+      'android.permission.FOREGROUND_SERVICE',
+      'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',
       'android.permission.POST_NOTIFICATIONS',
       'android.permission.RECEIVE_BOOT_COMPLETED',
       'android.permission.SCHEDULE_EXACT_ALARM',
+      'android.permission.USE_FULL_SCREEN_INTENT',
       'android.permission.VIBRATE',
+      'android.permission.WAKE_LOCK',
     });
   });
 
@@ -189,7 +193,6 @@ void main() {
     expect(report.passed, isFalse);
     expect(failures, contains('android.permission.INTERNET'));
     expect(failures, contains('android.permission.USE_EXACT_ALARM'));
-    expect(failures, contains('android.permission.USE_FULL_SCREEN_INTENT'));
     expect(failures, contains('firebase_core'));
     expect(failures, contains('alarm-clock or full-screen notification API'));
     expect(failures, contains('hard-coded remote URL'));
@@ -221,9 +224,14 @@ Directory _createAuditFixture(Directory sourceRoot) {
     'android/app/src/main/res/xml/data_extraction_rules.xml',
     'android/app/src/main/kotlin/com/danggui/memo/MainActivity.kt',
     'ios/Runner/Info.plist',
+    'ios/Runner/zh-Hans.lproj/InfoPlist.strings',
+    'ios/Runner/en.lproj/InfoPlist.strings',
+    'ios/Runner/ja.lproj/InfoPlist.strings',
+    'ios/Runner/ru.lproj/InfoPlist.strings',
     'ios/Runner/AppDelegate.swift',
     'ios/Runner/SceneDelegate.swift',
     'ios/Runner/Runner-Bridging-Header.h',
+    'ios/Runner/Runner.entitlements',
     'ios/Flutter/AppFrameworkInfo.plist',
     'ios/Runner.xcodeproj/project.pbxproj',
   ];

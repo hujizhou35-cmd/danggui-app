@@ -17,14 +17,14 @@
 </p>
 
 <p align="center">
-  <img alt="Версия: публичная предварительная v1.1.2" src="https://img.shields.io/badge/version-v1.1.2%20pre--release-B5684C?style=flat-square" />
+  <img alt="Версия: публичная предварительная v1.1.3" src="https://img.shields.io/badge/version-v1.1.3%20pre--release-B5684C?style=flat-square" />
   <img alt="Платформы: Android и исходники iOS" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20source-6F8068?style=flat-square" />
   <img alt="Данные: локальные и переносимые" src="https://img.shields.io/badge/data-local--first%20%7C%20portable-81786F?style=flat-square" />
   <img alt="Лицензия: Apache 2.0" src="https://img.shields.io/badge/code-Apache--2.0-2E2925?style=flat-square" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2"><strong>Скачать для Android</strong></a> ·
+  <a href="https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3"><strong>Скачать для Android</strong></a> ·
   <a href="#предварительный-просмотр">Предварительный просмотр</a> ·
   <a href="#данные-и-конфиденциальность">Конфиденциальность</a> ·
   <a href="#участие-в-проекте">Участие</a>
@@ -85,10 +85,10 @@
 
 | Платформа | Рекомендуемый источник | Текущая поставка |
 | --- | --- | --- |
-| Android 7.0+ | [Публичная предварительная версия v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | Универсальный APK с официальной подписью; большинству нужен `danggui-android-universal-release.apk` |
+| Android 7.0+ | [Публичная предварительная версия v1.1.3](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3) | Универсальный APK с официальной подписью; большинству нужен `danggui-android-universal-release.apk` |
 | iOS | [Инструкция по сборке из исходников](../architecture/ios-source-build.md) | Полный проект Xcode и подтверждение сборки без подписи; без IPA и TestFlight |
 
-v1.1.2 остаётся **Pre-release**. Автоматические приёмочные проверки пройдены, но уведомления, экран блокировки, звук, вибрация и обновление поверх установленной версии ещё проверяются на физических Android-устройствах разных производителей. Перед установкой сохраните резервную копию и сверьте файл с `SHA256SUMS` из Release. APK для отдельных ABI, AAB, подтверждения сборки iOS, сертификат подписи и записи проверки собраны в `danggui-developer-assets-v1.1.2.zip`; большинству пользователей он не нужен. Полные границы поставки описаны в [руководстве](../architecture/platform-delivery.md) и [списке проверок v1.1.2](../release/v1.1.2-release-checklist.md).
+v1.1.3 остаётся **Pre-release**. Автоматические приёмочные проверки пройдены, но нативные будильники, экран блокировки, звук, вибрация и обновление поверх установленной версии ещё проверяются на физических Android-устройствах разных производителей. Перед установкой сохраните резервную копию и сверьте файл с `SHA256SUMS` из Release. APK для отдельных ABI, AAB, подтверждения сборки iOS, сертификат подписи и записи проверки собраны в `danggui-developer-assets-v1.1.3.zip`; большинству пользователей он не нужен. Полные границы поставки описаны в [руководстве](../architecture/platform-delivery.md) и [списке проверок v1.1.3](../release/v1.1.3-release-checklist.md).
 
 ## История версий
 
@@ -97,6 +97,7 @@ v1.1.2 остаётся **Pre-release**. Автоматические приём
 | [v1.0.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0) | Заложил локальную основу задач, напоминаний, «Прошлого», заметок, резервных копий и читаемого экспорта. |
 | [v1.1.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0) | Повысил надёжность редактора и жизненного цикла напоминаний, вернул полный стартовый экран с шаром и ростком. |
 | [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | Добавил выбор напоминаний с точностью до минуты и явную обратную связь при сохранении, уплотнил «Прошлое» и убрал дублирование стартовой композиции. |
+| [v1.1.3](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3) | Перевёл звуковые напоминания на нативные будильники, добавил подсказки по разрешениям и быструю прокрутку длинных страниц, исправил не исчезавшие сообщения. |
 
 Полный список изменений — в [CHANGELOG](../../CHANGELOG.md).
 

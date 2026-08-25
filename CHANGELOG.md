@@ -3,6 +3,36 @@
 All notable changes to Danggui are documented here. The project follows
 [Semantic Versioning](https://semver.org/) for public releases.
 
+## 1.1.3 - reliable alarms and long-page navigation pre-release (2026-08-25)
+
+### Fixed
+
+- Replaced sound-enabled Android reminder notifications with exact alarm-clock
+  scheduling, an alarm-audio foreground service, repeating vibration, and a
+  lock-screen alarm surface with Stop and 10/30/60-minute Snooze actions.
+  Future alarms are rebuilt after reboot, clock/time-zone changes, and package
+  upgrades; silent reminders continue to use ordinary local notifications.
+- Added app-initiated notification, exact-alarm, full-screen, AlarmKit, alarm
+  volume, and supported OEM autostart settings flows. Protected access always
+  remains user-confirmed; the app requests neither Critical Alerts nor Do Not
+  Disturb policy access and never modifies system notification policy.
+- Added iOS 26+ AlarmKit scheduling and persisted alarm actions, with Time
+  Sensitive local-notification fallback on iOS 15 through 25.
+- Gave long Task, Note, Past, Settings, Help, and Recently Deleted surfaces a
+  restrained draggable fast scrollbar while preserving the paper, ink, sage,
+  and platform-adaptive visual language.
+- Centralized SnackBar feedback durations: success 1.5 seconds, information and
+  validation 3 seconds, Undo 4 seconds, and permission/error feedback 5
+  seconds. New feedback replaces stale messages and never persists forever.
+
+### Delivery
+
+- Set product version `1.1.3`, build number `4`, universal Android version code
+  `4`, and split APK codes `1004`, `2004`, and `4004` from `pubspec.yaml`.
+- Added the protected `v1.1.3` Pre-release contract and deterministic
+  `danggui-ios-source-v1.1.3.zip` delivery while preserving all earlier tags,
+  releases, artifacts, and historical documentation.
+
 ## 1.1.2 - compact history and reminder delivery pre-release (2026-08-25)
 
 The v1.1.2 release is published separately from v1.1.0. The existing v1.1.0

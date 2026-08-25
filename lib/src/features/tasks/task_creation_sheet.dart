@@ -225,8 +225,9 @@ class _TaskCreationSheetState extends State<TaskCreationSheet> {
   void _finish(bool details) {
     final title = _titleController.text.trim();
     if (title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(AppLocalizations.of(context).taskTitleHint)),
+      showDangguiSnackBar(
+        context,
+        message: AppLocalizations.of(context).taskTitleHint,
       );
       return;
     }

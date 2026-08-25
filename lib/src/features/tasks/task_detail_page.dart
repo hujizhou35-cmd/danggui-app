@@ -41,6 +41,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   final _titleController = TextEditingController();
   final _planController = TextEditingController();
   final _bodyController = TextEditingController();
+  final _scrollController = ScrollController();
   final _bodyUndoController = UndoHistoryController();
   late final AppStoreController _store;
   late final NotificationCoordinator _notifications;
@@ -53,7 +54,6 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   bool _closing = false;
   String? _loadedId;
   TaskViewModel? _taskTemplate;
-  DateTime? _persistedReminderAt;
   Timer? _autosaveTimer;
   _TaskSaveDraft? _pendingDraft;
   Future<bool>? _saveOperation;
@@ -90,6 +90,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
     _titleController.dispose();
     _planController.dispose();
     _bodyController.dispose();
+    _scrollController.dispose();
     _bodyUndoController
       ..removeListener(_refreshUndoButtons)
       ..dispose();
@@ -175,126 +176,135 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
               ),
             ],
           ),
-          editor: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                TextField(
-                  key: const Key('task-title-field'),
-                  controller: _titleController,
-                  minLines: 1,
-                  maxLines: 3,
-                  style: Theme.of(context).textTheme.titleLarge,
-                  decoration: InputDecoration(hintText: l10n.taskTitleHint),
-                ),
-                const SizedBox(height: 16),
-                _SmartField(
-                  key: const Key('task-due-date-field'),
-                  label: l10n.dueDate,
-                  value: _dueDate == null
-                      ? l10n.noDate
-                      : DateFormat.yMMMd(
-                          Localizations.localeOf(context).toLanguageTag(),
-                        ).format(_dueDate!),
-                  onTap: _pickDueDate,
-                  onClear: _dueDate == null
-                      ? null
-                      : () {
-                          setState(() => _dueDate = null);
-                          _onDraftChanged();
-                        },
-                ),
-                _SmartField(
-                  key: const Key('task-reminder-field'),
-                  label: l10n.reminder,
-                  value: _reminderAt == null
-                      ? l10n.noReminder
-                      : DateFormat.yMMMd(
-                          Localizations.localeOf(context).toLanguageTag(),
-                        ).add_Hm().format(_reminderAt!),
-                  onTap: _pickReminder,
-                  onClear: _reminderAt == null
-                      ? null
-                      : () {
-                          _reminderFieldsDirty = true;
-                          setState(() => _reminderAt = null);
-                          _onDraftChanged();
-                        },
-                ),
-                if (_reminderAt != null)
-                  _ReminderStatusRow(
-                    key: const Key('task-reminder-status'),
-                    label: _reminderStatusLabel(task, l10n),
-                    showSettingsAction: _isSystemDeliveryRestricted(task),
-                    settingsLabel: _isPermissionRestricted(task)
-                        ? l10n.openNotificationSettings
-                        : _isPrecisionRestricted
-                        ? l10n.enableExactReminders
-                        : l10n.openNotificationSettings,
-                    onOpenSettings: () => _openReminderSettings(task),
+          editor: DangguiFastScrollbar(
+            controller: _scrollController,
+            child: SingleChildScrollView(
+              controller: _scrollController,
+              padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  TextField(
+                    key: const Key('task-title-field'),
+                    controller: _titleController,
+                    minLines: 1,
+                    maxLines: 3,
+                    style: Theme.of(context).textTheme.titleLarge,
+                    decoration: InputDecoration(hintText: l10n.taskTitleHint),
                   ),
-                if (_reminderAt != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4, bottom: 8),
-                    child: Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: _ReminderOption(
-                            label: l10n.sound,
-                            value: _sound,
-                            onChanged: (value) {
-                              _reminderFieldsDirty = true;
-                              setState(() => _sound = value);
-                              _onDraftChanged();
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 18),
-                        Expanded(
-                          child:
-                              (_reminderCapabilities
-                                      ?.vibrationControlledBySystem ??
-                                  Theme.of(context).platform ==
-                                      TargetPlatform.iOS)
-                              ? Text(
-                                  l10n.reminderVibrationSystemControlled,
-                                  style: Theme.of(context).textTheme.bodySmall,
-                                )
-                              : _ReminderOption(
-                                  label: l10n.vibration,
-                                  value: _vibration,
-                                  onChanged: (value) {
-                                    _reminderFieldsDirty = true;
-                                    setState(() => _vibration = value);
-                                    _onDraftChanged();
-                                  },
-                                ),
-                        ),
-                      ],
+                  const SizedBox(height: 16),
+                  _SmartField(
+                    key: const Key('task-due-date-field'),
+                    label: l10n.dueDate,
+                    value: _dueDate == null
+                        ? l10n.noDate
+                        : DateFormat.yMMMd(
+                            Localizations.localeOf(context).toLanguageTag(),
+                          ).format(_dueDate!),
+                    onTap: _pickDueDate,
+                    onClear: _dueDate == null
+                        ? null
+                        : () {
+                            setState(() => _dueDate = null);
+                            _onDraftChanged();
+                          },
+                  ),
+                  _SmartField(
+                    key: const Key('task-reminder-field'),
+                    label: l10n.reminder,
+                    value: _reminderAt == null
+                        ? l10n.noReminder
+                        : DateFormat.yMMMd(
+                            Localizations.localeOf(context).toLanguageTag(),
+                          ).add_Hm().format(_reminderAt!),
+                    onTap: _pickReminder,
+                    onClear: _reminderAt == null
+                        ? null
+                        : () {
+                            _reminderFieldsDirty = true;
+                            setState(() => _reminderAt = null);
+                            _onDraftChanged();
+                          },
+                  ),
+                  if (_reminderAt != null)
+                    _ReminderStatusRow(
+                      key: const Key('task-reminder-status'),
+                      label: _reminderStatusLabel(task, l10n),
+                      showSettingsAction: _isSystemDeliveryRestricted(task),
+                      settingsLabel: _isPermissionRestricted(task)
+                          ? l10n.openNotificationSettings
+                          : _isPrecisionRestricted
+                          ? l10n.enableExactReminders
+                          : l10n.openNotificationSettings,
+                      onOpenSettings: () => _openReminderSettings(task),
                     ),
+                  if (_reminderAt != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, bottom: 8),
+                      child: Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: _ReminderOption(
+                              label: l10n.sound,
+                              value: _sound,
+                              onChanged: (value) {
+                                _reminderFieldsDirty = true;
+                                setState(() => _sound = value);
+                                _onDraftChanged();
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 18),
+                          Expanded(
+                            child:
+                                (_reminderCapabilities
+                                        ?.vibrationControlledBySystem ??
+                                    Theme.of(context).platform ==
+                                        TargetPlatform.iOS)
+                                ? Text(
+                                    l10n.reminderVibrationSystemControlled,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall,
+                                  )
+                                : _ReminderOption(
+                                    label: l10n.vibration,
+                                    value: _vibration,
+                                    onChanged: (value) {
+                                      _reminderFieldsDirty = true;
+                                      setState(() => _vibration = value);
+                                      _onDraftChanged();
+                                    },
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const SizedBox(height: 6),
+                  Text(
+                    l10n.plan,
+                    style: Theme.of(context).textTheme.labelMedium,
                   ),
-                const SizedBox(height: 6),
-                Text(l10n.plan, style: Theme.of(context).textTheme.labelMedium),
-                TextField(
-                  key: const Key('task-plan-field'),
-                  controller: _planController,
-                  minLines: 1,
-                  maxLines: 3,
-                  decoration: InputDecoration(hintText: l10n.planHint),
-                ),
-                const Divider(height: 28),
-                TextField(
-                  key: const Key('task-body-field'),
-                  controller: _bodyController,
-                  undoController: _bodyUndoController,
-                  minLines: 12,
-                  maxLines: null,
-                  keyboardType: TextInputType.multiline,
-                  decoration: InputDecoration(hintText: l10n.bodyHint),
-                  style: Theme.of(context).textTheme.bodyLarge,
-                ),
-              ],
+                  TextField(
+                    key: const Key('task-plan-field'),
+                    controller: _planController,
+                    minLines: 1,
+                    maxLines: 3,
+                    decoration: InputDecoration(hintText: l10n.planHint),
+                  ),
+                  const Divider(height: 28),
+                  TextField(
+                    key: const Key('task-body-field'),
+                    controller: _bodyController,
+                    undoController: _bodyUndoController,
+                    minLines: 12,
+                    maxLines: null,
+                    keyboardType: TextInputType.multiline,
+                    decoration: InputDecoration(hintText: l10n.bodyHint),
+                    style: Theme.of(context).textTheme.bodyLarge,
+                  ),
+                ],
+              ),
             ),
           ),
           toolbar: EditorToolbar(
@@ -424,9 +434,10 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
                 time.minute,
               );
               if (!value.isAfter(_now())) {
-                ScaffoldMessenger.of(
+                showDangguiSnackBar(
                   dialogContext,
-                ).showSnackBar(SnackBar(content: Text(l10n.reminderExpired)));
+                  message: l10n.reminderExpired,
+                );
                 return;
               }
               Navigator.pop(dialogContext, value);
@@ -470,8 +481,10 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
       }
     } on Object {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(AppLocalizations.of(context).permissionDenied)),
+      showDangguiSnackBar(
+        context,
+        message: AppLocalizations.of(context).permissionDenied,
+        duration: dangguiSnackBarErrorDuration,
       );
     }
   }
@@ -487,6 +500,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   bool _isSystemDeliveryRestricted(TaskViewModel task) =>
       _isPermissionRestricted(task) ||
       _isPrecisionRestricted ||
+      _reminderCapabilities?.timeSensitiveAvailable == false ||
       (_sound && _reminderCapabilities?.soundAvailable == false) ||
       (_vibration && _reminderCapabilities?.vibrationAvailable == false);
 
@@ -504,7 +518,8 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
     if (_isPrecisionRestricted) {
       return l10n.reminderStatusPrecisionLimited;
     }
-    if ((_sound && _reminderCapabilities?.soundAvailable == false) ||
+    if (_reminderCapabilities?.timeSensitiveAvailable == false ||
+        (_sound && _reminderCapabilities?.soundAvailable == false) ||
         (_vibration && _reminderCapabilities?.vibrationAvailable == false)) {
       return l10n.reminderStatusSystemDeliveryLimited;
     }
@@ -526,7 +541,6 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
     _reminderAt = task.reminderAt;
     _sound = task.soundEnabled;
     _vibration = task.vibrationEnabled;
-    _persistedReminderAt = task.reminderAt;
     _reminderFieldsDirty = false;
     _pendingDraft = null;
     _nextRevision = 0;
@@ -558,7 +572,6 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
     _reminderAt = task.reminderAt;
     _sound = task.soundEnabled;
     _vibration = task.vibrationEnabled;
-    _persistedReminderAt = task.reminderAt;
     final pending = _pendingDraft;
     if (pending != null) {
       _pendingDraft = _TaskSaveDraft(
@@ -637,8 +650,9 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
       if (draft == null || draft.revision <= _persistedRevision) return true;
       if (draft.task.title.trim().isEmpty) {
         if (_showSaveErrors && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(AppLocalizations.of(context).taskTitleHint)),
+          showDangguiSnackBar(
+            context,
+            message: AppLocalizations.of(context).taskTitleHint,
           );
         }
         return false;
@@ -647,8 +661,11 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
         await _persistDraft(draft);
       } on Object catch (error) {
         if (_showSaveErrors && mounted) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(error.toString())));
+          showDangguiSnackBar(
+            context,
+            message: error.toString(),
+            duration: dangguiSnackBarErrorDuration,
+          );
         }
         if (mounted) {
           _autosaveTimer?.cancel();
@@ -659,7 +676,6 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
         return false;
       }
       _persistedRevision = draft.revision;
-      _persistedReminderAt = draft.task.reminderAt;
       if (identical(_pendingDraft, draft)) {
         if (draft.reminderFieldsDirty) _reminderFieldsDirty = false;
         _pendingDraft = null;
@@ -670,11 +686,11 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   Future<void> _persistDraft(_TaskSaveDraft draft) async {
     final task = draft.task;
     final now = _now();
-    final activatesFutureReminder =
+    final authorizesFutureReminder =
         task.reminderAt != null &&
         task.reminderAt!.isAfter(now) &&
-        (_persistedReminderAt == null || !_persistedReminderAt!.isAfter(now));
-    final notifications = activatesFutureReminder ? _notifications : null;
+        draft.reminderFieldsDirty;
+    final notifications = authorizesFutureReminder ? _notifications : null;
     // Commit the user's reminder intent before opening any system permission
     // surface. Android exact-alarm settings leave the app, and the process may
     // be reclaimed there; the selected time must already be recoverable.
@@ -686,10 +702,12 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
     }
 
     ReminderAuthorizationResult? authorization;
-    if (activatesFutureReminder) {
+    if (authorizesFutureReminder) {
       try {
-        authorization = await notifications!
-            .ensurePermissionsForFutureReminder();
+        authorization = await notifications!.ensurePermissionsForFutureReminder(
+          soundEnabled: task.soundEnabled,
+          vibrationEnabled: task.vibrationEnabled,
+        );
       } on Object {
         // A platform permission failure must never discard the editor data.
         authorization = const ReminderAuthorizationResult(
@@ -698,7 +716,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
         );
       }
     }
-    if (activatesFutureReminder && authorization != null) {
+    if (authorizesFutureReminder && authorization != null) {
       try {
         await notifications!.applyPermissionResultForTask(
           task.id,
@@ -719,18 +737,16 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
       }
       await _refreshReminderCapabilities();
       if (!authorization.notificationsGranted && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(AppLocalizations.of(context).permissionDenied),
-          ),
+        showDangguiSnackBar(
+          context,
+          message: AppLocalizations.of(context).permissionDenied,
+          duration: dangguiSnackBarErrorDuration,
         );
       } else if (!authorization.exactSchedulingAvailable && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              AppLocalizations.of(context).reminderStatusPrecisionLimited,
-            ),
-          ),
+        showDangguiSnackBar(
+          context,
+          message: AppLocalizations.of(context).reminderStatusPrecisionLimited,
+          duration: dangguiSnackBarErrorDuration,
         );
       }
     } else if (draft.reminderFieldsDirty && task.reminderAt != null) {

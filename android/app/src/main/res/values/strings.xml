@@ -1,4 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name" translatable="false">当归</string>
+    <string name="alarm_channel_name">正在响铃的提醒</string>
+    <string name="alarm_channel_description">显示当归正在播放的闹钟，并提供停止和稍后提醒操作。</string>
+    <string name="alarm_default_title">当归提醒</string>
+    <string name="alarm_default_body">该处理这件事了。</string>
+    <string name="alarm_multiple_title">%1$d 个提醒</string>
+    <string name="alarm_snooze_action">稍后 %1$d 分钟</string>
+    <string name="alarm_stop_action">停止</string>
+    <string name="alarm_screen_eyebrow">当归提醒</string>
+    <string name="alarm_snooze_label">稍后提醒</string>
+    <string name="alarm_minutes">%1$d 分钟</string>
+    <string name="alarm_stop_button">停止响铃</string>
+    <string name="alarm_test_title">当归测试闹钟</string>
+    <string name="alarm_test_body">如果听到铃声或感到振动，强闹钟工作正常。</string>
 </resources>

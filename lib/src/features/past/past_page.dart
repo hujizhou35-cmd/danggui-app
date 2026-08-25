@@ -33,6 +33,7 @@ class _PastPageState extends ConsumerState<PastPage>
     with WidgetsBindingObserver, EditorSaveFeedbackMixin<PastPage> {
   final _searchController = TextEditingController();
   final _documentController = TextEditingController();
+  final _documentScrollController = ScrollController();
   final _focusNode = FocusNode();
   final _undoController = UndoHistoryController();
   late final AppStoreController _store;
@@ -91,6 +92,7 @@ class _PastPageState extends ConsumerState<PastPage>
     if (_pendingDraft != null) unawaited(_startSaveLoop());
     _searchController.dispose();
     _documentController.dispose();
+    _documentScrollController.dispose();
     _focusNode.dispose();
     _undoController.dispose();
     super.dispose();
@@ -215,44 +217,48 @@ class _PastPageState extends ConsumerState<PastPage>
   }
 
   Widget _buildDocumentEditor(AppLocalizations l10n) {
-    return Semantics(
-      textField: true,
-      multiline: true,
-      label: l10n.pastTitle,
-      child: TextField(
-        key: const Key('past-continuous-document-editor'),
-        controller: _documentController,
-        focusNode: _focusNode,
-        undoController: _undoController,
-        expands: true,
-        minLines: null,
-        maxLines: null,
-        textAlignVertical: TextAlignVertical.top,
-        keyboardType: TextInputType.multiline,
-        scrollPadding: const EdgeInsets.only(bottom: 120),
-        style: Theme.of(context).textTheme.bodyLarge,
-        decoration: InputDecoration(
-          hintText: l10n.emptyPastHint,
-          contentPadding: const EdgeInsets.fromLTRB(24, 10, 24, 32),
+    return DangguiFastScrollbar(
+      controller: _documentScrollController,
+      child: Semantics(
+        textField: true,
+        multiline: true,
+        label: l10n.pastTitle,
+        child: TextField(
+          key: const Key('past-continuous-document-editor'),
+          controller: _documentController,
+          scrollController: _documentScrollController,
+          focusNode: _focusNode,
+          undoController: _undoController,
+          expands: true,
+          minLines: null,
+          maxLines: null,
+          textAlignVertical: TextAlignVertical.top,
+          keyboardType: TextInputType.multiline,
+          scrollPadding: const EdgeInsets.only(bottom: 120),
+          style: Theme.of(context).textTheme.bodyLarge,
+          decoration: InputDecoration(
+            hintText: l10n.emptyPastHint,
+            contentPadding: const EdgeInsets.fromLTRB(24, 10, 24, 32),
+          ),
+          onChanged: _onDocumentChanged,
+          contextMenuBuilder: (context, editableTextState) {
+            final items = <ContextMenuButtonItem>[
+              ...editableTextState.contextMenuButtonItems,
+              ContextMenuButtonItem(
+                label: l10n.convertToTask,
+                onPressed: () {
+                  final selected = _selectedText();
+                  ContextMenuController.removeAny();
+                  unawaited(_convertToTask(selected));
+                },
+              ),
+            ];
+            return AdaptiveTextSelectionToolbar.buttonItems(
+              anchors: editableTextState.contextMenuAnchors,
+              buttonItems: items,
+            );
+          },
         ),
-        onChanged: _onDocumentChanged,
-        contextMenuBuilder: (context, editableTextState) {
-          final items = <ContextMenuButtonItem>[
-            ...editableTextState.contextMenuButtonItems,
-            ContextMenuButtonItem(
-              label: l10n.convertToTask,
-              onPressed: () {
-                final selected = _selectedText();
-                ContextMenuController.removeAny();
-                unawaited(_convertToTask(selected));
-              },
-            ),
-          ];
-          return AdaptiveTextSelectionToolbar.buttonItems(
-            anchors: editableTextState.contextMenuAnchors,
-            buttonItems: items,
-          );
-        },
       ),
     );
   }
@@ -331,8 +337,11 @@ class _PastPageState extends ConsumerState<PastPage>
         // the app resumes; foreground failures also receive a bounded retry.
         if (!_disposed && _isForeground) {
           if (mounted && Scaffold.maybeOf(context) != null) {
-            ScaffoldMessenger.of(context)
-                .showSnackBar(SnackBar(content: Text(error.toString())));
+            showDangguiSnackBar(
+              context,
+              message: error.toString(),
+              duration: dangguiSnackBarErrorDuration,
+            );
           }
           _autosaveTimer?.cancel();
           _autosaveTimer = Timer(_autosaveRetryDelay, () {
@@ -444,8 +453,10 @@ class _PastPageState extends ConsumerState<PastPage>
       await settleTaskCreationKeyboard(context: context);
       if (mounted) await context.push('/tasks/$taskId');
     } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(AppLocalizations.of(context).addTask)),
+      showDangguiSnackBar(
+        context,
+        message: AppLocalizations.of(context).addTask,
+        duration: dangguiSnackBarBriefDuration,
       );
     }
   }
@@ -491,8 +502,7 @@ class _PastPageState extends ConsumerState<PastPage>
     if (selected == 'selection') {
       final text = _selectedText().trim();
       if (text.isEmpty) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(l10n.helpNoResults)));
+        showDangguiSnackBar(context, message: l10n.helpNoResults);
         return;
       }
       request = PortableExportRequest.pastSelection(text);

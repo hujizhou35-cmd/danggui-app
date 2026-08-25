@@ -15,6 +15,7 @@ class HelpPage extends StatefulWidget {
 
 class _HelpPageState extends State<HelpPage> {
   final _searchController = TextEditingController();
+  final _documentScrollController = ScrollController();
   final _sectionKeys = <String, GlobalKey>{};
   Future<HelpDocument>? _document;
   String? _assetLanguage;
@@ -36,6 +37,7 @@ class _HelpPageState extends State<HelpPage> {
   @override
   void dispose() {
     _searchController.dispose();
+    _documentScrollController.dispose();
     super.dispose();
   }
 
@@ -119,6 +121,7 @@ class _HelpPageState extends State<HelpPage> {
                           : const <HelpSection>[],
                       query: _query,
                       sectionKeys: _sectionKeys,
+                      scrollController: _documentScrollController,
                     );
                   },
                 ),
@@ -196,12 +199,14 @@ class _HelpDocumentView extends StatelessWidget {
     required this.tableOfContents,
     required this.query,
     required this.sectionKeys,
+    required this.scrollController,
   });
 
   final HelpDocument document;
   final List<HelpSection> tableOfContents;
   final String query;
   final Map<String, GlobalKey> sectionKeys;
+  final ScrollController scrollController;
 
   @override
   Widget build(BuildContext context) {
@@ -256,18 +261,22 @@ class _HelpDocumentView extends StatelessWidget {
             ),
           ),
         Expanded(
-          child: SingleChildScrollView(
-            key: const PageStorageKey<String>('help-document'),
-            padding: EdgeInsets.fromLTRB(
-              context.dangguiTheme.pageHorizontalPadding,
-              8,
-              context.dangguiTheme.pageHorizontalPadding,
-              32,
-            ),
-            child: SelectionArea(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: children,
+          child: DangguiFastScrollbar(
+            controller: scrollController,
+            child: SingleChildScrollView(
+              key: const PageStorageKey<String>('help-document'),
+              controller: scrollController,
+              padding: EdgeInsets.fromLTRB(
+                context.dangguiTheme.pageHorizontalPadding,
+                8,
+                context.dangguiTheme.pageHorizontalPadding,
+                32,
+              ),
+              child: SelectionArea(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: children,
+                ),
               ),
             ),
           ),

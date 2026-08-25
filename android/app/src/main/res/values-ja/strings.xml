@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="alarm_channel_name">鳴動中のリマインダー</string>
+    <string name="alarm_channel_description">当帰で鳴動中のアラームを表示し、停止とスヌーズの操作を提供します。</string>
+    <string name="alarm_default_title">当帰のリマインダー</string>
+    <string name="alarm_default_body">この予定に取りかかる時間です。</string>
+    <string name="alarm_multiple_title">%1$d 件のリマインダー</string>
+    <string name="alarm_snooze_action">%1$d 分後に通知</string>
+    <string name="alarm_stop_action">停止</string>
+    <string name="alarm_screen_eyebrow">当帰のリマインダー</string>
+    <string name="alarm_snooze_label">スヌーズ</string>
+    <string name="alarm_minutes">%1$d 分</string>
+    <string name="alarm_stop_button">アラームを停止</string>
+    <string name="alarm_test_title">当帰のテストアラーム</string>
+    <string name="alarm_test_body">音または振動を確認できれば、強いアラームは正常に動作しています。</string>
+</resources>

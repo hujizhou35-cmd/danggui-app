@@ -12,6 +12,11 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
+            "com.danggui.memo/reminder_platform",
+        ).setMethodCallHandler(ReminderPlatformHandler(this))
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
             "com.danggui.memo/settings",
         ).setMethodCallHandler { call, result ->
             if (call.method != "openNotificationSettings") {

@@ -5,6 +5,7 @@ import 'package:danggui/src/data/repositories/core_repositories.dart';
 import 'package:danggui/src/domain/models.dart';
 import 'package:danggui/src/domain/repositories.dart';
 import 'package:danggui/src/services/notifications/notification_coordinator.dart';
+import 'package:danggui/src/services/notifications/native_alarm_platform.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -166,6 +167,20 @@ void main() {
       await database.select(database.notificationRegistrations).get(),
       isEmpty,
     );
+  });
+
+  test('a native alarm remains scheduled until Stop or Snooze', () async {
+    await _createFutureReminder(tasks, nowUtc);
+    await coordinator.reconcile();
+    final reminder = await database.select(database.reminders).getSingle();
+    gateway.activeNativeReminderIds.add(reminder.id);
+
+    nowUtc = nowUtc.add(const Duration(hours: 5));
+    await coordinator.reconcile();
+
+    final unchanged = await database.select(database.reminders).getSingle();
+    expect(unchanged.status, ReminderStatus.scheduled);
+    expect(gateway.cancelled, isEmpty);
   });
 
   test(
@@ -557,6 +572,115 @@ void main() {
     expect(gateway.permissionRequests, 1);
   });
 
+  test(
+    'native snooze event advances the durable revision and reschedules',
+    () async {
+      final task = await _createFutureReminder(tasks, nowUtc);
+      await coordinator.reconcile();
+      final reminder = await database.select(database.reminders).getSingle();
+      final firedAt = nowUtc.add(const Duration(hours: 2));
+      gateway.nativeEvents.addAll(<NativeAlarmEvent>[
+        NativeAlarmEvent(
+          eventId: 'fired-1',
+          reminderId: reminder.id,
+          taskId: task.id.value,
+          scheduleRevision: reminder.scheduleRevision,
+          type: NativeAlarmEventType.fired,
+          occurredAtUtc: firedAt,
+        ),
+        NativeAlarmEvent(
+          eventId: 'snoozed-1',
+          reminderId: reminder.id,
+          taskId: task.id.value,
+          scheduleRevision: reminder.scheduleRevision,
+          type: NativeAlarmEventType.snoozed,
+          occurredAtUtc: firedAt.add(const Duration(seconds: 1)),
+          snoozeMinutes: 30,
+        ),
+      ]);
+
+      await coordinator.reconcile();
+
+      final updated = await database.select(database.reminders).getSingle();
+      expect(updated.status, ReminderStatus.scheduled);
+      expect(updated.scheduleRevision, reminder.scheduleRevision + 1);
+      expect(updated.snoozeCount, 1);
+      expect(
+        updated.scheduledAtUtc,
+        firedAt
+            .add(const Duration(seconds: 1, minutes: 30))
+            .microsecondsSinceEpoch,
+      );
+      expect(gateway.scheduled.last.scheduleRevision, updated.scheduleRevision);
+      expect(gateway.nativeEvents, isEmpty);
+    },
+  );
+
+  test('native stop event expires and cancels the matching reminder', () async {
+    final task = await _createFutureReminder(tasks, nowUtc);
+    await coordinator.reconcile();
+    final reminder = await database.select(database.reminders).getSingle();
+    gateway.nativeEvents.add(
+      NativeAlarmEvent(
+        eventId: 'stopped-1',
+        reminderId: reminder.id,
+        taskId: task.id.value,
+        scheduleRevision: reminder.scheduleRevision,
+        type: NativeAlarmEventType.stopped,
+        occurredAtUtc: nowUtc.add(const Duration(hours: 2)),
+      ),
+    );
+
+    await coordinator.reconcile();
+
+    final updated = await database.select(database.reminders).getSingle();
+    expect(updated.status, ReminderStatus.expired);
+    expect(updated.scheduleRevision, reminder.scheduleRevision + 1);
+    expect(
+      gateway.cancelled,
+      contains(gateway.scheduled.single.notificationId),
+    );
+    expect(gateway.nativeEvents, isEmpty);
+  });
+
+  test(
+    'iOS AlarmKit authorization can deliver without ordinary alerts',
+    () async {
+      gateway
+        ..permissionGranted = false
+        ..nativeCapabilities = const NativeAlarmCapabilities(
+          supported: true,
+          platform: 'ios',
+          alarmAuthorization: NativeAlarmAuthorization.notDetermined,
+        );
+
+      final result = await coordinator.ensurePermissionsForFutureReminder();
+
+      expect(result.notificationsGranted, isTrue);
+      expect(result.strongAlarmAuthorized, isTrue);
+      expect(gateway.alarmAuthorizationRequests, 1);
+      expect(gateway.permissionRequests, 0);
+    },
+  );
+
+  test(
+    'pre-AlarmKit iOS needs no unavailable strong-alarm permission',
+    () async {
+      gateway.nativeCapabilities = const NativeAlarmCapabilities(
+        supported: false,
+        platform: 'ios',
+        alarmAuthorization: NativeAlarmAuthorization.unavailable,
+        timeSensitiveEnabled: true,
+      );
+
+      final result = await coordinator.ensurePermissionsForFutureReminder();
+
+      expect(result.notificationsGranted, isTrue);
+      expect(result.strongAlarmAuthorized, isTrue);
+      expect(gateway.alarmAuthorizationRequests, 0);
+    },
+  );
+
   test('exact-alarm denial keeps delivery with an inexact fallback', () async {
     gateway
       ..exactSchedulingAvailable = false
@@ -764,7 +888,10 @@ Future<TaskModel> _createFutureReminder(
 }
 
 final class FakeNotificationGateway
-    implements NotificationGateway, ReminderCapabilityGateway {
+    implements
+        NotificationGateway,
+        ReminderCapabilityGateway,
+        NativeReminderGateway {
   bool get initialized => presentations.isNotEmpty;
   bool permissionGranted = true;
   int permissionFailuresRemaining = 0;
@@ -783,6 +910,13 @@ final class FakeNotificationGateway
   final List<int> cancelled = [];
   final List<NotificationPresentation> presentations = [];
   final Set<int> pendingNotificationIdsValue = <int>{};
+  final Set<String> activeNativeReminderIds = <String>{};
+  final List<NativeAlarmEvent> nativeEvents = <NativeAlarmEvent>[];
+  NativeAlarmCapabilities nativeCapabilities =
+      const NativeAlarmCapabilities.unsupported();
+  int alarmAuthorizationRequests = 0;
+  int fullScreenPermissionRequests = 0;
+  int testAlarmRequests = 0;
 
   @override
   bool get isSupported => true;
@@ -854,6 +988,66 @@ final class FakeNotificationGateway
   Future<void> cancel(int notificationId) async {
     cancelled.add(notificationId);
     pendingNotificationIdsValue.remove(notificationId);
+  }
+
+  @override
+  Future<NativeAlarmCapabilities> nativeAlarmCapabilities() async =>
+      nativeCapabilities;
+
+  @override
+  Future<bool> requestAlarmAuthorization() async {
+    alarmAuthorizationRequests += 1;
+    if (nativeCapabilities.platform != 'ios') return false;
+    nativeCapabilities = const NativeAlarmCapabilities(
+      supported: true,
+      platform: 'ios',
+      alarmAuthorization: NativeAlarmAuthorization.authorized,
+    );
+    return true;
+  }
+
+  @override
+  Future<bool> requestFullScreenPermission() async {
+    fullScreenPermissionRequests += 1;
+    return true;
+  }
+
+  @override
+  Future<void> openNotificationSettings() async {}
+
+  @override
+  Future<void> openAlarmSoundSettings() async {}
+
+  @override
+  Future<bool> openOemAutostartSettings() async => false;
+
+  @override
+  Future<void> scheduleTestAlarm({
+    required String title,
+    required String body,
+    required bool vibrationEnabled,
+  }) async {
+    testAlarmRequests += 1;
+  }
+
+  @override
+  Future<void> cancelReminder({
+    required String reminderId,
+    required int notificationId,
+  }) => cancel(notificationId);
+
+  @override
+  Future<Set<String>> activeNativeAlarmIds() async =>
+      Set<String>.of(activeNativeReminderIds);
+
+  @override
+  Future<List<NativeAlarmEvent>> drainAlarmEvents() async {
+    return List<NativeAlarmEvent>.of(nativeEvents);
+  }
+
+  @override
+  Future<void> acknowledgeAlarmEvents(Set<String> eventIds) async {
+    nativeEvents.removeWhere((event) => eventIds.contains(event.eventId));
   }
 
   void markDelivered(int notificationId) {

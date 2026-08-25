@@ -1,6 +1,6 @@
 # 平台、签名与交付架构
 
-> v1.1.2 计划以[独立公开 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2)交付，仍不是稳定版。本页定义产物合同、已取得的自动化证据和仍待完成的标签/实体机门禁。实时状态见 [v1.1.2 发布检查表](../release/v1.1.2-release-checklist.md)；既有 v1.1.0 与 v1.0.0 的标签、Release、附件和历史证据继续保留。
+> v1.1.3 计划以[独立公开 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3)交付，仍不是稳定版。本页定义当前产物合同、源配置事实和仍待完成的标签/实体机门禁。实时状态见 [v1.1.3 发布检查表](../release/v1.1.3-release-checklist.md)；既有 v1.1.2、v1.1.0 与 v1.0.0 的标签、Release、附件和历史证据继续保留。
 
 ## 平台不变量
 
@@ -9,22 +9,31 @@
 - Android 最低 API 24，compile/target API 36；iOS 最低版本 15，仅支持手机竖屏。
 - 所有 Android 变体都不声明 `android.permission.INTERNET`；CI 会解析最终 APK 并阻止包含 INTERNET 的产物。
 - 应用禁用 Android 系统云备份与设备迁移，避免本地数据库被系统服务上传；跨设备迁移只走应用内、用户主动选择的 `.dgbak` 流程。
-- Android 仅声明 `SCHEDULE_EXACT_ALARM` 特殊访问：授权时使用 `exactAllowWhileIdle`，拒绝时保留提醒并降级到 `inexactAllowWhileIdle`，同时明确提示可能延迟。继续禁止商店政策更严格的 `USE_EXACT_ALARM`、全屏通知和绕过免打扰能力。
-- 到点超过 2 分钟且已不在系统 pending 列表的请求才记为已过期；仍 pending 的请求一律保守保留 75 分钟后再取消。宽限依据实际 pending 状态而不是“当前”精确权限，避免用户事后授权时误杀此前的非精确提醒。
+- Android 有声提醒在取得精确闹钟特殊访问后使用原生 `AlarmManager.setAlarmClock`；到点由闹钟音频流、循环振动和 `mediaPlayback` 前台服务持续响铃，并以锁屏全屏界面或高优先级通知提供停止/稍后提醒。应用声明 `SCHEDULE_EXACT_ALARM` 与 `USE_FULL_SCREEN_INTENT`，但继续禁止商店政策更严格的 `USE_EXACT_ALARM` 和勿扰政策访问。
+- 受保护权限由应用在用户开启未来提醒或进入设置页时依次发起系统授权流程，最终仍由用户确认；应用不能静默授予通知、精确闹钟、全屏提醒或 iOS AlarmKit 权限。Android 精确访问被拒绝时仍保留提醒时间并降级为可能延迟的普通通知。
+- 普通通知回退到点超过 2 分钟且已不在系统 pending 列表时才记为已过期；仍 pending 的请求一律保守保留 75 分钟后再取消。原生闹钟另以持久化调度记录、修订号与事件回执协调停止、稍后提醒和恢复，避免重复或过期回调改写新计划。
 
 ## 本地通知平台配置
 
-Android 主清单只包含：
+Android 主清单只包含以下八项经审计权限：
 
 - `POST_NOTIFICATIONS`：Android 13+ 由用户操作触发运行时授权。
 - `VIBRATE`：遵循用户与通知频道设置。
-- `RECEIVE_BOOT_COMPLETED`：设备重启或应用更新后由插件恢复仍有效的计划提醒。
-- `SCHEDULE_EXACT_ALARM`：仅用于用户主动创建的本地事项提醒；特殊访问被拒绝或撤销时继续保存并使用非精确回退。
-- `ScheduledNotificationReceiver`、`ScheduledNotificationBootReceiver` 和 `ActionBroadcastReceiver`，全部 `exported=false`。
+- `RECEIVE_BOOT_COMPLETED`：设备重启或应用更新后恢复仍有效的原生闹钟与普通通知。
+- `SCHEDULE_EXACT_ALARM`：仅用于用户主动创建的本地事项闹钟；应用主动打开系统确认页，拒绝或撤销时继续保存并使用普通通知回退。
+- `USE_FULL_SCREEN_INTENT`：允许系统在符合政策与用户设置时展示锁屏闹钟界面；Android 14+ 由应用主动打开专用系统确认页，拒绝时保留高优先级通知与响铃服务。
+- `WAKE_LOCK`：闹钟到点时短暂唤醒并维持必要处理。
+- `FOREGROUND_SERVICE` 与 `FOREGROUND_SERVICE_MEDIA_PLAYBACK`：仅在闹钟正在响铃时运行媒体播放前台服务。
 
-Android 启用 core library desugaring，并保留 `ic_stat_danggui` 通知小图标。Dart 初始化必须使用 `AndroidInitializationSettings('ic_stat_danggui')`；通知频道一旦创建，声音和振动属性由 Android 固化，修改默认值时必须使用新的频道版本 ID。应用不申请 `USE_EXACT_ALARM`、全屏通知、勿扰模式绕过或前台服务，不把事项提醒伪装成系统闹钟。
+原生 `AlarmReceiver`、`AlarmActionReceiver`、`AlarmRescheduleReceiver`、`AlarmRingingService` 与 `AlarmActivity` 均不导出；插件的 `ScheduledNotificationReceiver`、`ScheduledNotificationBootReceiver` 和 `ActionBroadcastReceiver` 也全部 `exported=false`。`AlarmRescheduleReceiver` 在重启、应用升级、系统时间/时区及精确权限状态变化后恢复未来闹钟。小米、华为、荣耀、OPPO、一加、vivo、iQOO 和三星的后台/自启动页面只作为用户可操作入口，应用不会自行改变厂商策略。
 
-iOS 的 `AppDelegate` 将 `UNUserNotificationCenter` delegate 指向 Flutter AppDelegate，并为通知动作的后台 isolate 注册插件。通知授权仍只能在用户明确开启提醒时由 Dart 请求，不得在首次启动时突兀弹窗。
+Android 启用 core library desugaring，并保留 `ic_stat_danggui` 通知小图标。普通通知仍由按声音/振动组合版本化的频道承载；原生响铃频道本身静音，实际声音通过 `USAGE_ALARM`/闹钟音频流播放，避免重复提示音。应用不声明 INTERNET、`USE_EXACT_ALARM` 或勿扰政策访问。
+
+iOS 的 `AppDelegate` 同时接入 `UNUserNotificationCenter` 与原生提醒桥。iOS 26+ 的有声提醒使用 AlarmKit，并以 `NSAlarmKitUsageDescription` 发起系统授权；iOS 15–25 以及未获 AlarmKit 授权的兼容路径使用 Time Sensitive 本地通知。项目唯一 entitlement 是 `com.apple.developer.usernotifications.time-sensitive`，不申请 Critical Alerts、远程推送或联网后台模式。通知/AlarmKit 授权只在用户明确开启未来提醒或在设置页操作时由应用发起，不在首次启动静默或突兀索取。
+
+## 长内容与反馈交互
+
+v1.1.3 在事项列表与详情、笔记列表与编辑器、过往、设置、帮助和最近删除等长页面使用可拖动快速滚动条；滚动条与内容共享同一控制器，不改变现有暖纸、墨色与鼠尾草绿视觉层级。SnackBar 在显示新反馈前会清理旧反馈，且不持久驻留：保存约 1.5 秒、信息/校验 3 秒、撤销 4 秒、权限/错误 5 秒。具体自动化与金图结果必须以 v1.1.3 门禁实际运行记录为准。
 
 ## Android 签名决策
 
@@ -85,10 +94,10 @@ debug 回退包。仓库另以服务端 tag ruleset 限制 `v*` 的创建、更�
 
 CI 构建产出：
 
-- 从 `pubspec.yaml` 的 `1.1.2+3` 派生的通用 APK/AAB（versionCode `3`）。
-- `armeabi-v7a`、`arm64-v8a`、`x86_64` 分架构 APK（versionCode 分别为 `1003`、`2003`、`4003`）。
+- 从 `pubspec.yaml` 的 `1.1.3+4` 派生的通用 APK/AAB（versionCode `4`）。
+- `armeabi-v7a`、`arm64-v8a`、`x86_64` 分架构 APK（versionCode 分别为 `1004`、`2004`、`4004`）。
 - Android 构建内部的 `SHA256SUMS`、`SIGNING_MODE.txt`、`SIGNING_CERTIFICATE.txt`、`SIGNING_CERTIFICATE_SHA256.txt` 和工具链记录。
-- `danggui-ios-source-v1.1.2.zip`：由干净标签提交确定性打包的完整已跟踪 Flutter 跨平台源码、iOS/Xcode 工程、锁定依赖、资源、四语本地化、测试、许可证与构建说明。
+- `danggui-ios-source-v1.1.3.zip`：由干净标签提交确定性打包的完整已跟踪 Flutter 跨平台源码、iOS/Xcode 工程、锁定依赖、资源、四语本地化、测试、许可证与构建说明。
 - macOS 上的 unsigned `Runner.app` 压缩包，仅作为 iOS 源码可构建证据，不是 IPA，不能安装到普通 iPhone。
 
 CI Artifact 只用于构建审计和维护者验收，不自动等同于公开正式包。公开 Release 顶层采用严格的四文件合同：
@@ -131,13 +140,19 @@ API 33+ 在每个 AVD attempt 的第一次 Flutter 构建、安装或启动之�
 1. `SIGNING_MODE.txt` 为 `release`。
 2. `apksigner verify --verbose --print-certs` 通过，证书 SHA-256 与公开指纹一致。
 3. AAB 的 JAR 签名/证书通过，且 bundletool 解析到的 ID、版本、SDK 和权限与 APK/发布合同一致。
-4. 最终 APK 不含 INTERNET、`USE_EXACT_ALARM`、全屏通知或勿扰模式绕过权限；只允许已审计的 `SCHEDULE_EXACT_ALARM` 特殊访问。
+4. 最终 APK 的权限必须精确等于已审计的八项集合；其中允许 `SCHEDULE_EXACT_ALARM`、`USE_FULL_SCREEN_INTENT` 与响铃所需前台服务/唤醒权限，但不得包含 INTERNET、`USE_EXACT_ALARM` 或勿扰政策访问。
 5. `flutter analyze --fatal-infos`、全部测试与 API 24/API 36 Debug 插桩交互验收通过。
 6. 两个 API 作业都对 `android-linux` 同一 SHA 的通用 Release-mode APK 完成全新安装、冷启动、包/版本、基础导航、稳定进程和无崩溃烟测。
 7. API 24/API 36 的同签名 Debug 覆盖、提醒和数据保留验收通过；这项不能冒充真实旧版本正式包升级。
 8. SHA-256 与 Release 页面一致。
 
 Debug 回退包必须保留 `debug-fallback` 文件名，禁止上传应用商店或标记为正式 Release。
+
+### v1.1.3 预发布合同
+
+标签 `v1.1.3` 必须与 `pubspec.yaml` 的 `1.1.3+4` 一致，并从合并后的受保护 `main` 创建。公开附件严格为 `danggui-android-universal-release.apk`、`danggui-ios-source-v1.1.3.zip`、`danggui-developer-assets-v1.1.3.zip` 和顶层 `SHA256SUMS`；分架构 APK、AAB、unsigned `.app.zip` 与各项文本证据只存在于开发者归档。iOS 两类压缩包都不是 IPA；源码构建步骤见 [iOS 源码包构建说明](ios-source-build.md)。
+
+v1.1.3 的标签工作流、正式签名、API 24/36、iOS 26 SDK 构建与代表性实体机门禁在真实完成前不得写成已通过。代表性 Android/OEM 实体机还需验证权限往返、后台与锁屏、声音、振动、停止、10/30/60 分钟稍后提醒和旧正式包覆盖升级；iOS 还需在可用的 Xcode/iOS 26 环境验证 AlarmKit，并在 iOS 15–25 验证 Time Sensitive 回退。在实体机清单签署前保持 Pre-release。
 
 ### v1.1.2 预发布合同
 

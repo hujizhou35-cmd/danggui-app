@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="alarm_channel_name">Ringing reminders</string>
+    <string name="alarm_channel_description">Shows alarms currently ringing in Danggui, with stop and snooze actions.</string>
+    <string name="alarm_default_title">Danggui reminder</string>
+    <string name="alarm_default_body">It is time to take care of this.</string>
+    <string name="alarm_multiple_title">%1$d reminders</string>
+    <string name="alarm_snooze_action">Snooze %1$d min</string>
+    <string name="alarm_stop_action">Stop</string>
+    <string name="alarm_screen_eyebrow">Danggui reminder</string>
+    <string name="alarm_snooze_label">Snooze</string>
+    <string name="alarm_minutes">%1$d min</string>
+    <string name="alarm_stop_button">Stop alarm</string>
+    <string name="alarm_test_title">Danggui test alarm</string>
+    <string name="alarm_test_body">If you hear a sound or feel a vibration, strong alarms are working.</string>
+</resources>

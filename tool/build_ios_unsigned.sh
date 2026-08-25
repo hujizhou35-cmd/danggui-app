@@ -45,6 +45,26 @@ if [[ "${minimum_os}" != "15.0" ]]; then
   exit 1
 fi
 
+alarm_usage="$(/usr/libexec/PlistBuddy -c 'Print :NSAlarmKitUsageDescription' "${app_path}/Info.plist")"
+if [[ -z "${alarm_usage//[[:space:]]/}" ]]; then
+  echo "The final iOS app is missing NSAlarmKitUsageDescription." >&2
+  exit 1
+fi
+for locale in zh-Hans en ja ru; do
+  localized_info="${app_path}/${locale}.lproj/InfoPlist.strings"
+  if [[ ! -s "${localized_info}" ]]; then
+    echo "The final iOS app is missing ${locale} AlarmKit permission text." >&2
+    exit 1
+  fi
+  localized_usage="$(
+    /usr/bin/plutil -extract NSAlarmKitUsageDescription raw -o - "${localized_info}"
+  )"
+  if [[ -z "${localized_usage//[[:space:]]/}" ]]; then
+    echo "The final iOS app has empty ${locale} AlarmKit permission text." >&2
+    exit 1
+  fi
+done
+
 iphone_orientation="$(/usr/libexec/PlistBuddy -c 'Print :UISupportedInterfaceOrientations:0' "${app_path}/Info.plist")"
 ipad_orientation="$(/usr/libexec/PlistBuddy -c 'Print :UISupportedInterfaceOrientations~ipad:0' "${app_path}/Info.plist")"
 if [[ "${iphone_orientation}" != "UIInterfaceOrientationPortrait" || \
@@ -88,6 +108,7 @@ printf '%s\n' \
   "bundle_id=${bundle_id}" \
   "version=${version_name}+${version_code}" \
   "minimum_os=${minimum_os}" \
+  "alarmkit_usage_locales=zh-Hans,en,ja,ru" \
   "orientation=portrait" \
   "background_modes=absent" \
   "remote_notification_entitlement=absent" \

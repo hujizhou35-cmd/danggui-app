@@ -27,6 +27,7 @@ class RecentlyDeletedPage extends ConsumerStatefulWidget {
 class _RecentlyDeletedPageState extends ConsumerState<RecentlyDeletedPage> {
   late final TrashServiceApi _service;
   late Stream<List<RecentlyDeletedItem>> _items;
+  final _scrollController = ScrollController();
   final Set<String> _busyEntries = <String>{};
 
   @override
@@ -44,6 +45,12 @@ class _RecentlyDeletedPageState extends ConsumerState<RecentlyDeletedPage> {
 
   Future<void> _retry() async {
     setState(() => _items = _watchAfterCleanup());
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -93,46 +100,58 @@ class _RecentlyDeletedPageState extends ConsumerState<RecentlyDeletedPage> {
                             }
                             final items = snapshot.requireData;
                             if (items.isEmpty) {
-                              return _TrashEmpty(copy: copy, onRefresh: _retry);
+                              return _TrashEmpty(
+                                copy: copy,
+                                onRefresh: _retry,
+                                scrollController: _scrollController,
+                              );
                             }
                             return Semantics(
                               container: true,
                               label: copy.listSummary(items.length),
-                              child: RefreshIndicator(
-                                onRefresh: _retry,
-                                child: ListView.separated(
-                                  key: const PageStorageKey<String>(
-                                    'recently-deleted-list',
+                              child: DangguiFastScrollbar(
+                                controller: _scrollController,
+                                child: RefreshIndicator(
+                                  onRefresh: _retry,
+                                  child: ListView.separated(
+                                    key: const PageStorageKey<String>(
+                                      'recently-deleted-list',
+                                    ),
+                                    controller: _scrollController,
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(),
+                                    padding: EdgeInsets.fromLTRB(
+                                      context
+                                          .dangguiTheme
+                                          .pageHorizontalPadding,
+                                      8,
+                                      context
+                                          .dangguiTheme
+                                          .pageHorizontalPadding,
+                                      32,
+                                    ),
+                                    itemCount: items.length + 1,
+                                    separatorBuilder: (context, index) =>
+                                        SizedBox(
+                                          height: context.dangguiTheme.cardGap,
+                                        ),
+                                    itemBuilder: (context, index) {
+                                      if (index == 0) {
+                                        return _RetentionNotice(copy: copy);
+                                      }
+                                      final item = items[index - 1];
+                                      return _TrashCard(
+                                        key: ValueKey<String>(
+                                          'trash-card-${item.id}',
+                                        ),
+                                        item: item,
+                                        copy: copy,
+                                        busy: _busyEntries.contains(item.id),
+                                        onRestore: () => _restore(item),
+                                        onDelete: () => _confirmDelete(item),
+                                      );
+                                    },
                                   ),
-                                  physics:
-                                      const AlwaysScrollableScrollPhysics(),
-                                  padding: EdgeInsets.fromLTRB(
-                                    context.dangguiTheme.pageHorizontalPadding,
-                                    8,
-                                    context.dangguiTheme.pageHorizontalPadding,
-                                    32,
-                                  ),
-                                  itemCount: items.length + 1,
-                                  separatorBuilder: (context, index) =>
-                                      SizedBox(
-                                        height: context.dangguiTheme.cardGap,
-                                      ),
-                                  itemBuilder: (context, index) {
-                                    if (index == 0) {
-                                      return _RetentionNotice(copy: copy);
-                                    }
-                                    final item = items[index - 1];
-                                    return _TrashCard(
-                                      key: ValueKey<String>(
-                                        'trash-card-${item.id}',
-                                      ),
-                                      item: item,
-                                      copy: copy,
-                                      busy: _busyEntries.contains(item.id),
-                                      onRestore: () => _restore(item),
-                                      onDelete: () => _confirmDelete(item),
-                                    );
-                                  },
                                 ),
                               ),
                             );
@@ -157,9 +176,16 @@ class _RecentlyDeletedPageState extends ConsumerState<RecentlyDeletedPage> {
     try {
       await _service.restore(item.id);
       await widget.onChanged?.call();
-      if (mounted) _showMessage(copy.restored);
+      if (mounted) {
+        _showMessage(copy.restored, duration: dangguiSnackBarBriefDuration);
+      }
     } on Object {
-      if (mounted) _showMessage(copy.operationFailed);
+      if (mounted) {
+        _showMessage(
+          copy.operationFailed,
+          duration: dangguiSnackBarErrorDuration,
+        );
+      }
     } finally {
       if (mounted) setState(() => _busyEntries.remove(item.id));
     }
@@ -199,18 +225,29 @@ class _RecentlyDeletedPageState extends ConsumerState<RecentlyDeletedPage> {
     try {
       await _service.permanentlyDelete(item.id);
       await widget.onChanged?.call();
-      if (mounted) _showMessage(copy.permanentlyDeleted);
+      if (mounted) {
+        _showMessage(
+          copy.permanentlyDeleted,
+          duration: dangguiSnackBarBriefDuration,
+        );
+      }
     } on Object {
-      if (mounted) _showMessage(copy.operationFailed);
+      if (mounted) {
+        _showMessage(
+          copy.operationFailed,
+          duration: dangguiSnackBarErrorDuration,
+        );
+      }
     } finally {
       if (mounted) setState(() => _busyEntries.remove(item.id));
     }
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  void _showMessage(
+    String message, {
+    Duration duration = dangguiSnackBarStandardDuration,
+  }) {
+    showDangguiSnackBar(context, message: message, duration: duration);
   }
 }
 
@@ -452,51 +489,60 @@ class _TrashCard extends StatelessWidget {
 }
 
 class _TrashEmpty extends StatelessWidget {
-  const _TrashEmpty({required this.copy, required this.onRefresh});
+  const _TrashEmpty({
+    required this.copy,
+    required this.onRefresh,
+    required this.scrollController,
+  });
 
   final _TrashCopy copy;
   final Future<void> Function() onRefresh;
+  final ScrollController scrollController;
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.dangguiTheme;
-    return RefreshIndicator(
-      onRefresh: onRefresh,
-      child: ListView(
-        key: const ValueKey<String>('trash-empty-state'),
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: 28),
-        children: <Widget>[
-          SizedBox(height: MediaQuery.sizeOf(context).height * .2),
-          Semantics(
-            container: true,
-            label: '${copy.emptyTitle}. ${copy.emptyBody}',
-            child: ExcludeSemantics(
-              child: Column(
-                children: <Widget>[
-                  Icon(
-                    Icons.delete_sweep_outlined,
-                    size: 54,
-                    color: tokens.muted2,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    copy.emptyTitle,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    copy.emptyBody,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium
-                        ?.copyWith(color: tokens.muted),
-                  ),
-                ],
+    return DangguiFastScrollbar(
+      controller: scrollController,
+      child: RefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView(
+          key: const ValueKey<String>('trash-empty-state'),
+          controller: scrollController,
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          children: <Widget>[
+            SizedBox(height: MediaQuery.sizeOf(context).height * .2),
+            Semantics(
+              container: true,
+              label: '${copy.emptyTitle}. ${copy.emptyBody}',
+              child: ExcludeSemantics(
+                child: Column(
+                  children: <Widget>[
+                    Icon(
+                      Icons.delete_sweep_outlined,
+                      size: 54,
+                      color: tokens.muted2,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      copy.emptyTitle,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      copy.emptyBody,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium
+                          ?.copyWith(color: tokens.muted),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

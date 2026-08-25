@@ -105,7 +105,7 @@ void main() {
       expect(pastMarkdown, contains('用户自由修改后的正文'));
       expect(pastMarkdown, contains('raw-event-one'));
       expect(result.manifest['appId'], 'com.danggui.memo');
-      expect(result.manifest['appVersion'], '1.1.2+3');
+      expect(result.manifest['appVersion'], '1.1.3+4');
       expect(result.manifest['databaseSchemaVersion'], 1);
       final counts = result.manifest['recordCounts']! as Map<String, dynamic>;
       expect(counts['tasks'], 2);

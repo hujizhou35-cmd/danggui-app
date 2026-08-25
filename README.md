@@ -17,14 +17,14 @@
 </p>
 
 <p align="center">
-  <img alt="版本：v1.1.2 公开预发布" src="https://img.shields.io/badge/版本-v1.1.2%20公开预发布-B5684C?style=flat-square" />
+  <img alt="版本：v1.1.3 公开预发布" src="https://img.shields.io/badge/版本-v1.1.3%20公开预发布-B5684C?style=flat-square" />
   <img alt="平台：Android 与 iOS 源码" src="https://img.shields.io/badge/平台-Android%20%7C%20iOS%20源码-6F8068?style=flat-square" />
   <img alt="数据：本地优先、可读导出" src="https://img.shields.io/badge/数据-本地优先%20%7C%20可读导出-81786F?style=flat-square" />
   <img alt="许可证：Apache 2.0" src="https://img.shields.io/badge/代码许可-Apache--2.0-2E2925?style=flat-square" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2"><strong>下载 Android</strong></a> ·
+  <a href="https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3"><strong>下载 Android</strong></a> ·
   <a href="#产品预览">产品预览</a> ·
   <a href="#数据与隐私">数据与隐私</a> ·
   <a href="#参与项目">参与项目</a>
@@ -85,10 +85,10 @@
 
 | 平台 | 推荐入口 | 当前交付 |
 | --- | --- | --- |
-| Android 7.0+ | [v1.1.2 公开预发布](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | 正式签名的通用 APK；多数用户下载 `danggui-android-universal-release.apk` |
+| Android 7.0+ | [v1.1.3 公开预发布](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3) | 正式签名的通用 APK；多数用户下载 `danggui-android-universal-release.apk` |
 | iOS | [源码构建说明](docs/architecture/ios-source-build.md) | 完整 Xcode 源码与无签名构建证据；不提供 IPA 或 TestFlight |
 
-v1.1.2 仍标记为 **Pre-release**：自动化验收已经通过，但不同厂商 Android 实体机上的通知、锁屏、声音、振动和覆盖升级仍在继续验证。安装前建议备份已有数据，并使用 Release 中的 `SHA256SUMS` 核对下载文件。分架构 APK、AAB、iOS 构建证据、签名证书与校验记录统一收在 `danggui-developer-assets-v1.1.2.zip`，普通用户不需要下载；完整边界见[交付说明](docs/architecture/platform-delivery.md)与 [v1.1.2 检查表](docs/release/v1.1.2-release-checklist.md)。
+v1.1.3 仍标记为 **Pre-release**：自动化验收已经通过，但不同厂商 Android 实体机上的原生闹钟、锁屏、声音、振动和覆盖升级仍在继续验证。安装前建议备份已有数据，并使用 Release 中的 `SHA256SUMS` 核对下载文件。分架构 APK、AAB、iOS 构建证据、签名证书与校验记录统一收在 `danggui-developer-assets-v1.1.3.zip`，普通用户不需要下载；完整边界见[交付说明](docs/architecture/platform-delivery.md)与 [v1.1.3 检查表](docs/release/v1.1.3-release-checklist.md)。
 
 ## 版本演进
 
@@ -97,6 +97,7 @@ v1.1.2 仍标记为 **Pre-release**：自动化验收已经通过，但不同厂
 | [v1.0.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0) | 建立事项、提醒、过往、笔记、备份与可读导出的完整本地基础。 |
 | [v1.1.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0) | 加固编辑器与提醒生命周期，并恢复小球与幼苗的完整启动体验。 |
 | [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | 支持每分钟选择提醒，增加明确保存反馈，压紧过往排版，并消除重复启动画面。 |
+| [v1.1.3](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3) | 将有声提醒升级为原生闹钟，增加应用内权限引导、长页快速滚动条，并修复长期不消失的操作提示。 |
 
 完整变化见 [CHANGELOG](CHANGELOG.md)。
 

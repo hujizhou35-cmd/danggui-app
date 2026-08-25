@@ -33,6 +33,8 @@
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
 		<key>LSRequiresIPhoneOS</key>
 		<true/>
+		<key>NSAlarmKitUsageDescription</key>
+		<string>当归会为你设置明确开启的定时提醒，并在到点时显示系统闹钟。</string>
 		<key>UIApplicationSceneManifest</key>
 		<dict>
 			<key>UIApplicationSupportsMultipleScenes</key>

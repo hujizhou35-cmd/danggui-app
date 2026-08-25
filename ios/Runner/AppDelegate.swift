@@ -6,6 +6,7 @@ import flutter_local_notifications
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var notificationSettingsChannel: FlutterMethodChannel?
+  private var reminderPlatformBridge: ReminderPlatformBridge?
 
   override func application(
     _ application: UIApplication,
@@ -94,5 +95,8 @@ import flutter_local_notifications
       }
     }
     notificationSettingsChannel = channel
+    reminderPlatformBridge = ReminderPlatformBridge(
+      messenger: engineBridge.applicationRegistrar.messenger()
+    )
   }
 }

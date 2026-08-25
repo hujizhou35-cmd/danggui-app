@@ -14,6 +14,7 @@ import '../../../l10n/app_localizations.dart';
 import '../../data/database.dart';
 import '../../data/database_provider.dart';
 import '../../domain/models.dart';
+import 'native_alarm_platform.dart';
 
 const _snoozeActionPrefix = 'danggui.snooze.';
 const _supportedSnoozeMinutes = <int>[10, 30, 60];
@@ -72,6 +73,31 @@ abstract interface class ReminderCapabilityGateway {
   Future<bool> requestExactAlarmPermission();
 }
 
+/// Optional native alarm seam. Sound-enabled reminders use the operating
+/// system's alarm facilities, while silent reminders keep the ordinary local
+/// notification path. Keeping this separate avoids widening lightweight test
+/// fakes that only exercise local notifications.
+abstract interface class NativeReminderGateway {
+  Future<NativeAlarmCapabilities> nativeAlarmCapabilities();
+  Future<bool> requestAlarmAuthorization();
+  Future<bool> requestFullScreenPermission();
+  Future<void> openNotificationSettings();
+  Future<void> openAlarmSoundSettings();
+  Future<bool> openOemAutostartSettings();
+  Future<void> scheduleTestAlarm({
+    required String title,
+    required String body,
+    required bool vibrationEnabled,
+  });
+  Future<void> cancelReminder({
+    required String reminderId,
+    required int notificationId,
+  });
+  Future<Set<String>> activeNativeAlarmIds();
+  Future<List<NativeAlarmEvent>> drainAlarmEvents();
+  Future<void> acknowledgeAlarmEvents(Set<String> eventIds);
+}
+
 final class ReminderDeliveryCapabilities {
   const ReminderDeliveryCapabilities({
     required this.notificationsGranted,
@@ -80,6 +106,8 @@ final class ReminderDeliveryCapabilities {
     required this.soundAvailable,
     required this.vibrationAvailable,
     required this.vibrationControlledBySystem,
+    this.strongAlarmAuthorized,
+    this.timeSensitiveAvailable,
   });
 
   final bool? notificationsGranted;
@@ -88,6 +116,8 @@ final class ReminderDeliveryCapabilities {
   final bool? soundAvailable;
   final bool? vibrationAvailable;
   final bool vibrationControlledBySystem;
+  final bool? strongAlarmAuthorized;
+  final bool? timeSensitiveAvailable;
 
   bool get precisionRestricted =>
       exactAlarmPermissionRequired && !exactSchedulingAvailable;
@@ -97,10 +127,14 @@ final class ReminderAuthorizationResult {
   const ReminderAuthorizationResult({
     required this.notificationsGranted,
     required this.exactSchedulingAvailable,
+    this.strongAlarmAuthorized = false,
+    this.fullScreenAllowed,
   });
 
   final bool notificationsGranted;
   final bool exactSchedulingAvailable;
+  final bool strongAlarmAuthorized;
+  final bool? fullScreenAllowed;
 }
 
 /// Every string rendered by the operating system for a reminder.
@@ -128,6 +162,9 @@ final class NotificationPresentation {
 
 final class LocalNotificationRequest {
   const LocalNotificationRequest({
+    required this.reminderId,
+    required this.taskId,
+    required this.scheduleRevision,
     required this.notificationId,
     required this.title,
     required this.body,
@@ -137,8 +174,12 @@ final class LocalNotificationRequest {
     required this.defaultSnoozeMinutes,
     required this.exactScheduling,
     required this.payload,
+    required this.localeTag,
   });
 
+  final String reminderId;
+  final String taskId;
+  final int scheduleRevision;
   final int notificationId;
   final String title;
   final String body;
@@ -148,6 +189,7 @@ final class LocalNotificationRequest {
   final int defaultSnoozeMinutes;
   final bool exactScheduling;
   final String payload;
+  final String localeTag;
 }
 
 final class NotificationCoordinator {
@@ -177,6 +219,7 @@ final class NotificationCoordinator {
   bool _startupRescheduleComplete = false;
   bool _exactSchedulingAvailable = true;
   bool? _lastExactSchedulingAvailable;
+  bool? _lastStrongAlarmAuthorized;
   Timer? _retryTimer;
   bool _disposed = false;
 
@@ -269,31 +312,125 @@ final class NotificationCoordinator {
   }
 
   /// Checks first so the system prompt is only requested when necessary.
-  Future<ReminderAuthorizationResult>
-  ensurePermissionsForFutureReminder() async {
+  Future<ReminderAuthorizationResult> ensurePermissionsForFutureReminder({
+    bool soundEnabled = true,
+    bool vibrationEnabled = true,
+  }) async {
+    if (!_gateway.isSupported) {
+      return const ReminderAuthorizationResult(
+        notificationsGranted: true,
+        exactSchedulingAvailable: true,
+        strongAlarmAuthorized: true,
+      );
+    }
+    await initialize();
+    final nativeGateway = _gateway is NativeReminderGateway
+        ? _gateway as NativeReminderGateway
+        : null;
+    NativeAlarmCapabilities? nativeCapabilities;
+    if (soundEnabled && nativeGateway != null) {
+      nativeCapabilities = await nativeGateway.nativeAlarmCapabilities();
+      if (nativeCapabilities.supported &&
+          nativeCapabilities.platform == 'ios' &&
+          nativeCapabilities.alarmAuthorization !=
+              NativeAlarmAuthorization.authorized) {
+        await nativeGateway.requestAlarmAuthorization();
+        _startupRescheduleComplete = false;
+        nativeCapabilities = await nativeGateway.nativeAlarmCapabilities();
+      }
+    }
+
     var notificationsGranted = await permissionsGranted() == true;
-    if (!notificationsGranted) {
+    final alarmKitAuthorized =
+        soundEnabled &&
+        nativeCapabilities?.platform == 'ios' &&
+        nativeCapabilities?.alarmAuthorization ==
+            NativeAlarmAuthorization.authorized;
+    if (!notificationsGranted && !alarmKitAuthorized) {
       notificationsGranted = await requestPermissions();
     }
-    if (!notificationsGranted) {
+    if (!notificationsGranted && !alarmKitAuthorized) {
       return const ReminderAuthorizationResult(
         notificationsGranted: false,
         exactSchedulingAvailable: false,
       );
     }
 
-    var capabilities = await deliveryCapabilities();
+    var capabilities = await deliveryCapabilities(
+      soundEnabled: soundEnabled,
+      vibrationEnabled: vibrationEnabled,
+    );
     var exactSchedulingAvailable =
         capabilities?.exactSchedulingAvailable ?? true;
     if (capabilities?.precisionRestricted == true) {
       exactSchedulingAvailable = await requestExactAlarmPermission();
-      capabilities = await deliveryCapabilities();
+      capabilities = await deliveryCapabilities(
+        soundEnabled: soundEnabled,
+        vibrationEnabled: vibrationEnabled,
+      );
       exactSchedulingAvailable =
           capabilities?.exactSchedulingAvailable ?? exactSchedulingAvailable;
     }
+    bool? fullScreenAllowed = nativeCapabilities?.fullScreenAllowed;
+    if (soundEnabled &&
+        nativeGateway != null &&
+        nativeCapabilities?.platform == 'android' &&
+        exactSchedulingAvailable &&
+        fullScreenAllowed == false) {
+      await nativeGateway.requestFullScreenPermission();
+      nativeCapabilities = await nativeGateway.nativeAlarmCapabilities();
+      fullScreenAllowed = nativeCapabilities.fullScreenAllowed;
+    }
+    final strongAlarmAuthorized = !soundEnabled
+        ? false
+        : switch (nativeCapabilities?.platform) {
+            'ios' =>
+              nativeCapabilities?.supported != true ||
+                  nativeCapabilities?.alarmAuthorization ==
+                      NativeAlarmAuthorization.authorized,
+            'android' => exactSchedulingAvailable,
+            _ => false,
+          };
     return ReminderAuthorizationResult(
-      notificationsGranted: true,
+      notificationsGranted: notificationsGranted || alarmKitAuthorized,
       exactSchedulingAvailable: exactSchedulingAvailable,
+      strongAlarmAuthorized: strongAlarmAuthorized,
+      fullScreenAllowed: fullScreenAllowed,
+    );
+  }
+
+  Future<void> openNotificationSettings() async {
+    final gateway = _gateway;
+    if (gateway is NativeReminderGateway) {
+      await (gateway as NativeReminderGateway).openNotificationSettings();
+    }
+  }
+
+  Future<void> openAlarmSoundSettings() async {
+    final gateway = _gateway;
+    if (gateway is NativeReminderGateway) {
+      await (gateway as NativeReminderGateway).openAlarmSoundSettings();
+    }
+  }
+
+  Future<bool> openOemAutostartSettings() async {
+    final gateway = _gateway;
+    if (gateway is! NativeReminderGateway) return false;
+    return (gateway as NativeReminderGateway).openOemAutostartSettings();
+  }
+
+  Future<void> scheduleTestAlarm({
+    required String title,
+    required String body,
+    bool vibrationEnabled = true,
+  }) async {
+    await initialize();
+    final gateway = _gateway;
+    if (gateway is! NativeReminderGateway) return;
+    await (gateway as NativeReminderGateway).scheduleTestAlarm(
+      title: title,
+      body: body,
+      vibrationEnabled: vibrationEnabled,
     );
   }
 
@@ -485,6 +622,7 @@ final class NotificationCoordinator {
   Future<void> _reconcileOnce() async {
     final database = await _readDatabase();
     await _initializeForDatabase(database);
+    await _applyNativeAlarmEvents(database);
     final capabilities = await _readCapabilities(
       soundEnabled: true,
       vibrationEnabled: true,
@@ -498,6 +636,15 @@ final class NotificationCoordinator {
       _startupRescheduleComplete = false;
     }
     _lastExactSchedulingAvailable = exactSchedulingAvailable;
+    final strongAlarmAuthorized = capabilities.strongAlarmAuthorized;
+    if (_lastStrongAlarmAuthorized != null &&
+        strongAlarmAuthorized != null &&
+        _lastStrongAlarmAuthorized != strongAlarmAuthorized) {
+      _startupRescheduleComplete = false;
+    }
+    if (strongAlarmAuthorized != null) {
+      _lastStrongAlarmAuthorized = strongAlarmAuthorized;
+    }
     _exactSchedulingAvailable = exactSchedulingAvailable;
     final expirationCutoff = _nowMicros();
     await _expirePastReminders(database, expirationCutoff);
@@ -550,6 +697,155 @@ final class NotificationCoordinator {
     if (rows.length == 64) _reconcileRequested = true;
   }
 
+  Future<void> _applyNativeAlarmEvents(DangguiDatabase database) async {
+    final gateway = _gateway;
+    if (gateway is! NativeReminderGateway) return;
+    List<NativeAlarmEvent> events;
+    try {
+      events = await (gateway as NativeReminderGateway).drainAlarmEvents();
+    } on Object {
+      // Event synchronization repairs durable app state, but a vendor method
+      // channel failure must not block ordinary reminder reconciliation.
+      return;
+    }
+    if (events.isEmpty) return;
+    events.sort(
+      (left, right) => left.occurredAtUtc.compareTo(right.occurredAtUtc),
+    );
+    var changed = false;
+    await database.transaction(() async {
+      for (final event in events) {
+        if (event.reminderId.isEmpty) continue;
+        final row = await database
+            .customSelect(
+              'SELECT r.id, r.task_id, r.status AS reminder_status, '
+              'r.schedule_revision, t.status AS task_status '
+              'FROM reminders r JOIN tasks t ON t.id = r.task_id '
+              'WHERE r.id = ?',
+              variables: <Variable<Object>>[
+                Variable.withString(event.reminderId),
+              ],
+            )
+            .getSingleOrNull();
+        if (row == null ||
+            row.read<String>('task_status') != TaskStatus.active.name ||
+            (event.taskId.isNotEmpty &&
+                row.read<String>('task_id') != event.taskId)) {
+          continue;
+        }
+        final currentRevision = row.read<int>('schedule_revision');
+        if (event.scheduleRevision > 0 &&
+            currentRevision != event.scheduleRevision) {
+          continue;
+        }
+        final occurredAt = event.occurredAtUtc.microsecondsSinceEpoch;
+        switch (event.type) {
+          case NativeAlarmEventType.fired:
+            final affected = await database.customUpdate(
+              'UPDATE reminders SET last_fired_at_utc = ?, '
+              'updated_at_utc = ?, row_version = row_version + 1 '
+              'WHERE id = ? AND schedule_revision = ? AND status = ? '
+              'AND (last_fired_at_utc IS NULL OR last_fired_at_utc <> ?)',
+              variables: <Variable<Object>>[
+                Variable.withInt(occurredAt),
+                Variable.withInt(occurredAt),
+                Variable.withString(event.reminderId),
+                Variable.withInt(currentRevision),
+                Variable.withString(ReminderStatus.scheduled.name),
+                Variable.withInt(occurredAt),
+              ],
+              updates: <TableInfo<Table, Object?>>{database.reminders},
+            );
+            changed = affected == 1 || changed;
+          case NativeAlarmEventType.stopped:
+            final revision = currentRevision + 1;
+            final affected = await database.customUpdate(
+              'UPDATE reminders SET status = ?, pause_reason = NULL, '
+              'schedule_revision = ?, last_fired_at_utc = ?, '
+              'updated_at_utc = ?, row_version = row_version + 1 '
+              'WHERE id = ? AND schedule_revision = ? AND status IN (?, ?)',
+              variables: <Variable<Object>>[
+                Variable.withString(ReminderStatus.expired.name),
+                Variable.withInt(revision),
+                Variable.withInt(occurredAt),
+                Variable.withInt(occurredAt),
+                Variable.withString(event.reminderId),
+                Variable.withInt(currentRevision),
+                Variable.withString(ReminderStatus.scheduled.name),
+                Variable.withString(ReminderStatus.expired.name),
+              ],
+              updates: <TableInfo<Table, Object?>>{database.reminders},
+            );
+            if (affected == 1) {
+              await _insertOutboxJob(
+                database,
+                reminderId: event.reminderId,
+                taskId: row.read<String>('task_id'),
+                revision: revision,
+                kind: PlatformJobKind.cancelReminder,
+                nowMicros: _nowMicros(),
+              );
+              changed = true;
+            }
+          case NativeAlarmEventType.snoozed:
+            final minutes = event.snoozeMinutes;
+            if (minutes == null || !_supportedSnoozeMinutes.contains(minutes)) {
+              continue;
+            }
+            final reminderStatus = row.read<String>('reminder_status');
+            if (reminderStatus != ReminderStatus.scheduled.name &&
+                reminderStatus != ReminderStatus.expired.name) {
+              continue;
+            }
+            final revision = currentRevision + 1;
+            final scheduledUtc = event.occurredAtUtc.add(
+              Duration(minutes: minutes),
+            );
+            final scheduledLocal = scheduledUtc.toLocal();
+            final affected = await database.customUpdate(
+              'UPDATE reminders SET scheduled_local_date_time = ?, '
+              'scheduled_zone_id = ?, scheduled_at_utc = ?, '
+              'snoozed_until_utc = ?, status = ?, pause_reason = NULL, '
+              'snooze_count = snooze_count + 1, schedule_revision = ?, '
+              'last_fired_at_utc = ?, updated_at_utc = ?, '
+              'row_version = row_version + 1 '
+              'WHERE id = ? AND schedule_revision = ? AND status IN (?, ?)',
+              variables: <Variable<Object>>[
+                Variable.withString(scheduledLocal.toIso8601String()),
+                Variable.withString(scheduledLocal.timeZoneName),
+                Variable.withInt(scheduledUtc.microsecondsSinceEpoch),
+                Variable.withInt(scheduledUtc.microsecondsSinceEpoch),
+                Variable.withString(ReminderStatus.scheduled.name),
+                Variable.withInt(revision),
+                Variable.withInt(occurredAt),
+                Variable.withInt(occurredAt),
+                Variable.withString(event.reminderId),
+                Variable.withInt(currentRevision),
+                Variable.withString(ReminderStatus.scheduled.name),
+                Variable.withString(ReminderStatus.expired.name),
+              ],
+              updates: <TableInfo<Table, Object?>>{database.reminders},
+            );
+            if (affected == 1) {
+              await _insertOutboxJob(
+                database,
+                reminderId: event.reminderId,
+                taskId: row.read<String>('task_id'),
+                revision: revision,
+                kind: PlatformJobKind.scheduleReminder,
+                nowMicros: _nowMicros(),
+              );
+              changed = true;
+            }
+        }
+      }
+    });
+    await (gateway as NativeReminderGateway).acknowledgeAlarmEvents(
+      events.map((event) => event.eventId).toSet(),
+    );
+    if (changed) await _onStateChanged?.call();
+  }
+
   /// Makes an elapsed reminder a durable historical state instead of leaving
   /// it looking scheduled forever after the operating system has fired it.
   /// Permission-denied reminders also expire without catch-up delivery.
@@ -581,15 +877,31 @@ final class NotificationCoordinator {
     // may expire after two minutes; any still-pending request receives the
     // conservative 75-minute fallback window before cancellation.
     final pendingIds = await _gateway.pendingNotificationIds();
+    final nativeActiveIds = _gateway is NativeReminderGateway
+        ? await (_gateway as NativeReminderGateway).activeNativeAlarmIds()
+        : const <String>{};
     final expiringRows = <QueryRow>[];
     for (final row in candidates) {
-      final notificationId = _notificationId(row.read<String>('id'));
+      final reminderId = row.read<String>('id');
+      final notificationId = _notificationId(reminderId);
       final isPending = pendingIds.contains(notificationId);
       final scheduledAt = row.read<int>('scheduled_at_utc');
+      final nativeAlarmIsActive = nativeActiveIds.contains(reminderId);
+      if (nativeAlarmIsActive) {
+        // A true alarm remains authoritative until its Stop or Snooze action
+        // is replayed from the native event queue. The ordinary notification
+        // 75-minute fallback must never silence an alarm that is still ringing.
+        continue;
+      }
       if (isPending && scheduledAt > pendingFallbackBefore) {
         continue;
       }
-      if (isPending) await _gateway.cancel(notificationId);
+      if (isPending) {
+        await _cancelPlatformReminder(
+          reminderId: row.read<String>('id'),
+          notificationId: notificationId,
+        );
+      }
       expiringRows.add(row);
     }
     if (expiringRows.isEmpty) return;
@@ -735,8 +1047,10 @@ final class NotificationCoordinator {
                 ReminderStatus.scheduled.name &&
             row.read<String>('task_status') == TaskStatus.active.name;
         if (!eligible) {
-          await _gateway.cancel(
-            _notificationId(row.read<String>('reminder_id')),
+          final reminderId = row.read<String>('reminder_id');
+          await _cancelPlatformReminder(
+            reminderId: reminderId,
+            notificationId: _notificationId(reminderId),
           );
           completionCode = 'ineligible_state_discarded';
         } else if (!await _schedule(database, row, now)) {
@@ -812,7 +1126,7 @@ final class NotificationCoordinator {
     final reminderId = row.read<String>('reminder_id');
     final id = notificationId ?? _notificationId(reminderId);
     if (scheduledAt <= now) {
-      await _gateway.cancel(id);
+      await _cancelPlatformReminder(reminderId: reminderId, notificationId: id);
       return true;
     }
     final plan = row.read<String>('plan_text').trim();
@@ -824,6 +1138,9 @@ final class NotificationCoordinator {
         );
     await _gateway.schedule(
       LocalNotificationRequest(
+        reminderId: reminderId,
+        taskId: row.read<String>('task_id'),
+        scheduleRevision: row.read<int>('aggregate_revision'),
         notificationId: id,
         title: row.read<String>('title'),
         body: plan.isEmpty ? presentation.emptyPlanBody : plan,
@@ -836,6 +1153,7 @@ final class NotificationCoordinator {
         defaultSnoozeMinutes: row.read<int>('default_snooze_minutes'),
         exactScheduling: _exactSchedulingAvailable,
         payload: 'task:${row.read<String>('task_id')}',
+        localeTag: presentation.localeTag,
       ),
     );
 
@@ -851,7 +1169,7 @@ final class NotificationCoordinator {
     if (current == null ||
         current.read<int>('schedule_revision') != revision ||
         current.read<String>('status') != ReminderStatus.scheduled.name) {
-      await _gateway.cancel(id);
+      await _cancelPlatformReminder(reminderId: reminderId, notificationId: id);
       return false;
     }
     await database.customStatement(
@@ -881,12 +1199,30 @@ final class NotificationCoordinator {
   Future<void> _cancel(DangguiDatabase database, QueryRow row) async {
     final reminderId = row.read<String>('reminder_id');
     final revision = row.read<int>('aggregate_revision');
-    await _gateway.cancel(_notificationId(reminderId));
+    await _cancelPlatformReminder(
+      reminderId: reminderId,
+      notificationId: _notificationId(reminderId),
+    );
     await database.customStatement(
       'DELETE FROM notification_registrations '
       'WHERE reminder_id = ? AND schedule_revision <= ?',
       <Object?>[reminderId, revision],
     );
+  }
+
+  Future<void> _cancelPlatformReminder({
+    required String reminderId,
+    required int notificationId,
+  }) async {
+    final gateway = _gateway;
+    if (gateway is NativeReminderGateway) {
+      await (gateway as NativeReminderGateway).cancelReminder(
+        reminderId: reminderId,
+        notificationId: notificationId,
+      );
+      return;
+    }
+    await gateway.cancel(notificationId);
   }
 
   Future<void> _restorePermissionDeniedReminders() async {
@@ -1029,11 +1365,19 @@ final class NotificationCoordinator {
 }
 
 final class _FlutterNotificationGateway
-    implements NotificationGateway, ReminderCapabilityGateway {
-  _FlutterNotificationGateway({FlutterLocalNotificationsPlugin? plugin})
-    : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
+    implements
+        NotificationGateway,
+        ReminderCapabilityGateway,
+        NativeReminderGateway {
+  _FlutterNotificationGateway({
+    FlutterLocalNotificationsPlugin? plugin,
+    NativeAlarmPlatform? nativeAlarmPlatform,
+  }) : _plugin = plugin ?? FlutterLocalNotificationsPlugin(),
+       _nativeAlarmPlatform =
+           nativeAlarmPlatform ?? MethodChannelNativeAlarmPlatform();
 
   final FlutterLocalNotificationsPlugin _plugin;
+  final NativeAlarmPlatform _nativeAlarmPlatform;
   NotificationPresentation? _presentation;
   bool _launchResponseHandled = false;
 
@@ -1111,6 +1455,10 @@ final class _FlutterNotificationGateway
   @override
   Future<bool> requestExactAlarmPermission() async {
     if (!Platform.isAndroid) return true;
+    final nativeCapabilities = await _nativeAlarmPlatform.getCapabilities();
+    if (nativeCapabilities.supported) {
+      return _nativeAlarmPlatform.requestExactAlarmPermission();
+    }
     final android = _plugin
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin
@@ -1125,20 +1473,25 @@ final class _FlutterNotificationGateway
     required bool soundEnabled,
     required bool vibrationEnabled,
   }) async {
+    final nativeCapabilities = await _nativeAlarmPlatform.getCapabilities();
     if (Platform.isAndroid) {
       final android = _plugin
           .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin
           >();
-      final notificationsGranted = await android?.areNotificationsEnabled();
-      bool exactSchedulingAvailable;
-      try {
-        exactSchedulingAvailable =
-            await android?.canScheduleExactNotifications() ?? false;
-      } on Object {
-        // Falling back to an inexact alarm is safer than abandoning delivery
-        // when an OEM implementation cannot answer the special-access query.
-        exactSchedulingAvailable = false;
+      final pluginNotificationsGranted = await android
+          ?.areNotificationsEnabled();
+      var exactSchedulingAvailable =
+          nativeCapabilities.exactAlarmAllowed ?? false;
+      if (nativeCapabilities.exactAlarmAllowed == null) {
+        try {
+          exactSchedulingAvailable =
+              await android?.canScheduleExactNotifications() ?? false;
+        } on Object {
+          // Falling back to an inexact alarm is safer than abandoning delivery
+          // when an OEM implementation cannot answer the special-access query.
+          exactSchedulingAvailable = false;
+        }
       }
       AndroidNotificationChannel? selectedChannel;
       try {
@@ -1162,17 +1515,29 @@ final class _FlutterNotificationGateway
       final channelEnabled =
           selectedChannel == null ||
           selectedChannel.importance.value > Importance.none.value;
+      final nativeAlarmChannelEnabled = nativeCapabilities.alarmChannelEnabled;
+      final nativeSoundAvailable = nativeAlarmChannelEnabled == false
+          ? false
+          : nativeCapabilities.alarmVolumeAudible;
       return ReminderDeliveryCapabilities(
-        notificationsGranted: notificationsGranted,
+        notificationsGranted:
+            nativeCapabilities.notificationsEnabled ??
+            pluginNotificationsGranted,
         exactSchedulingAvailable: exactSchedulingAvailable,
         exactAlarmPermissionRequired: !exactSchedulingAvailable,
-        soundAvailable: !soundEnabled || selectedChannel == null
+        soundAvailable: !soundEnabled
+            ? null
+            : nativeCapabilities.supported
+            ? nativeSoundAvailable
+            : selectedChannel == null
             ? null
             : channelEnabled && selectedChannel.playSound,
         vibrationAvailable: !vibrationEnabled || selectedChannel == null
             ? null
             : channelEnabled && selectedChannel.enableVibration,
         vibrationControlledBySystem: false,
+        strongAlarmAuthorized:
+            nativeCapabilities.supported && exactSchedulingAvailable,
       );
     }
 
@@ -1181,15 +1546,29 @@ final class _FlutterNotificationGateway
           IOSFlutterLocalNotificationsPlugin
         >()
         ?.checkPermissions();
+    final alarmKitAuthorized =
+        soundEnabled &&
+        nativeCapabilities.supported &&
+        nativeCapabilities.alarmAuthorization ==
+            NativeAlarmAuthorization.authorized;
     return ReminderDeliveryCapabilities(
-      notificationsGranted: options?.isEnabled,
+      notificationsGranted: alarmKitAuthorized || (options?.isEnabled == true),
       exactSchedulingAvailable: true,
       exactAlarmPermissionRequired: false,
-      soundAvailable: !soundEnabled || options == null
+      soundAvailable: !soundEnabled
+          ? null
+          : alarmKitAuthorized
+          ? true
+          : options == null
           ? null
           : options.isAlertEnabled && options.isSoundEnabled,
       vibrationAvailable: null,
       vibrationControlledBySystem: true,
+      strongAlarmAuthorized:
+          !soundEnabled || !nativeCapabilities.supported || alarmKitAuthorized,
+      timeSensitiveAvailable: !soundEnabled || alarmKitAuthorized
+          ? true
+          : nativeCapabilities.timeSensitiveEnabled,
     );
   }
 
@@ -1213,16 +1592,47 @@ final class _FlutterNotificationGateway
   @override
   Future<Set<int>> pendingNotificationIds() async {
     final requests = await _plugin.pendingNotificationRequests();
-    return <int>{for (final request in requests) request.id};
+    final ids = <int>{for (final request in requests) request.id};
+    for (final reminderId
+        in await _nativeAlarmPlatform.listScheduledAlarmIds()) {
+      ids.add(_notificationId(reminderId));
+    }
+    return ids;
   }
 
   @override
-  Future<void> schedule(LocalNotificationRequest request) {
+  Future<void> schedule(LocalNotificationRequest request) async {
     final presentation = _presentation;
     if (presentation == null) {
       throw StateError('Notification gateway has not been initialized.');
     }
-    return _plugin.zonedSchedule(
+    if (request.soundEnabled) {
+      final capabilities = await _nativeAlarmPlatform.getCapabilities();
+      final useNativeAlarm =
+          capabilities.supported &&
+          (Platform.isAndroid
+              ? capabilities.exactAlarmAllowed != false
+              : capabilities.alarmAuthorization ==
+                    NativeAlarmAuthorization.authorized);
+      if (useNativeAlarm) {
+        await _nativeAlarmPlatform.scheduleAlarm(
+          NativeAlarmRequest(
+            reminderId: request.reminderId,
+            taskId: request.taskId,
+            scheduleRevision: request.scheduleRevision,
+            triggerAtUtc: request.scheduledAtUtc,
+            title: request.title,
+            body: request.body,
+            vibrationEnabled: request.vibrationEnabled,
+            defaultSnoozeMinutes: request.defaultSnoozeMinutes,
+            localeTag: request.localeTag,
+          ),
+        );
+        await _plugin.cancel(id: request.notificationId);
+        return;
+      }
+    }
+    await _plugin.zonedSchedule(
       id: request.notificationId,
       title: request.title,
       body: request.body,
@@ -1261,6 +1671,9 @@ final class _FlutterNotificationGateway
           presentSound: request.soundEnabled,
           threadIdentifier: 'danggui-reminders',
           categoryIdentifier: _categoryId(request.defaultSnoozeMinutes),
+          interruptionLevel: request.soundEnabled
+              ? InterruptionLevel.timeSensitive
+              : InterruptionLevel.active,
         ),
       ),
       androidScheduleMode: request.exactScheduling
@@ -1268,10 +1681,124 @@ final class _FlutterNotificationGateway
           : AndroidScheduleMode.inexactAllowWhileIdle,
       payload: request.payload,
     );
+    await _nativeAlarmPlatform.cancelAlarm(request.reminderId);
   }
 
   @override
   Future<void> cancel(int notificationId) => _plugin.cancel(id: notificationId);
+
+  @override
+  Future<NativeAlarmCapabilities> nativeAlarmCapabilities() =>
+      _nativeAlarmPlatform.getCapabilities();
+
+  @override
+  Future<bool> requestAlarmAuthorization() =>
+      _nativeAlarmPlatform.requestAlarmAuthorization();
+
+  @override
+  Future<bool> requestFullScreenPermission() =>
+      _nativeAlarmPlatform.requestFullScreenPermission();
+
+  @override
+  Future<void> openNotificationSettings() =>
+      _nativeAlarmPlatform.openNotificationSettings();
+
+  @override
+  Future<void> openAlarmSoundSettings() =>
+      _nativeAlarmPlatform.openAlarmSoundSettings();
+
+  @override
+  Future<bool> openOemAutostartSettings() =>
+      _nativeAlarmPlatform.openOemAutostartSettings();
+
+  @override
+  Future<void> scheduleTestAlarm({
+    required String title,
+    required String body,
+    required bool vibrationEnabled,
+  }) async {
+    final capabilities = await _nativeAlarmPlatform.getCapabilities();
+    if (capabilities.supported) {
+      await _nativeAlarmPlatform.scheduleTestAlarm(
+        title: title,
+        body: body,
+        vibrationEnabled: vibrationEnabled,
+      );
+      return;
+    }
+    final presentation = _presentation;
+    if (presentation == null) {
+      throw StateError('Notification gateway has not been initialized.');
+    }
+    await _plugin.zonedSchedule(
+      id: _notificationId('__danggui_test_alarm__'),
+      title: title,
+      body: body,
+      scheduledDate: tz.TZDateTime.now(tz.UTC).add(const Duration(seconds: 15)),
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          _reminderChannelId(
+            soundEnabled: true,
+            vibrationEnabled: vibrationEnabled,
+          ),
+          presentation.channelName,
+          channelDescription: presentation.channelDescription,
+          importance: Importance.high,
+          priority: Priority.high,
+          category: AndroidNotificationCategory.alarm,
+          icon: 'ic_stat_danggui',
+          playSound: true,
+          enableVibration: vibrationEnabled,
+          vibrationPattern: vibrationEnabled ? _defaultVibrationPattern : null,
+        ),
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+          threadIdentifier: 'danggui-reminders',
+          interruptionLevel: InterruptionLevel.timeSensitive,
+        ),
+      ),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      payload: 'task:__danggui_test_alarm__',
+    );
+  }
+
+  @override
+  Future<void> cancelReminder({
+    required String reminderId,
+    required int notificationId,
+  }) async {
+    Object? firstError;
+    StackTrace? firstStackTrace;
+    try {
+      await _nativeAlarmPlatform.cancelAlarm(reminderId);
+    } on Object catch (error, stackTrace) {
+      firstError = error;
+      firstStackTrace = stackTrace;
+    }
+    try {
+      await _plugin.cancel(id: notificationId);
+    } on Object catch (error, stackTrace) {
+      firstError ??= error;
+      firstStackTrace ??= stackTrace;
+    }
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError, firstStackTrace!);
+    }
+  }
+
+  @override
+  Future<List<NativeAlarmEvent>> drainAlarmEvents() =>
+      _nativeAlarmPlatform.drainAlarmEvents();
+
+  @override
+  Future<void> acknowledgeAlarmEvents(Set<String> eventIds) =>
+      _nativeAlarmPlatform.acknowledgeAlarmEvents(eventIds);
+
+  @override
+  Future<Set<String>> activeNativeAlarmIds() =>
+      _nativeAlarmPlatform.listScheduledAlarmIds();
 }
 
 String _reminderChannelId({
