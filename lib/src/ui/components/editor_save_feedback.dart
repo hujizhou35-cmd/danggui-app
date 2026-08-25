@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'snack_bar_feedback.dart';
+
 enum EditorSaveFeedbackState { idle, saving, saved, error }
 
 /// Shared interaction state for the explicit save action in full-page editors.
@@ -48,8 +50,11 @@ mixin EditorSaveFeedbackMixin<T extends StatefulWidget> on State<T> {
       saved = await flush();
     } on Object catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.toString())));
+        showDangguiSnackBar(
+          context,
+          message: error.toString(),
+          duration: dangguiSnackBarErrorDuration,
+        );
       }
     }
     if (!mounted) return;
@@ -60,11 +65,10 @@ mixin EditorSaveFeedbackMixin<T extends StatefulWidget> on State<T> {
           : EditorSaveFeedbackState.error;
     });
     if (saved) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(savedLabel),
-          duration: const Duration(milliseconds: 1200),
-        ),
+      showDangguiSnackBar(
+        context,
+        message: savedLabel,
+        duration: dangguiSnackBarBriefDuration,
       );
     }
     _editorSaveFeedbackTimer = Timer(const Duration(milliseconds: 900), () {

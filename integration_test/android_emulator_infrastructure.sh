@@ -17,13 +17,19 @@ danggui_alarm_dump_has_scheduled_notification() {
   [[ -n "${package_name}" ]] || return 1
   [[ "${expected_epoch_millis}" =~ ^[0-9]+$ ]] || return 1
 
-  # Match an active Alarm entry and its immediately following notification
-  # receiver tag. Package allowlists and cancellation-history snapshots can
-  # contain the same strings, so independent whole-file greps are not proof of
-  # a currently pending alarm.
+  # Match an active Alarm entry and its immediately following delivery tag.
+  # v1.1.3 sound/vibration reminders use Danggui's native alarm receiver while
+  # silent/legacy registrations can still use flutter_local_notifications.
+  # Package allowlists and cancellation-history snapshots can contain the same
+  # strings, so independent whole-file greps are not proof of a pending alarm.
   awk \
     -v package_name="${package_name}" \
     -v expected_epoch_millis="${expected_epoch_millis}" '
+      BEGIN {
+        native_tag = "tag=*walarm*:" package_name ".action.FIRE_ALARM"
+        legacy_tag = "tag=*walarm*:" package_name \
+          "/com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
+      }
       index($0, "Alarm{") &&
       index($0, package_name) &&
       index($0, expected_epoch_millis) {
@@ -33,7 +39,7 @@ danggui_alarm_dump_has_scheduled_notification() {
       candidate_line > 0 &&
       NR > candidate_line &&
       NR - candidate_line <= 3 &&
-      index($0, "flutterlocalnotifications") {
+      (index($0, native_tag) || index($0, legacy_tag)) {
         found = 1
         exit
       }
@@ -42,6 +48,37 @@ danggui_alarm_dump_has_scheduled_notification() {
       }
       END { exit(found ? 0 : 1) }
     ' "${source_path}"
+}
+
+danggui_wait_for_independent_process_group() {
+  local leader_pid="$1"
+  local timeout_seconds="${2:-5}"
+  local deadline
+  local process_group_id=''
+
+  [[ "${leader_pid}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${timeout_seconds}" =~ ^[1-9][0-9]*$ ]] || return 1
+
+  # The background child initially inherits the runner shell's process group
+  # and only becomes its own group leader when setsid executes. A single ps
+  # sample can therefore observe a valid but transitional parent PGID. Wait
+  # for the fail-closed invariant that the tracked PID is also the group ID.
+  deadline=$(( SECONDS + timeout_seconds ))
+  while (( SECONDS <= deadline )); do
+    process_group_id="$(
+      ps -o pgid= -p "${leader_pid}" 2>/dev/null | tr -d '[:space:]'
+    )" || process_group_id=''
+    if [[ "${process_group_id}" == "${leader_pid}" ]]; then
+      printf '%s\n' "${process_group_id}"
+      return 0
+    fi
+    if ! kill -0 "${leader_pid}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  printf '%s\n' "${process_group_id}"
+  return 1
 }
 
 danggui_terminate_process_group() {

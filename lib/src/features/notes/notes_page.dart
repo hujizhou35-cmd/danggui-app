@@ -21,6 +21,7 @@ class NotesPage extends ConsumerStatefulWidget {
 
 class _NotesPageState extends ConsumerState<NotesPage> {
   final _searchController = TextEditingController();
+  final _notesScrollController = ScrollController();
   final _selectedIds = <String>{};
   String? _folderId;
   var _unfiledOnly = false;
@@ -28,6 +29,7 @@ class _NotesPageState extends ConsumerState<NotesPage> {
   @override
   void dispose() {
     _searchController.dispose();
+    _notesScrollController.dispose();
     super.dispose();
   }
 
@@ -172,107 +174,120 @@ class _NotesPageState extends ConsumerState<NotesPage> {
                         ),
                       );
                     }
-                    return ListView.separated(
-                      key: const PageStorageKey<String>('notes-list'),
-                      padding: const EdgeInsets.fromLTRB(17, 5, 17, 25),
-                      itemCount: notes.length,
-                      separatorBuilder: (context, index) =>
-                          const SizedBox(height: 10),
-                      itemBuilder: (context, index) {
-                        final note = notes[index];
-                        return Dismissible(
-                          key: ValueKey<String>(note.id),
-                          direction: _selectedIds.isEmpty
-                              ? DismissDirection.endToStart
-                              : DismissDirection.none,
-                          background: Container(
-                            alignment: Alignment.centerRight,
-                            padding: const EdgeInsets.only(right: 24),
-                            color: context.dangguiTheme.terraSoft,
-                            child: Icon(
-                              Icons.delete_outline,
-                              color: context.dangguiTheme.terra,
+                    return DangguiFastScrollbar(
+                      controller: _notesScrollController,
+                      child: ListView.separated(
+                        key: const PageStorageKey<String>('notes-list'),
+                        controller: _notesScrollController,
+                        padding: const EdgeInsets.fromLTRB(17, 5, 17, 25),
+                        itemCount: notes.length,
+                        separatorBuilder: (context, index) =>
+                            const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final note = notes[index];
+                          return Dismissible(
+                            key: ValueKey<String>(note.id),
+                            direction: _selectedIds.isEmpty
+                                ? DismissDirection.endToStart
+                                : DismissDirection.none,
+                            background: Container(
+                              alignment: Alignment.centerRight,
+                              padding: const EdgeInsets.only(right: 24),
+                              color: context.dangguiTheme.terraSoft,
+                              child: Icon(
+                                Icons.delete_outline,
+                                color: context.dangguiTheme.terra,
+                              ),
                             ),
-                          ),
-                          onDismissed: (_) => ref
-                              .read(appStoreProvider.notifier)
-                              .deleteNote(note.id),
-                          child: SketchCard(
-                            alternate: index.isOdd,
-                            selected: _selectedIds.contains(note.id),
-                            onTap: () => _selectedIds.isEmpty
-                                ? context.push('/notes/${note.id}')
-                                : _toggleSelection(note.id),
-                            onLongPress: () => _toggleSelection(note.id),
-                            semanticLabel: note.title,
-                            padding: const EdgeInsets.fromLTRB(17, 14, 17, 13),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: <Widget>[
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: <Widget>[
-                                      Row(
-                                        children: <Widget>[
-                                          if (_selectedIds.contains(
-                                            note.id,
-                                          )) ...<Widget>[
-                                            Icon(
-                                              Icons.check_circle_rounded,
-                                              size: 18,
-                                              color: context.dangguiTheme.sage,
+                            onDismissed: (_) => ref
+                                .read(appStoreProvider.notifier)
+                                .deleteNote(note.id),
+                            child: SketchCard(
+                              alternate: index.isOdd,
+                              selected: _selectedIds.contains(note.id),
+                              onTap: () => _selectedIds.isEmpty
+                                  ? context.push('/notes/${note.id}')
+                                  : _toggleSelection(note.id),
+                              onLongPress: () => _toggleSelection(note.id),
+                              semanticLabel: note.title,
+                              padding: const EdgeInsets.fromLTRB(
+                                17,
+                                14,
+                                17,
+                                13,
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: <Widget>[
+                                        Row(
+                                          children: <Widget>[
+                                            if (_selectedIds.contains(
+                                              note.id,
+                                            )) ...<Widget>[
+                                              Icon(
+                                                Icons.check_circle_rounded,
+                                                size: 18,
+                                                color:
+                                                    context.dangguiTheme.sage,
+                                              ),
+                                              const SizedBox(width: 6),
+                                            ],
+                                            if (note.pinned) ...<Widget>[
+                                              Icon(
+                                                Icons.push_pin_rounded,
+                                                size: 16,
+                                                color:
+                                                    context.dangguiTheme.sage,
+                                              ),
+                                              const SizedBox(width: 5),
+                                            ],
+                                            Expanded(
+                                              child: Text(
+                                                note.title.isEmpty
+                                                    ? l10n.noteTitleHint
+                                                    : note.title,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .titleMedium,
+                                              ),
                                             ),
-                                            const SizedBox(width: 6),
                                           ],
-                                          if (note.pinned) ...<Widget>[
-                                            Icon(
-                                              Icons.push_pin_rounded,
-                                              size: 16,
-                                              color: context.dangguiTheme.sage,
-                                            ),
-                                            const SizedBox(width: 5),
-                                          ],
-                                          Expanded(
-                                            child: Text(
-                                              note.title.isEmpty
-                                                  ? l10n.noteTitleHint
-                                                  : note.title,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .titleMedium,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 5),
-                                      Text(
-                                        note.body,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall,
-                                      ),
-                                    ],
+                                        ),
+                                        const SizedBox(height: 5),
+                                        Text(
+                                          note.body,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall,
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(width: 10),
-                                Text(
-                                  DateFormat.Md(
-                                    Localizations.localeOf(context)
-                                        .toLanguageTag(),
-                                  ).format(note.updatedAt),
-                                  style: Theme.of(context).textTheme.labelSmall,
-                                ),
-                              ],
+                                  const SizedBox(width: 10),
+                                  Text(
+                                    DateFormat.Md(
+                                      Localizations.localeOf(context)
+                                          .toLanguageTag(),
+                                    ).format(note.updatedAt),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall,
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        );
-                      },
+                          );
+                        },
+                      ),
                     );
                   },
                 ),

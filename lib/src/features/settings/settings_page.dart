@@ -126,6 +126,7 @@ class SettingsPage extends ConsumerStatefulWidget {
 }
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
+  final _scrollController = ScrollController();
   late TimeOfDay _backupTime;
   int? _pendingTextScale;
   var _saving = false;
@@ -135,6 +136,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     super.initState();
     _backupTime =
         widget.initialBackupTime ?? const TimeOfDay(hour: 2, minute: 0);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -197,247 +204,276 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       loading: () => copy.backupStatusLoading,
       error: (error, stack) => copy.backupStatusUnavailable,
     );
-    return ListView(
-      key: const PageStorageKey<String>('settings-list'),
-      padding: EdgeInsets.fromLTRB(
-        context.dangguiTheme.pageHorizontalPadding,
-        5,
-        context.dangguiTheme.pageHorizontalPadding,
-        32,
-      ),
-      children: <Widget>[
-        _SettingsSection(
-          title: l10n.appearance,
-          children: <Widget>[
-            SettingsTile(
-              title: l10n.language,
-              subtitle: copy.languageHint,
-              trailing: _ValueChevron(
-                value: _localeLabel(l10n, settings.localeMode),
-              ),
-              onTap: enabled ? () => _chooseLocale(settings, l10n) : null,
-            ),
-            SettingsTile(
-              title: l10n.fontStyle,
-              subtitle: copy.fontHint,
-              trailing: _ValueChevron(
-                value: settings.fontMode == FontMode.sans
-                    ? l10n.sans
-                    : l10n.serif,
-              ),
-              onTap: enabled ? () => _chooseFont(settings, l10n) : null,
-            ),
-            _TextScaleTile(
-              title: l10n.textSize,
-              subtitle: copy.textSizeHint,
-              value: _pendingTextScale ?? settings.textScalePercent,
-              enabled: enabled,
-              onChanged: (value) => setState(() => _pendingTextScale = value),
-              onChangeEnd: (value) async {
-                await _save(settings.copyWith(textScalePercent: value));
-                if (mounted) setState(() => _pendingTextScale = null);
-              },
-            ),
-            SettingsTile(
-              title: l10n.density,
-              subtitle: copy.densityHint,
-              showDivider: false,
-              trailing: _ValueChevron(
-                value: settings.density == DisplayDensity.loose
-                    ? l10n.loose
-                    : l10n.compact,
-              ),
-              onTap: enabled ? () => _chooseDensity(settings, l10n) : null,
-            ),
-          ],
+    return DangguiFastScrollbar(
+      controller: _scrollController,
+      child: ListView(
+        key: const PageStorageKey<String>('settings-list'),
+        controller: _scrollController,
+        padding: EdgeInsets.fromLTRB(
+          context.dangguiTheme.pageHorizontalPadding,
+          5,
+          context.dangguiTheme.pageHorizontalPadding,
+          32,
         ),
-        _SettingsSection(
-          title: l10n.reminderSettings,
-          children: <Widget>[
-            SettingsTile(
-              title: copy.notificationPermission,
-              subtitle: copy.notificationPermissionHint,
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: enabled ? _requestNotificationPermission : null,
-            ),
-            SettingsTile(
-              title: l10n.sound,
-              subtitle: copy.soundHint,
-              trailing: DangguiSwitch(
-                value: settings.defaultSoundEnabled,
-                semanticLabel: l10n.sound,
-                size: DangguiSwitchSize.compact,
-                onChanged: enabled
-                    ? (value) =>
-                          _save(settings.copyWith(defaultSoundEnabled: value))
+        children: <Widget>[
+          _SettingsSection(
+            title: l10n.appearance,
+            children: <Widget>[
+              SettingsTile(
+                title: l10n.language,
+                subtitle: copy.languageHint,
+                trailing: _ValueChevron(
+                  value: _localeLabel(l10n, settings.localeMode),
+                ),
+                onTap: enabled ? () => _chooseLocale(settings, l10n) : null,
+              ),
+              SettingsTile(
+                title: l10n.fontStyle,
+                subtitle: copy.fontHint,
+                trailing: _ValueChevron(
+                  value: settings.fontMode == FontMode.sans
+                      ? l10n.sans
+                      : l10n.serif,
+                ),
+                onTap: enabled ? () => _chooseFont(settings, l10n) : null,
+              ),
+              _TextScaleTile(
+                title: l10n.textSize,
+                subtitle: copy.textSizeHint,
+                value: _pendingTextScale ?? settings.textScalePercent,
+                enabled: enabled,
+                onChanged: (value) => setState(() => _pendingTextScale = value),
+                onChangeEnd: (value) async {
+                  await _save(settings.copyWith(textScalePercent: value));
+                  if (mounted) setState(() => _pendingTextScale = null);
+                },
+              ),
+              SettingsTile(
+                title: l10n.density,
+                subtitle: copy.densityHint,
+                showDivider: false,
+                trailing: _ValueChevron(
+                  value: settings.density == DisplayDensity.loose
+                      ? l10n.loose
+                      : l10n.compact,
+                ),
+                onTap: enabled ? () => _chooseDensity(settings, l10n) : null,
+              ),
+            ],
+          ),
+          _SettingsSection(
+            title: l10n.reminderSettings,
+            children: <Widget>[
+              SettingsTile(
+                title: copy.notificationPermission,
+                subtitle: copy.notificationPermissionHint,
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: enabled
+                    ? () => _requestNotificationPermission(settings)
                     : null,
               ),
-            ),
-            SettingsTile(
-              title: l10n.vibration,
-              subtitle: Theme.of(context).platform == TargetPlatform.iOS
-                  ? l10n.reminderVibrationSystemControlled
-                  : copy.vibrationHint,
-              trailing: Theme.of(context).platform == TargetPlatform.iOS
-                  ? const Icon(Icons.phone_iphone_rounded)
-                  : DangguiSwitch(
-                      value: settings.defaultVibrationEnabled,
-                      semanticLabel: l10n.vibration,
-                      size: DangguiSwitchSize.compact,
-                      onChanged: enabled
-                          ? (value) => _save(
-                              settings.copyWith(defaultVibrationEnabled: value),
-                            )
-                          : null,
-                    ),
-            ),
-            SettingsTile(
-              title: l10n.snooze,
-              subtitle: copy.snoozeHint,
-              showDivider: false,
-              trailing: _ValueChevron(
-                value: _snoozeLabel(l10n, settings.defaultSnoozeMinutes),
+              if (Theme.of(context).platform == TargetPlatform.android)
+                SettingsTile(
+                  title: copy.alarmSoundSettings,
+                  subtitle: copy.alarmSoundSettingsHint,
+                  trailing: const Icon(Icons.volume_up_outlined),
+                  onTap: enabled ? _openAlarmSoundSettings : null,
+                ),
+              if (Theme.of(context).platform == TargetPlatform.android)
+                SettingsTile(
+                  title: copy.autostartSettings,
+                  subtitle: copy.autostartSettingsHint,
+                  trailing: const Icon(Icons.battery_saver_outlined),
+                  onTap: enabled ? _openAutostartSettings : null,
+                ),
+              SettingsTile(
+                title: copy.testAlarm,
+                subtitle: copy.testAlarmHint,
+                trailing: const Icon(Icons.alarm_outlined),
+                onTap: enabled ? () => _scheduleTestAlarm(settings) : null,
               ),
-              onTap: enabled ? () => _chooseSnooze(settings, l10n) : null,
-            ),
-          ],
-        ),
-        _SettingsSection(
-          title: l10n.dataAndBackup,
-          children: <Widget>[
-            SettingsTile(
-              title: l10n.autoBackup,
-              subtitle: copy.autoBackupHint,
-              trailing: DangguiSwitch(
-                value: settings.autoBackupEnabled,
-                semanticLabel: l10n.autoBackup,
-                size: DangguiSwitchSize.compact,
-                onChanged: enabled
-                    ? (value) =>
-                          _save(settings.copyWith(autoBackupEnabled: value))
-                    : null,
-              ),
-            ),
-            SettingsTile(
-              title: copy.backupTime,
-              subtitle: copy.backupTimeHint,
-              trailing: _ValueChevron(
-                value: MaterialLocalizations.of(context)
-                    .formatTimeOfDay(_backupTime, alwaysUse24HourFormat: true),
-              ),
-              onTap: enabled && settings.autoBackupEnabled
-                  ? () => _chooseBackupTime(settings)
-                  : null,
-            ),
-            Semantics(
-              label: '${copy.lastBackupStatus}: $latestBackupLabel',
-              readOnly: true,
-              child: SettingsTile(
-                title: copy.lastBackupStatus,
-                subtitle: latestBackupLabel,
-                trailing: Icon(
-                  latestBackup.when(
-                    data: (run) => switch (run?.status) {
-                      'succeeded' => Icons.check_circle_outline_rounded,
-                      'failed' => Icons.error_outline_rounded,
-                      _ => Icons.history_rounded,
-                    },
-                    loading: () => Icons.more_horiz_rounded,
-                    error: (error, stack) => Icons.help_outline_rounded,
-                  ),
-                  color: latestBackup.value?.status == 'failed'
-                      ? Theme.of(context).colorScheme.error
+              SettingsTile(
+                title: l10n.sound,
+                subtitle: copy.soundHint,
+                trailing: DangguiSwitch(
+                  value: settings.defaultSoundEnabled,
+                  semanticLabel: l10n.sound,
+                  size: DangguiSwitchSize.compact,
+                  onChanged: enabled
+                      ? (value) =>
+                            _save(settings.copyWith(defaultSoundEnabled: value))
                       : null,
                 ),
               ),
-            ),
-            SettingsTile(
-              title: copy.backupStorage,
-              subtitle: copy.backupFolderHint,
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: enabled ? _chooseBackupFolder : null,
-            ),
-            SettingsTile(
-              title: l10n.backupEncryption,
-              subtitle: copy.encryptionHint,
-              trailing: DangguiSwitch(
-                value: settings.backupEncryptionEnabled,
-                semanticLabel: l10n.backupEncryption,
-                size: DangguiSwitchSize.compact,
-                onChanged: enabled
-                    ? (value) => _changeEncryption(settings, value)
+              SettingsTile(
+                title: l10n.vibration,
+                subtitle: Theme.of(context).platform == TargetPlatform.iOS
+                    ? l10n.reminderVibrationSystemControlled
+                    : copy.vibrationHint,
+                trailing: Theme.of(context).platform == TargetPlatform.iOS
+                    ? const Icon(Icons.phone_iphone_rounded)
+                    : DangguiSwitch(
+                        value: settings.defaultVibrationEnabled,
+                        semanticLabel: l10n.vibration,
+                        size: DangguiSwitchSize.compact,
+                        onChanged: enabled
+                            ? (value) => _save(
+                                settings.copyWith(
+                                  defaultVibrationEnabled: value,
+                                ),
+                              )
+                            : null,
+                      ),
+              ),
+              SettingsTile(
+                title: l10n.snooze,
+                subtitle: copy.snoozeHint,
+                showDivider: false,
+                trailing: _ValueChevron(
+                  value: _snoozeLabel(l10n, settings.defaultSnoozeMinutes),
+                ),
+                onTap: enabled ? () => _chooseSnooze(settings, l10n) : null,
+              ),
+            ],
+          ),
+          _SettingsSection(
+            title: l10n.dataAndBackup,
+            children: <Widget>[
+              SettingsTile(
+                title: l10n.autoBackup,
+                subtitle: copy.autoBackupHint,
+                trailing: DangguiSwitch(
+                  value: settings.autoBackupEnabled,
+                  semanticLabel: l10n.autoBackup,
+                  size: DangguiSwitchSize.compact,
+                  onChanged: enabled
+                      ? (value) =>
+                            _save(settings.copyWith(autoBackupEnabled: value))
+                      : null,
+                ),
+              ),
+              SettingsTile(
+                title: copy.backupTime,
+                subtitle: copy.backupTimeHint,
+                trailing: _ValueChevron(
+                  value: MaterialLocalizations.of(
+                    context,
+                  ).formatTimeOfDay(_backupTime, alwaysUse24HourFormat: true),
+                ),
+                onTap: enabled && settings.autoBackupEnabled
+                    ? () => _chooseBackupTime(settings)
                     : null,
               ),
-            ),
-            SettingsTile(
-              title: copy.createBackup,
-              subtitle: copy.createBackupHint,
-              trailing: const Icon(Icons.save_alt_rounded),
-              onTap: enabled ? () => _createBackup(settings) : null,
-            ),
-            SettingsTile(
-              title: l10n.exportAllData,
-              subtitle: copy.exportAllDataHint,
-              trailing: const Icon(Icons.archive_outlined),
-              onTap: enabled ? _exportAllData : null,
-            ),
-            SettingsTile(
-              title: l10n.restoreBackup,
-              subtitle: l10n.restoreWarning,
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: enabled ? _restoreBackup : null,
-            ),
-            SettingsTile(
-              title: l10n.recentlyDeleted,
-              subtitle: l10n.retentionHint,
-              danger: true,
-              showDivider: false,
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: enabled ? _openRecentlyDeleted : null,
-            ),
-          ],
-        ),
-        _SettingsSection(
-          title: copy.supportAndPrivacy,
-          children: <Widget>[
-            SettingsTile(
-              title: l10n.privacy,
-              subtitle: l10n.localOnlySummary,
-              trailing: const Icon(Icons.lock_outline_rounded),
-            ),
-            SettingsTile(
-              title: l10n.helpTitle,
-              subtitle: copy.helpHint,
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => context.push('/settings/help'),
-            ),
-            SettingsTile(
-              title: copy.openSourceLicenses,
-              subtitle: copy.openSourceLicensesHint,
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => showLicensePage(
-                context: context,
-                applicationName: l10n.appName,
-                applicationVersion: appVersionName,
-                applicationIcon: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Image.asset(
-                    'assets/brand/danggui-app-icon.png',
-                    width: 64,
-                    height: 64,
+              Semantics(
+                label: '${copy.lastBackupStatus}: $latestBackupLabel',
+                readOnly: true,
+                child: SettingsTile(
+                  title: copy.lastBackupStatus,
+                  subtitle: latestBackupLabel,
+                  trailing: Icon(
+                    latestBackup.when(
+                      data: (run) => switch (run?.status) {
+                        'succeeded' => Icons.check_circle_outline_rounded,
+                        'failed' => Icons.error_outline_rounded,
+                        _ => Icons.history_rounded,
+                      },
+                      loading: () => Icons.more_horiz_rounded,
+                      error: (error, stack) => Icons.help_outline_rounded,
+                    ),
+                    color: latestBackup.value?.status == 'failed'
+                        ? Theme.of(context).colorScheme.error
+                        : null,
                   ),
                 ),
               ),
-            ),
-            SettingsTile(
-              title: l10n.about,
-              subtitle: l10n.versionLabel(appVersionName),
-              trailing: const Icon(Icons.eco_outlined),
-              showDivider: false,
-            ),
-          ],
-        ),
-      ],
+              SettingsTile(
+                title: copy.backupStorage,
+                subtitle: copy.backupFolderHint,
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: enabled ? _chooseBackupFolder : null,
+              ),
+              SettingsTile(
+                title: l10n.backupEncryption,
+                subtitle: copy.encryptionHint,
+                trailing: DangguiSwitch(
+                  value: settings.backupEncryptionEnabled,
+                  semanticLabel: l10n.backupEncryption,
+                  size: DangguiSwitchSize.compact,
+                  onChanged: enabled
+                      ? (value) => _changeEncryption(settings, value)
+                      : null,
+                ),
+              ),
+              SettingsTile(
+                title: copy.createBackup,
+                subtitle: copy.createBackupHint,
+                trailing: const Icon(Icons.save_alt_rounded),
+                onTap: enabled ? () => _createBackup(settings) : null,
+              ),
+              SettingsTile(
+                title: l10n.exportAllData,
+                subtitle: copy.exportAllDataHint,
+                trailing: const Icon(Icons.archive_outlined),
+                onTap: enabled ? _exportAllData : null,
+              ),
+              SettingsTile(
+                title: l10n.restoreBackup,
+                subtitle: l10n.restoreWarning,
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: enabled ? _restoreBackup : null,
+              ),
+              SettingsTile(
+                title: l10n.recentlyDeleted,
+                subtitle: l10n.retentionHint,
+                danger: true,
+                showDivider: false,
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: enabled ? _openRecentlyDeleted : null,
+              ),
+            ],
+          ),
+          _SettingsSection(
+            title: copy.supportAndPrivacy,
+            children: <Widget>[
+              SettingsTile(
+                title: l10n.privacy,
+                subtitle: l10n.localOnlySummary,
+                trailing: const Icon(Icons.lock_outline_rounded),
+              ),
+              SettingsTile(
+                title: l10n.helpTitle,
+                subtitle: copy.helpHint,
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => context.push('/settings/help'),
+              ),
+              SettingsTile(
+                title: copy.openSourceLicenses,
+                subtitle: copy.openSourceLicensesHint,
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => showLicensePage(
+                  context: context,
+                  applicationName: l10n.appName,
+                  applicationVersion: appVersionName,
+                  applicationIcon: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Image.asset(
+                      'assets/brand/danggui-app-icon.png',
+                      width: 64,
+                      height: 64,
+                    ),
+                  ),
+                ),
+              ),
+              SettingsTile(
+                title: l10n.about,
+                subtitle: l10n.versionLabel(appVersionName),
+                trailing: const Icon(Icons.eco_outlined),
+                showDivider: false,
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -561,7 +597,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     try {
       await widget.onBackupTimeChanged?.call(value);
     } catch (error) {
-      if (mounted) _showMessage(error.toString());
+      if (mounted) {
+        _showMessage(error.toString(), duration: dangguiSnackBarErrorDuration);
+      }
     }
   }
 
@@ -608,7 +646,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           await store.write(passphrase);
         }
       } catch (error) {
-        if (mounted) _showMessage(error.toString());
+        if (mounted) {
+          _showMessage(
+            error.toString(),
+            duration: dangguiSnackBarErrorDuration,
+          );
+        }
         return;
       }
     }
@@ -630,10 +673,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         ),
       );
       if (mounted) {
-        _showMessage(AppLocalizations.of(context).backupCreated);
+        _showMessage(
+          AppLocalizations.of(context).backupCreated,
+          duration: dangguiSnackBarBriefDuration,
+        );
       }
     } catch (error) {
-      if (mounted) _showMessage(error.toString());
+      if (mounted) {
+        _showMessage(error.toString(), duration: dangguiSnackBarErrorDuration);
+      }
     } finally {
       ref.invalidate(latestBackupRunProvider);
       if (mounted) setState(() => _saving = false);
@@ -659,7 +707,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         ),
       );
     } catch (error) {
-      if (mounted) _showMessage(error.toString());
+      if (mounted) {
+        _showMessage(error.toString(), duration: dangguiSnackBarErrorDuration);
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -712,31 +762,52 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           // Keep the original storage/settings error visible to the user.
         }
       }
-      if (mounted) _showMessage(error.toString());
+      if (mounted) {
+        _showMessage(error.toString(), duration: dangguiSnackBarErrorDuration);
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
-  Future<void> _requestNotificationPermission() async {
+  Future<void> _requestNotificationPermission(AppSettingsModel settings) async {
     var granted = false;
     var exactSchedulingAvailable = true;
-    NotificationCoordinator? notifications;
+    var strongAlarmAuthorized = !settings.defaultSoundEnabled;
+    var timeSensitiveAvailable = true;
     try {
       final coordinator = ref.read(notificationCoordinatorProvider);
-      notifications = coordinator;
-      granted = await coordinator.requestPermissions();
+      final authorization = await coordinator
+          .ensurePermissionsForFutureReminder(
+            soundEnabled: settings.defaultSoundEnabled,
+            vibrationEnabled: settings.defaultVibrationEnabled,
+          );
+      granted = authorization.notificationsGranted;
+      exactSchedulingAvailable = authorization.exactSchedulingAvailable;
+      strongAlarmAuthorized =
+          !settings.defaultSoundEnabled || authorization.strongAlarmAuthorized;
+      final capabilities = await coordinator.deliveryCapabilities(
+        soundEnabled: settings.defaultSoundEnabled,
+        vibrationEnabled: settings.defaultVibrationEnabled,
+      );
+      timeSensitiveAvailable = capabilities?.timeSensitiveAvailable != false;
     } on Object {
-      granted = false;
-    }
-    if (granted && notifications != null) {
       try {
-        exactSchedulingAvailable = await notifications
-            .requestExactAlarmPermission();
+        final capabilities = await ref
+            .read(notificationCoordinatorProvider)
+            .deliveryCapabilities(
+              soundEnabled: settings.defaultSoundEnabled,
+              vibrationEnabled: settings.defaultVibrationEnabled,
+            );
+        granted = capabilities?.notificationsGranted == true;
+        exactSchedulingAvailable =
+            capabilities?.exactSchedulingAvailable ?? false;
+        strongAlarmAuthorized =
+            !settings.defaultSoundEnabled ||
+            capabilities?.strongAlarmAuthorized != false;
+        timeSensitiveAvailable = capabilities?.timeSensitiveAvailable != false;
       } on Object {
-        // Ordinary notification access remains granted even if the platform
-        // cannot open or query Android's separate exact-alarm settings page.
-        exactSchedulingAvailable = false;
+        granted = false;
       }
     }
     if (!mounted) return;
@@ -745,10 +816,80 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _showMessage(
       !granted
           ? l10n.permissionDenied
-          : exactSchedulingAvailable
+          : !exactSchedulingAvailable
+          ? l10n.reminderStatusPrecisionLimited
+          : strongAlarmAuthorized && timeSensitiveAvailable
           ? copy.permissionGranted
-          : l10n.reminderStatusPrecisionLimited,
+          : l10n.reminderStatusSystemDeliveryLimited,
+      duration:
+          granted &&
+              exactSchedulingAvailable &&
+              strongAlarmAuthorized &&
+              timeSensitiveAvailable
+          ? dangguiSnackBarBriefDuration
+          : dangguiSnackBarErrorDuration,
     );
+  }
+
+  Future<void> _openAlarmSoundSettings() async {
+    try {
+      await ref.read(notificationCoordinatorProvider).openAlarmSoundSettings();
+    } on Object catch (error) {
+      if (mounted) {
+        _showMessage(error.toString(), duration: dangguiSnackBarErrorDuration);
+      }
+    }
+  }
+
+  Future<void> _openAutostartSettings() async {
+    try {
+      final opened = await ref
+          .read(notificationCoordinatorProvider)
+          .openOemAutostartSettings();
+      if (!opened && mounted) {
+        _showMessage(
+          _SettingsCopy.of(context).settingsUnavailable,
+          duration: dangguiSnackBarErrorDuration,
+        );
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        _showMessage(error.toString(), duration: dangguiSnackBarErrorDuration);
+      }
+    }
+  }
+
+  Future<void> _scheduleTestAlarm(AppSettingsModel settings) async {
+    final permissionDenied = AppLocalizations.of(context).permissionDenied;
+    final copy = _SettingsCopy.of(context);
+    try {
+      final coordinator = ref.read(notificationCoordinatorProvider);
+      final authorization = await coordinator
+          .ensurePermissionsForFutureReminder(
+            soundEnabled: true,
+            vibrationEnabled: settings.defaultVibrationEnabled,
+          );
+      if (!authorization.notificationsGranted ||
+          !authorization.exactSchedulingAvailable ||
+          !authorization.strongAlarmAuthorized) {
+        throw StateError(permissionDenied);
+      }
+      await coordinator.scheduleTestAlarm(
+        title: copy.testAlarmTitle,
+        body: copy.testAlarmBody,
+        vibrationEnabled: settings.defaultVibrationEnabled,
+      );
+      if (mounted) {
+        _showMessage(
+          copy.testAlarmScheduled,
+          duration: dangguiSnackBarBriefDuration,
+        );
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        _showMessage(error.toString(), duration: dangguiSnackBarErrorDuration);
+      }
+    }
   }
 
   Future<void> _restoreBackup() async {
@@ -819,7 +960,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       await (widget.onReconcileNotifications ??
               ref.read(notificationCoordinatorProvider).reconcile)
           .call();
-      if (mounted) _showMessage(_SettingsCopy.of(context).restoreCompleted);
+      if (mounted) {
+        _showMessage(
+          _SettingsCopy.of(context).restoreCompleted,
+          duration: dangguiSnackBarBriefDuration,
+        );
+      }
     } catch (error) {
       if (mounted) {
         final failure = _classifyRestoreFailure(error);
@@ -828,7 +974,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             'Backup restore failed [${failure.name}]: ${error.runtimeType}',
           );
         }
-        _showMessage(_SettingsCopy.of(context).restoreError(failure));
+        _showMessage(
+          _SettingsCopy.of(context).restoreError(failure),
+          duration: dangguiSnackBarErrorDuration,
+        );
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -983,9 +1132,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     setState(() => _saving = true);
     try {
       await operation();
-      if (mounted && successMessage != null) _showMessage(successMessage);
+      if (mounted && successMessage != null) {
+        _showMessage(successMessage, duration: dangguiSnackBarBriefDuration);
+      }
     } catch (error) {
-      if (mounted) _showMessage(error.toString());
+      if (mounted) {
+        _showMessage(error.toString(), duration: dangguiSnackBarErrorDuration);
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -997,16 +1150,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     try {
       await ref.read(appStoreProvider.notifier).saveSettings(settings);
     } catch (error) {
-      if (mounted) _showMessage(error.toString());
+      if (mounted) {
+        _showMessage(error.toString(), duration: dangguiSnackBarErrorDuration);
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  void _showMessage(
+    String message, {
+    Duration duration = dangguiSnackBarStandardDuration,
+  }) {
+    showDangguiSnackBar(context, message: message, duration: duration);
   }
 
   static String _localeLabel(AppLocalizations l10n, LocaleMode mode) =>
@@ -1456,6 +1612,16 @@ final class _SettingsCopy {
     required this.notificationPermission,
     required this.notificationPermissionHint,
     required this.permissionGranted,
+    required this.alarmSoundSettings,
+    required this.alarmSoundSettingsHint,
+    required this.autostartSettings,
+    required this.autostartSettingsHint,
+    required this.testAlarm,
+    required this.testAlarmHint,
+    required this.testAlarmTitle,
+    required this.testAlarmBody,
+    required this.testAlarmScheduled,
+    required this.settingsUnavailable,
     required this.soundHint,
     required this.vibrationHint,
     required this.snoozeHint,
@@ -1525,6 +1691,16 @@ final class _SettingsCopy {
   final String notificationPermission;
   final String notificationPermissionHint;
   final String permissionGranted;
+  final String alarmSoundSettings;
+  final String alarmSoundSettingsHint;
+  final String autostartSettings;
+  final String autostartSettingsHint;
+  final String testAlarm;
+  final String testAlarmHint;
+  final String testAlarmTitle;
+  final String testAlarmBody;
+  final String testAlarmScheduled;
+  final String settingsUnavailable;
   final String soundHint;
   final String vibrationHint;
   final String snoozeHint;
@@ -1610,9 +1786,19 @@ final class _SettingsCopy {
     fontHint: '设置标题与正文的显示风格',
     textSizeHint: '同时调整事项、过往、笔记与帮助',
     densityHint: '调整事项卡片的留白',
-    notificationPermission: '通知权限',
-    notificationPermissionHint: '用于本地通知与精确提醒；精确权限可拒绝',
-    permissionGranted: '通知权限已开启',
+    notificationPermission: '闹钟权限检查',
+    notificationPermissionHint: '由应用依次申请通知、精确闹钟、全屏提醒或 AlarmKit',
+    permissionGranted: '闹钟所需权限已开启',
+    alarmSoundSettings: '闹钟声音设置',
+    alarmSoundSettingsHint: '检查系统闹钟音量与当归响铃渠道',
+    autostartSettings: '后台与自启动',
+    autostartSettingsHint: '在小米等机型中允许当归按时启动闹钟',
+    testAlarm: '测试闹钟',
+    testAlarmHint: '15 秒后响铃，用于检查声音、振动与锁屏显示',
+    testAlarmTitle: '当归测试闹钟',
+    testAlarmBody: '如果你听到声音或感到振动，闹钟通道工作正常。',
+    testAlarmScheduled: '测试闹钟将在 15 秒后响铃',
+    settingsUnavailable: '当前设备没有可打开的厂商自启动设置页',
     soundHint: '新提醒默认播放声音',
     vibrationHint: '可与声音独立设置',
     snoozeHint: '通知操作的默认稍后提醒时长',
@@ -1689,9 +1875,22 @@ final class _SettingsCopy {
     fontHint: 'Choose the display style for headings and body text',
     textSizeHint: 'Applies to Tasks, Past, Notes, and Help',
     densityHint: 'Adjust spacing inside task cards',
-    notificationPermission: 'Notification permission',
-    notificationPermissionHint: 'For local notifications and exact timing',
-    permissionGranted: 'Notifications are enabled',
+    notificationPermission: 'Check alarm permissions',
+    notificationPermissionHint: 'Requests notifications, exact alarms, full-screen alerts, or AlarmKit as needed',
+    permissionGranted: 'Required alarm permissions are enabled',
+    alarmSoundSettings: 'Alarm sound settings',
+    alarmSoundSettingsHint:
+        'Check system alarm volume and Danggui alert delivery',
+    autostartSettings: 'Background & autostart',
+    autostartSettingsHint:
+        'Allow timely alarm startup on Xiaomi and other devices',
+    testAlarm: 'Test alarm',
+    testAlarmHint:
+        'Rings in 15 seconds to check sound, vibration, and lock screen',
+    testAlarmTitle: 'Danggui test alarm',
+    testAlarmBody: 'If you hear or feel this alert, the alarm path is working.',
+    testAlarmScheduled: 'The test alarm will ring in 15 seconds',
+    settingsUnavailable: 'No vendor autostart settings page is available',
     soundHint: 'Play sound for new reminders by default',
     vibrationHint: 'Can be configured independently from sound',
     snoozeHint: 'Default delay for the notification action',
@@ -1769,9 +1968,19 @@ final class _SettingsCopy {
     fontHint: '見出しと本文の表示スタイルを選択',
     textSizeHint: '事項・過往・ノート・ヘルプに適用',
     densityHint: '事項カードの余白を調整',
-    notificationPermission: '通知の権限',
-    notificationPermissionHint: 'ローカル通知と正確な時刻指定に使用',
-    permissionGranted: '通知が有効です',
+    notificationPermission: 'アラーム権限を確認',
+    notificationPermissionHint: '通知、正確なアラーム、全画面表示、AlarmKit を必要に応じて要求',
+    permissionGranted: '必要なアラーム権限が有効です',
+    alarmSoundSettings: 'アラーム音の設定',
+    alarmSoundSettingsHint: 'システム音量と当帰の通知設定を確認',
+    autostartSettings: 'バックグラウンドと自動起動',
+    autostartSettingsHint: 'Xiaomi などで時刻どおりに起動できるように設定',
+    testAlarm: 'アラームをテスト',
+    testAlarmHint: '15 秒後に鳴らし、音・振動・ロック画面を確認',
+    testAlarmTitle: '当帰テストアラーム',
+    testAlarmBody: '音または振動を確認できれば、アラーム経路は正常です。',
+    testAlarmScheduled: '15 秒後にテストアラームが鳴ります',
+    settingsUnavailable: 'メーカーの自動起動設定を開けません',
     soundHint: '新しい通知で音を鳴らす',
     vibrationHint: '音とは別に設定できます',
     snoozeHint: '通知操作の既定の延期時間',
@@ -1849,9 +2058,20 @@ final class _SettingsCopy {
     fontHint: 'Стиль заголовков и основного текста',
     textSizeHint: 'Для дел, прошлого, заметок и справки',
     densityHint: 'Интервалы внутри карточек дел',
-    notificationPermission: 'Разрешение на уведомления',
-    notificationPermissionHint: 'Для локальных уведомлений и точного времени',
-    permissionGranted: 'Уведомления разрешены',
+    notificationPermission: 'Проверить разрешения будильника',
+    notificationPermissionHint: 'Запрашивает уведомления, точные и полноэкранные будильники или AlarmKit',
+    permissionGranted: 'Необходимые разрешения включены',
+    alarmSoundSettings: 'Настройки звука будильника',
+    alarmSoundSettingsHint: 'Проверьте громкость будильника и канал Danggui',
+    autostartSettings: 'Фон и автозапуск',
+    autostartSettingsHint:
+        'Разрешите запуск будильника на Xiaomi и других устройствах',
+    testAlarm: 'Проверить будильник',
+    testAlarmHint: 'Сработает через 15 секунд для проверки звука и вибрации',
+    testAlarmTitle: 'Тестовый будильник Danggui',
+    testAlarmBody: 'Если слышен звук или есть вибрация, будильник работает.',
+    testAlarmScheduled: 'Тестовый будильник сработает через 15 секунд',
+    settingsUnavailable: 'Настройки автозапуска производителя недоступны',
     soundHint: 'Звук для новых напоминаний по умолчанию',
     vibrationHint: 'Настраивается независимо от звука',
     snoozeHint: 'Задержка действия «Напомнить позже»',

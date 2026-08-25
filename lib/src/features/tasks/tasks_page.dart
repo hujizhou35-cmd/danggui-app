@@ -20,12 +20,16 @@ class TasksPage extends ConsumerStatefulWidget {
 
 class _TasksPageState extends ConsumerState<TasksPage> {
   final _searchController = TextEditingController();
+  final _manualScrollController = ScrollController();
+  final _filteredScrollController = ScrollController();
   var _searchVisible = false;
   var _sortByDate = false;
 
   @override
   void dispose() {
     _searchController.dispose();
+    _manualScrollController.dispose();
+    _filteredScrollController.dispose();
     super.dispose();
   }
 
@@ -125,12 +129,60 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                       );
                     }
                     if (!_sortByDate && _searchController.text.trim().isEmpty) {
-                      return RefreshIndicator(
-                        onRefresh: ref.read(appStoreProvider.notifier).refresh,
-                        child: ReorderableListView.builder(
-                          key: const PageStorageKey<String>(
-                            'tasks-reorderable-list',
+                      return DangguiFastScrollbar(
+                        controller: _manualScrollController,
+                        child: RefreshIndicator(
+                          onRefresh: ref
+                              .read(appStoreProvider.notifier)
+                              .refresh,
+                          child: ReorderableListView.builder(
+                            key: const PageStorageKey<String>(
+                              'tasks-reorderable-list',
+                            ),
+                            scrollController: _manualScrollController,
+                            padding: EdgeInsets.fromLTRB(
+                              context.dangguiTheme.pageHorizontalPadding,
+                              5,
+                              context.dangguiTheme.pageHorizontalPadding,
+                              22,
+                            ),
+                            itemCount: tasks.length,
+                            itemBuilder: (context, index) => Padding(
+                              key: ValueKey<String>(
+                                'reorder-${tasks[index].id}',
+                              ),
+                              padding: EdgeInsets.only(
+                                bottom: context.dangguiTheme.cardGap,
+                              ),
+                              child: _buildTaskCard(
+                                context,
+                                tasks[index],
+                                index,
+                              ),
+                            ),
+                            onReorderItem: (oldIndex, newIndex) async {
+                              final reordered = tasks.toList(growable: true);
+                              final moved = reordered.removeAt(oldIndex);
+                              reordered.insert(newIndex, moved);
+                              await ref
+                                  .read(appStoreProvider.notifier)
+                                  .reorderTasks(
+                                    reordered
+                                        .map((task) => task.id)
+                                        .toList(growable: false),
+                                  );
+                            },
                           ),
+                        ),
+                      );
+                    }
+                    return DangguiFastScrollbar(
+                      controller: _filteredScrollController,
+                      child: RefreshIndicator(
+                        onRefresh: ref.read(appStoreProvider.notifier).refresh,
+                        child: ListView.separated(
+                          key: const PageStorageKey<String>('tasks-list'),
+                          controller: _filteredScrollController,
                           padding: EdgeInsets.fromLTRB(
                             context.dangguiTheme.pageHorizontalPadding,
                             5,
@@ -138,44 +190,12 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                             22,
                           ),
                           itemCount: tasks.length,
-                          itemBuilder: (context, index) => Padding(
-                            key: ValueKey<String>('reorder-${tasks[index].id}'),
-                            padding: EdgeInsets.only(
-                              bottom: context.dangguiTheme.cardGap,
-                            ),
-                            child: _buildTaskCard(context, tasks[index], index),
-                          ),
-                          onReorderItem: (oldIndex, newIndex) async {
-                            final reordered = tasks.toList(growable: true);
-                            final moved = reordered.removeAt(oldIndex);
-                            reordered.insert(newIndex, moved);
-                            await ref
-                                .read(appStoreProvider.notifier)
-                                .reorderTasks(
-                                  reordered
-                                      .map((task) => task.id)
-                                      .toList(growable: false),
-                                );
+                          separatorBuilder: (context, index) =>
+                              SizedBox(height: context.dangguiTheme.cardGap),
+                          itemBuilder: (context, index) {
+                            return _buildTaskCard(context, tasks[index], index);
                           },
                         ),
-                      );
-                    }
-                    return RefreshIndicator(
-                      onRefresh: ref.read(appStoreProvider.notifier).refresh,
-                      child: ListView.separated(
-                        key: const PageStorageKey<String>('tasks-list'),
-                        padding: EdgeInsets.fromLTRB(
-                          context.dangguiTheme.pageHorizontalPadding,
-                          5,
-                          context.dangguiTheme.pageHorizontalPadding,
-                          22,
-                        ),
-                        itemCount: tasks.length,
-                        separatorBuilder: (context, index) =>
-                            SizedBox(height: context.dangguiTheme.cardGap),
-                        itemBuilder: (context, index) {
-                          return _buildTaskCard(context, tasks[index], index);
-                        },
                       ),
                     );
                   },
@@ -298,8 +318,9 @@ class _TasksPageState extends ConsumerState<TasksPage> {
       }
     } on FormatException {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(AppLocalizations.of(context).taskTitleHint)),
+        showDangguiSnackBar(
+          context,
+          message: AppLocalizations.of(context).taskTitleHint,
         );
       }
     }
@@ -309,14 +330,14 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     final l10n = AppLocalizations.of(context);
     await ref.read(appStoreProvider.notifier).deleteTask(task.id);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(l10n.deletedTask),
-        action: SnackBarAction(
-          label: l10n.undo,
-          onPressed: () =>
-              ref.read(appStoreProvider.notifier).restoreTask(task.id),
-        ),
+    showDangguiSnackBar(
+      context,
+      message: l10n.deletedTask,
+      duration: dangguiSnackBarActionDuration,
+      action: SnackBarAction(
+        label: l10n.undo,
+        onPressed: () =>
+            ref.read(appStoreProvider.notifier).restoreTask(task.id),
       ),
     );
   }

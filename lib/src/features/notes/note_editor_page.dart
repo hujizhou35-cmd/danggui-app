@@ -35,6 +35,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     with WidgetsBindingObserver, EditorSaveFeedbackMixin<NoteEditorPage> {
   final _titleController = TextEditingController();
   final _bodyController = TextEditingController();
+  final _scrollController = ScrollController();
   final _bodyUndoController = UndoHistoryController();
   late final AppStoreController _store;
   String? _folderId;
@@ -74,6 +75,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     _bodyController.removeListener(_onDraftChanged);
     _titleController.dispose();
     _bodyController.dispose();
+    _scrollController.dispose();
     _bodyUndoController
       ..removeListener(_refreshUndoButtons)
       ..dispose();
@@ -170,64 +172,68 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
               ),
             ],
           ),
-          editor: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                TextField(
-                  key: const Key('note-editor-title'),
-                  controller: _titleController,
-                  minLines: 1,
-                  maxLines: 3,
-                  style: Theme.of(context).textTheme.titleLarge,
-                  decoration: InputDecoration(hintText: l10n.noteTitleHint),
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<String?>(
-                  key: const Key('note-editor-folder'),
-                  initialValue: _folderId,
-                  decoration: InputDecoration(labelText: l10n.folders),
-                  items: <DropdownMenuItem<String?>>[
-                    DropdownMenuItem<String?>(
-                      value: null,
-                      child: Text(l10n.uncategorized),
-                    ),
-                    for (final folder in asyncState.requireValue.folders)
+          editor: DangguiFastScrollbar(
+            controller: _scrollController,
+            child: SingleChildScrollView(
+              controller: _scrollController,
+              padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  TextField(
+                    key: const Key('note-editor-title'),
+                    controller: _titleController,
+                    minLines: 1,
+                    maxLines: 3,
+                    style: Theme.of(context).textTheme.titleLarge,
+                    decoration: InputDecoration(hintText: l10n.noteTitleHint),
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String?>(
+                    key: const Key('note-editor-folder'),
+                    initialValue: _folderId,
+                    decoration: InputDecoration(labelText: l10n.folders),
+                    items: <DropdownMenuItem<String?>>[
                       DropdownMenuItem<String?>(
-                        value: folder.id,
-                        child: Text(folder.name),
+                        value: null,
+                        child: Text(l10n.uncategorized),
                       ),
-                  ],
-                  onChanged: (value) {
-                    setState(() => _folderId = value);
-                    _onDraftChanged();
-                  },
-                ),
-                const Divider(height: 26),
-                TextField(
-                  key: const Key('note-editor-body'),
-                  controller: _bodyController,
-                  undoController: _bodyUndoController,
-                  minLines: 15,
-                  maxLines: null,
-                  keyboardType: TextInputType.multiline,
-                  style: Theme.of(context).textTheme.bodyLarge,
-                  decoration: InputDecoration(hintText: l10n.noteBodyHint),
-                  contextMenuBuilder: (context, editableTextState) {
-                    return AdaptiveTextSelectionToolbar.buttonItems(
-                      anchors: editableTextState.contextMenuAnchors,
-                      buttonItems: <ContextMenuButtonItem>[
-                        ...editableTextState.contextMenuButtonItems,
-                        ContextMenuButtonItem(
-                          label: l10n.convertToTask,
-                          onPressed: _convertSelectionToTask,
+                      for (final folder in asyncState.requireValue.folders)
+                        DropdownMenuItem<String?>(
+                          value: folder.id,
+                          child: Text(folder.name),
                         ),
-                      ],
-                    );
-                  },
-                ),
-              ],
+                    ],
+                    onChanged: (value) {
+                      setState(() => _folderId = value);
+                      _onDraftChanged();
+                    },
+                  ),
+                  const Divider(height: 26),
+                  TextField(
+                    key: const Key('note-editor-body'),
+                    controller: _bodyController,
+                    undoController: _bodyUndoController,
+                    minLines: 15,
+                    maxLines: null,
+                    keyboardType: TextInputType.multiline,
+                    style: Theme.of(context).textTheme.bodyLarge,
+                    decoration: InputDecoration(hintText: l10n.noteBodyHint),
+                    contextMenuBuilder: (context, editableTextState) {
+                      return AdaptiveTextSelectionToolbar.buttonItems(
+                        anchors: editableTextState.contextMenuAnchors,
+                        buttonItems: <ContextMenuButtonItem>[
+                          ...editableTextState.contextMenuButtonItems,
+                          ContextMenuButtonItem(
+                            label: l10n.convertToTask,
+                            onPressed: _convertSelectionToTask,
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
           ),
           toolbar: EditorToolbar(
@@ -355,8 +361,11 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
         await _persistDraft(draft);
       } on Object catch (error) {
         if (_showSaveErrors && mounted) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(error.toString())));
+          showDangguiSnackBar(
+            context,
+            message: error.toString(),
+            duration: dangguiSnackBarErrorDuration,
+          );
         }
         if (mounted) {
           _autosaveTimer?.cancel();

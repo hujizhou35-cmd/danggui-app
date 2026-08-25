@@ -128,6 +128,26 @@ abstract final class DangguiTheme {
         elevation: 0,
         shape: RoundedRectangleBorder(borderRadius: tokens.controlRadius),
       ),
+      scrollbarTheme: ScrollbarThemeData(
+        thumbColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.dragged)) {
+            return tokens.ink.withAlpha(210);
+          }
+          if (states.contains(WidgetState.hovered)) {
+            return tokens.muted.withAlpha(210);
+          }
+          return tokens.muted.withAlpha(175);
+        }),
+        thickness: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.dragged) ? 7 : 5,
+        ),
+        trackVisibility: const WidgetStatePropertyAll<bool>(false),
+        radius: const Radius.circular(99),
+        crossAxisMargin: 4,
+        mainAxisMargin: 8,
+        minThumbLength: 44,
+        interactive: true,
+      ),
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: tokens.brown,

@@ -7,6 +7,14 @@
         android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission
         android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission
+        android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+    <uses-permission
+        android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <application
         android:label="@string/app_name"
         android:name="${applicationName}"
@@ -39,6 +47,45 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <activity
+            android:name=".AlarmActivity"
+            android:directBootAware="true"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/AlarmTheme"/>
+        <service
+            android:name=".AlarmRingingService"
+            android:directBootAware="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"
+            android:stopWithTask="false"/>
+        <receiver
+            android:name=".AlarmReceiver"
+            android:directBootAware="true"
+            android:exported="false"/>
+        <receiver
+            android:name=".AlarmActionReceiver"
+            android:directBootAware="true"
+            android:exported="false"/>
+        <receiver
+            android:name=".AlarmRescheduleReceiver"
+            android:directBootAware="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.TIME_SET"/>
+                <action android:name="android.intent.action.TIMEZONE_CHANGED"/>
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
@@ -78,5 +125,14 @@
             <data
                 android:mimeType="text/plain"/>
         </intent>
+        <!-- Explicit package visibility for manufacturer-specific background-start settings. -->
+        <package android:name="com.miui.securitycenter"/>
+        <package android:name="com.huawei.systemmanager"/>
+        <package android:name="com.hihonor.systemmanager"/>
+        <package android:name="com.coloros.safecenter"/>
+        <package android:name="com.oplus.safecenter"/>
+        <package android:name="com.vivo.permissionmanager"/>
+        <package android:name="com.iqoo.secure"/>
+        <package android:name="com.samsung.android.lool"/>
     </queries>
 </manifest>

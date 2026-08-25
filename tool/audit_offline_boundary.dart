@@ -8,10 +8,14 @@ const int expectedAndroidCompileSdk = 36;
 const String expectedIosDeploymentTarget = '15.0';
 
 const Set<String> expectedAndroidPermissions = <String>{
+  'android.permission.FOREGROUND_SERVICE',
+  'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',
   'android.permission.POST_NOTIFICATIONS',
   'android.permission.RECEIVE_BOOT_COMPLETED',
   'android.permission.SCHEDULE_EXACT_ALARM',
+  'android.permission.USE_FULL_SCREEN_INTENT',
   'android.permission.VIBRATE',
+  'android.permission.WAKE_LOCK',
 };
 
 const Set<String> approvedRuntimeDependencies = <String>{
@@ -407,7 +411,7 @@ final class _Audit {
       final permissions = _androidPermissions(manifest);
       _expect(
         _sameSet(permissions, expectedAndroidPermissions),
-        'Android source manifest has only the three local-reminder permissions',
+        'Android source manifest has only the reviewed local-alarm permissions',
         '$manifestPath: permissions are ${_formatSet(permissions)}; expected '
             '${_formatSet(expectedAndroidPermissions)}',
       );
@@ -461,7 +465,7 @@ final class _Audit {
         manifest,
         RegExp(
           r'android\.permission\.(INTERNET|USE_EXACT_ALARM|'
-          r'USE_FULL_SCREEN_INTENT|ACCESS_NETWORK_STATE|'
+          r'ACCESS_NETWORK_STATE|'
           r'AD_ID|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|'
           r'READ_MEDIA_|ACCESS_FINE_LOCATION|ACCESS_COARSE_LOCATION|'
           r'CAMERA|RECORD_AUDIO)',
@@ -707,6 +711,28 @@ final class _Audit {
         ),
         'iOS background networking, tracking or local-network capability',
       );
+      _expectContains(
+        infoPath,
+        info,
+        '<key>NSAlarmKitUsageDescription</key>',
+        'iOS 26 AlarmKit authorization must explain its purpose',
+      );
+    }
+
+    for (final locale in <String>['zh-Hans', 'en', 'ja', 'ru']) {
+      final localizedInfoPath = 'ios/Runner/$locale.lproj/InfoPlist.strings';
+      final localizedInfo = _requiredText(localizedInfoPath);
+      if (localizedInfo != null) {
+        _expectMatch(
+          localizedInfoPath,
+          localizedInfo,
+          RegExp(
+            r'^"NSAlarmKitUsageDescription"\s*=\s*"[^"]+";\s*$',
+            multiLine: true,
+          ),
+          'AlarmKit permission purpose must be localized for $locale',
+        );
+      }
     }
 
     if (project != null) {
@@ -732,15 +758,29 @@ final class _Audit {
             '$appBundleIds',
       );
 
+      final entitlementAssignments = RegExp(
+        r'CODE_SIGN_ENTITLEMENTS\s*=\s*Runner/Runner\.entitlements;',
+      ).allMatches(project).length;
+      _expect(
+        entitlementAssignments == 3,
+        'all iOS app build configurations use the reviewed entitlement file',
+        '$projectPath: expected three Runner entitlement assignments, found '
+            '$entitlementAssignments',
+      );
+      _expectContains(
+        projectPath,
+        project,
+        'InfoPlist.strings in Resources',
+        'localized AlarmKit permission text must be copied into the iOS app',
+      );
       _expectNoMatch(
         projectPath,
         project,
         RegExp(
-          r'CODE_SIGN_ENTITLEMENTS|SystemCapabilities|aps-environment|'
-          r'com\.apple\.developer\.|BackgroundModes|Push',
+          r'SystemCapabilities|aps-environment|BackgroundModes|Push',
           caseSensitive: false,
         ),
-        'iOS entitlement or Xcode push/background/network capability',
+        'iOS Xcode push/background/network capability',
       );
     }
 
@@ -810,12 +850,31 @@ final class _Audit {
     final entitlements = _filesBelow(Directory(_path('ios')), const <String>{
       '.entitlements',
     });
+    final entitlementPaths = entitlements.map(_relative).toList()..sort();
     _expect(
-      entitlements.isEmpty,
-      'iOS project declares no entitlement file',
-      'ios: entitlement files require review: '
-          '${entitlements.map(_relative).join(', ')}',
+      entitlementPaths.length == 1 &&
+          entitlementPaths.single == 'ios/Runner/Runner.entitlements',
+      'iOS project declares only the reviewed Time Sensitive entitlement file',
+      'ios: entitlement files require review: ${entitlementPaths.join(', ')}',
     );
+    final runnerEntitlements = _requiredText('ios/Runner/Runner.entitlements');
+    if (runnerEntitlements != null) {
+      _expectContains(
+        'ios/Runner/Runner.entitlements',
+        runnerEntitlements,
+        '<key>com.apple.developer.usernotifications.time-sensitive</key>',
+        'iOS fallback reminders declare Time Sensitive authorization',
+      );
+      _expectNoMatch(
+        'ios/Runner/Runner.entitlements',
+        runnerEntitlements,
+        RegExp(
+          r'aps-environment|remote-notification|network|icloud|healthkit',
+          caseSensitive: false,
+        ),
+        'iOS unreviewed remote, network, cloud, or health entitlement',
+      );
+    }
 
     final iosNativeFailures = _scanDirectory(
       Directory(_path('ios/Runner')),

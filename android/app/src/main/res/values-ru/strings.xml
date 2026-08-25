@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="alarm_channel_name">Активные напоминания</string>
+    <string name="alarm_channel_description">Показывает активные будильники Danggui и позволяет остановить или отложить их.</string>
+    <string name="alarm_default_title">Напоминание Danggui</string>
+    <string name="alarm_default_body">Пора заняться этим делом.</string>
+    <string name="alarm_multiple_title">Напоминаний: %1$d</string>
+    <string name="alarm_snooze_action">Отложить на %1$d мин.</string>
+    <string name="alarm_stop_action">Остановить</string>
+    <string name="alarm_screen_eyebrow">Напоминание Danggui</string>
+    <string name="alarm_snooze_label">Отложить</string>
+    <string name="alarm_minutes">%1$d мин.</string>
+    <string name="alarm_stop_button">Остановить будильник</string>
+    <string name="alarm_test_title">Тестовый будильник Danggui</string>
+    <string name="alarm_test_body">Если слышен звук или ощущается вибрация, усиленные будильники работают.</string>
+</resources>

@@ -17,14 +17,14 @@
 </p>
 
 <p align="center">
-  <img alt="バージョン：v1.1.2 公開プレリリース" src="https://img.shields.io/badge/version-v1.1.2%20pre--release-B5684C?style=flat-square" />
+  <img alt="バージョン：v1.1.3 公開プレリリース" src="https://img.shields.io/badge/version-v1.1.3%20pre--release-B5684C?style=flat-square" />
   <img alt="プラットフォーム：Android と iOS ソース" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20source-6F8068?style=flat-square" />
   <img alt="データ：ローカルファースト、可搬" src="https://img.shields.io/badge/data-local--first%20%7C%20portable-81786F?style=flat-square" />
   <img alt="ライセンス：Apache 2.0" src="https://img.shields.io/badge/code-Apache--2.0-2E2925?style=flat-square" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2"><strong>Android 版をダウンロード</strong></a> ·
+  <a href="https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3"><strong>Android 版をダウンロード</strong></a> ·
   <a href="#プレビュー">プレビュー</a> ·
   <a href="#データとプライバシー">プライバシー</a> ·
   <a href="#参加する">参加する</a>
@@ -85,10 +85,10 @@
 
 | プラットフォーム | 推奨入口 | 現在の提供内容 |
 | --- | --- | --- |
-| Android 7.0 以降 | [v1.1.2 公開プレリリース](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | 正式署名済み汎用 APK。通常は `danggui-android-universal-release.apk` を選択 |
+| Android 7.0 以降 | [v1.1.3 公開プレリリース](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3) | 正式署名済み汎用 APK。通常は `danggui-android-universal-release.apk` を選択 |
 | iOS | [ソースビルド手順](../architecture/ios-source-build.md) | 完全な Xcode ソースと未署名ビルド証跡。IPA/TestFlight は提供しない |
 
-v1.1.2 は引き続き **Pre-release** です。自動受け入れ試験は通過していますが、メーカーの異なる Android 実機での通知、ロック画面、音、バイブレーション、上書き更新は検証中です。インストール前に既存データをバックアップし、Release の `SHA256SUMS` とダウンロードファイルを照合してください。ABI 別 APK、AAB、iOS ビルド証跡、署名証明書と検証記録は `danggui-developer-assets-v1.1.2.zip` にまとめられており、一般ユーザーには不要です。全体の境界は[配布ガイド](../architecture/platform-delivery.md)と [v1.1.2 チェックリスト](../release/v1.1.2-release-checklist.md)に記載しています。
+v1.1.3 は引き続き **Pre-release** です。自動受け入れ試験は通過していますが、メーカーの異なる Android 実機でのネイティブアラーム、ロック画面、音、バイブレーション、上書き更新は検証中です。インストール前に既存データをバックアップし、Release の `SHA256SUMS` とダウンロードファイルを照合してください。ABI 別 APK、AAB、iOS ビルド証跡、署名証明書と検証記録は `danggui-developer-assets-v1.1.3.zip` にまとめられており、一般ユーザーには不要です。全体の境界は[配布ガイド](../architecture/platform-delivery.md)と [v1.1.3 チェックリスト](../release/v1.1.3-release-checklist.md)に記載しています。
 
 ## バージョンの歩み
 
@@ -97,6 +97,7 @@ v1.1.2 は引き続き **Pre-release** です。自動受け入れ試験は通�
 | [v1.0.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.0.0) | 事項、通知、過往、ノート、バックアップ、可読エクスポートのローカル基盤を確立。 |
 | [v1.1.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0) | エディターとリマインダーのライフサイクルを安定させ、球と芽の完全な起動体験を復元。 |
 | [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | 1 分単位の通知選択と明確な保存フィードバックを追加し、「過往」をコンパクトにして重複する起動画面を解消。 |
+| [v1.1.3](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3) | 音付きリマインダーをネイティブアラームへ移行し、権限ガイド、長いページの高速スクロールバー、消えないフィードバックの修正を追加。 |
 
 全変更は [CHANGELOG](../../CHANGELOG.md) をご覧ください。
 

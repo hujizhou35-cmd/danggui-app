@@ -16,4 +16,13 @@
         <item name="android:statusBarColor">@color/danggui_paper</item>
         <item name="android:navigationBarColor">@color/danggui_paper</item>
     </style>
+    <style name="AlarmTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">@color/danggui_paper</item>
+        <item name="android:colorAccent">@color/danggui_sage</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">@color/danggui_paper</item>
+        <item name="android:navigationBarColor">@color/danggui_paper</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
 </resources>
