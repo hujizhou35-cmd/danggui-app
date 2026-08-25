@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Questions and workflow ideas / 使用问题与工作流想法
+    url: https://github.com/hujizhou35-cmd/danggui-app/discussions
+    about: Ask questions or discuss early ideas before opening an actionable issue. 使用问题和早期想法请先讨论。
   - name: Security vulnerability / 安全漏洞
     url: https://github.com/hujizhou35-cmd/danggui-app/security/advisories/new
     about: Please report sensitive security issues privately. 请私下报告敏感安全问题。

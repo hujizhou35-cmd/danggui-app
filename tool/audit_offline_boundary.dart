@@ -901,11 +901,15 @@ final class _Audit {
       'flutter analyze --fatal-infos',
       'flutter test --reporter expanded',
       'bash tool/verify_android_artifacts.sh --self-test',
+      'bash tool/assemble_release_assets.sh --self-test',
+      'bash tool/render_release_notes.sh --self-test',
       'bash integration_test/run_android_emulator_smoke_self_test.sh',
       'bash integration_test/android_emulator_infrastructure_self_test.sh',
       'bash tool/verify_android_artifacts.sh',
       'bash tool/build_ios_unsigned.sh',
       'bash tool/build_ios_source_zip.sh',
+      'bash tool/assemble_release_assets.sh',
+      'bash tool/render_release_notes.sh',
     ]) {
       _expectContains(
         workflowPath,
@@ -961,6 +965,7 @@ final class _Audit {
 
     for (final releaseAssetContract in <String>[
       'gh release delete-asset',
+      'gh release upload "\${GITHUB_REF_NAME}" "\${assets[@]}" --clobber',
       'expected_assets',
       'published_assets',
       'existing_is_prerelease',
@@ -972,6 +977,109 @@ final class _Audit {
         releaseAssetContract,
         'pre-release reruns must replace and verify the exact asset set',
       );
+    }
+
+    const releaseAssemblerPath = 'tool/assemble_release_assets.sh';
+    final releaseAssembler = _requiredText(releaseAssemblerPath) ?? '';
+    const releaseVerifierPath = 'tool/verify_release_assets.sh';
+    final releaseVerifier = _requiredText(releaseVerifierPath) ?? '';
+    const releaseNotesRendererPath = 'tool/render_release_notes.sh';
+    final releaseNotesRenderer = _requiredText(releaseNotesRendererPath) ?? '';
+    for (final publicAsset in <String>[
+      'danggui-android-universal-release.apk',
+      'danggui-ios-source-\${tag}.zip',
+      'danggui-developer-assets-\${tag}.zip',
+      'SHA256SUMS',
+    ]) {
+      _expectContains(
+        releaseVerifierPath,
+        releaseVerifier,
+        publicAsset,
+        'public releases must enforce the exact four-file allowlist',
+      );
+    }
+    for (final privateDeveloperAsset in <String>[
+      'danggui-android-armeabi-v7a-release.apk',
+      'danggui-android-arm64-v8a-release.apk',
+      'danggui-android-x86_64-release.apk',
+      'danggui-android-release.aab',
+      'danggui-ios-unsigned.app.zip',
+      'SIGNING_CERTIFICATE.txt',
+      'SIGNING_CERTIFICATE_SHA256.txt',
+      'PLATFORM_AUDIT.txt',
+      'SOURCE_ARCHIVE_CONTENTS.txt',
+    ]) {
+      _expectContains(
+        releaseAssemblerPath,
+        releaseAssembler,
+        privateDeveloperAsset,
+        'advanced packages and evidence must live in the developer archive',
+      );
+    }
+    for (final exactContract in <String>[
+      'public assets differ from the exact allowlist',
+      'developer archive differs from the exact internal allowlist',
+      'public SHA256SUMS does not cover exactly the public payloads',
+      'developer SHA256SUMS does not cover every internal payload exactly once',
+    ]) {
+      _expectContains(
+        releaseVerifierPath,
+        releaseVerifier,
+        exactContract,
+        'release verification must fail closed on allowlist or checksum drift',
+      );
+    }
+    _expect(
+      !workflow.contains('cp staging/android/*.apk release/') &&
+          !workflow.contains('cp staging/android/*.aab release/') &&
+          !workflow.contains(
+            'cp staging/android/SIGNING_CERTIFICATE_SHA256.txt release/',
+          ) &&
+          !workflow.contains(
+            'cp staging/ios/danggui-ios-unsigned.app.zip release/',
+          ),
+      'workflow does not expose developer-only evidence as top-level assets',
+      '$workflowPath must publish through the exact release assembly script',
+    );
+    for (final notesContract in <String>[
+      '## 亮点 / Highlights',
+      '## 下载 / Downloads',
+      '## 校验 / Verify',
+      '## 已知限制 / Known limits',
+      '## 完整变更 / Full comparison',
+      '{{ANDROID_SIGNING_CERT_SHA256}}',
+    ]) {
+      _expectContains(
+        releaseNotesRendererPath,
+        releaseNotesRenderer,
+        notesContract,
+        'release notes must use the bilingual, version-specific contract',
+      );
+    }
+    final releaseVersion = ReleaseVersion.tryParsePubspec(
+      _requiredText('pubspec.yaml') ?? '',
+    );
+    if (releaseVersion != null) {
+      final releaseNotesPath = 'docs/release/notes/v${releaseVersion.name}.md';
+      final releaseNotes = _requiredText(releaseNotesPath) ?? '';
+      for (final notesContract in <String>[
+        '# 当归 v${releaseVersion.name} 预发布 / '
+            'Danggui v${releaseVersion.name} Pre-release',
+        '## 亮点 / Highlights',
+        '## 下载 / Downloads',
+        '## 校验 / Verify',
+        '## 已知限制 / Known limits',
+        '## 完整变更 / Full comparison',
+        '{{ANDROID_SIGNING_CERT_SHA256}}',
+        'https://github.com/hujizhou35-cmd/danggui-app/compare/',
+      ]) {
+        _expectContains(
+          releaseNotesPath,
+          releaseNotes,
+          notesContract,
+          'the current version must have complete bilingual release notes',
+        );
+      }
     }
 
     const smokePath = 'integration_test/run_android_emulator_smoke.sh';

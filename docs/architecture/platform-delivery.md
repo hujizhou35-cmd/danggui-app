@@ -83,15 +83,24 @@ debug 回退包。仓库另以服务端 tag ruleset 限制 `v*` 的创建、更�
 环境。`main` 自身要求经 PR 合并、严格状态检查、会话解决，且管理员同样受
 保护规则约束。
 
-CI 产出：
+CI 构建产出：
 
 - 从 `pubspec.yaml` 的 `1.1.2+3` 派生的通用 APK/AAB（versionCode `3`）。
 - `armeabi-v7a`、`arm64-v8a`、`x86_64` 分架构 APK（versionCode 分别为 `1003`、`2003`、`4003`）。
-- `SHA256SUMS`、`SIGNING_MODE.txt`、`SIGNING_CERTIFICATE.txt`、`SIGNING_CERTIFICATE_SHA256.txt` 和工具链记录。
+- Android 构建内部的 `SHA256SUMS`、`SIGNING_MODE.txt`、`SIGNING_CERTIFICATE.txt`、`SIGNING_CERTIFICATE_SHA256.txt` 和工具链记录。
 - `danggui-ios-source-v1.1.2.zip`：由干净标签提交确定性打包的完整已跟踪 Flutter 跨平台源码、iOS/Xcode 工程、锁定依赖、资源、四语本地化、测试、许可证与构建说明。
 - macOS 上的 unsigned `Runner.app` 压缩包，仅作为 iOS 源码可构建证据，不是 IPA，不能安装到普通 iPhone。
 
-CI Artifact 只用于构建审计和维护者验收，不自动等同于公开正式包。`v*` 受保护标签必须等待 Android、API 24、API 36 与 unsigned iOS 四项作业全绿，随后发布作业从同一 run 下载产物、复算统一 `SHA256SUMS`，并创建或刷新 GitHub Pre-release；刷新时会替换并核对完整附件集合，且拒绝改写已经人工提升为 Stable 的 Release。只有该标签 run 中 `SIGNING_MODE.txt=release` 且通过下述全部门禁的包，才可称为官方安装包。普通用户应优先选择 `danggui-android-universal-release.apk`；ABI 分包面向明确知道设备架构的用户，AAB 不应直接侧载。
+CI Artifact 只用于构建审计和维护者验收，不自动等同于公开正式包。公开 Release 顶层采用严格的四文件合同：
+
+- `danggui-android-universal-release.apk`：普通 Android 用户唯一需要选择的安装包。
+- `danggui-ios-source-v{version}.zip`：从干净标签确定性生成的完整源码交付，不是 IPA。
+- `danggui-developer-assets-v{version}.zip`：分架构 APK、AAB、unsigned iOS `.app` 构建证据，以及签名、平台、Xcode/Flutter 工具链、源码提交和源码归档清单；归档内有双语 README 和覆盖其余全部内部文件的独立 `SHA256SUMS`。
+- `SHA256SUMS`：精确覆盖前三个公开载荷，不包含清单自身。
+
+签名证书 SHA-256 动态渲染在中英双语 Release 说明中，不再作为单独顶层附件。发布说明由 `docs/release/notes/v{version}.md` 提供经审阅的版本事实，必须包含亮点、下载、校验、已知限制和完整版本比较；工作流只替换证书指纹占位符，不从提交信息臆造功能描述。
+
+`v*` 受保护标签必须等待 Android、API 24、API 36 与 unsigned iOS 四项作业全绿，随后发布作业从同一 run 下载产物、先验证 Android/iOS 上游校验和，再组装并复核顶层及开发者归档的精确白名单。刷新已有 Pre-release 时先成功上传/覆盖新合同文件，再删除旧合同遗留附件，最后回读并比较完整名称集合与公开 `SHA256SUMS`；已经人工提升为 Stable 的 Release 始终拒绝改写。只有该标签 run 中 `SIGNING_MODE.txt=release` 且通过下述全部门禁的包，才可称为官方安装包。
 
 ## Android 模拟器冷启动门禁
 
@@ -132,7 +141,7 @@ Debug 回退包必须保留 `debug-fallback` 文件名，禁止上传应用商�
 
 ### v1.1.2 预发布合同
 
-标签 `v1.1.2` 必须与 `pubspec.yaml` 的产品版本一致，并从合并后的受保护 `main` 创建。标签发布资产包括五个 Android 包、统一校验和、正式证书 SHA-256、确定性 iOS 源码 ZIP 和 unsigned `.app.zip` 构建证据。iOS 两类压缩包都不是 IPA；源码构建步骤见 [iOS 源码包构建说明](ios-source-build.md)。工作流按当前标签名创建或刷新 Release，只允许替换同一 `v1.1.2` Pre-release 的附件，不得删除或改写 `v1.1.0`。
+标签 `v1.1.2` 必须与 `pubspec.yaml` 的产品版本一致，并从合并后的受保护 `main` 创建。公开附件严格为通用 Android APK、`danggui-ios-source-v1.1.2.zip`、`danggui-developer-assets-v1.1.2.zip` 和顶层 `SHA256SUMS`；三分架构 APK、AAB、unsigned `.app.zip` 与各项文本证据只存在于开发者归档。iOS 两类压缩包都不是 IPA；源码构建步骤见 [iOS 源码包构建说明](ios-source-build.md)。工作流按当前标签名创建或刷新 Release，只允许替换同一 `v1.1.2` Pre-release 的附件，不得删除或改写 `v1.1.0`。
 
 v1.1.2 的稳定版门禁额外要求：用已公开的正式签名 v1.1.0 APK 在代表性 Android 实体机执行覆盖升级，确认既有事项、提醒、笔记、过往和设置完整保留，并复验保存反馈、每分钟提醒选择、声音/振动、紧凑过往和唯一的 1.2 秒完整启动构图。在此签署前，v1.1.2 只能保持 Pre-release。
 
