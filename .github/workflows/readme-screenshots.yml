@@ -111,6 +111,7 @@ jobs:
           disable-animations: true
           disable-spellchecker: true
           script: |
+            bash -euo pipefail <<'BASH'
             set -euo pipefail
             mkdir -p "${DANGGUI_README_SCREENSHOT_OUTPUT}"
             adb shell wm size 1080x2400
@@ -125,6 +126,7 @@ jobs:
             dart run tool/readme_screenshots/verify_outputs.dart \
               --locale "${README_SCREENSHOT_LOCALE}" \
               --directory "${DANGGUI_README_SCREENSHOT_OUTPUT}"
+            BASH
 
       - name: Upload raw PNGs and manifest
         if: always()
