@@ -1,0 +1,136 @@
+name: README product screenshots
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/readme-screenshots.yml"
+      - "integration_test/readme_screenshots_test.dart"
+      - "integration_test/support/readme_screenshot_*"
+      - "tool/readme_screenshots/**"
+      - "lib/**"
+      - "assets/brand/**"
+      - "android/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readme-screenshots-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.47.1
+  JAVA_VERSION: "21"
+  ANDROID_COMPILE_SDK: "36"
+  ANDROID_BUILD_TOOLS: 36.0.0
+  ANDROID_NDK_VERSION: 28.2.13676358
+
+jobs:
+  capture-android:
+    name: Android 36 README screenshots (${{ matrix.locale }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        locale: [zh, en]
+    env:
+      README_SCREENSHOT_LOCALE: ${{ matrix.locale }}
+      DANGGUI_README_SCREENSHOT_OUTPUT: ${{ runner.temp }}/danggui-readme-screenshots/${{ matrix.locale }}
+      ANDROID_SERIAL: emulator-5554
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install locked Android SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager_bin="${ANDROID_SDK_ROOT:?ANDROID_SDK_ROOT is not set}/cmdline-tools/latest/bin/sdkmanager"
+          "${sdkmanager_bin}" \
+            "platforms;android-${ANDROID_COMPILE_SDK}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "platform-tools" \
+            "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Configure tools and resolve locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter config --no-analytics
+          dart --disable-analytics
+          flutter pub get --enforce-lockfile
+          flutter analyze --fatal-infos
+
+      - name: Enable test-only loopback VM service transport
+        shell: bash
+        run: >-
+          cp integration_test/support/readme_screenshot_debug_manifest.xml
+          android/app/src/debug/AndroidManifest.xml
+
+      - name: Enable KVM group permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Capture real app UI in ${{ matrix.locale }}
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 36
+          target: default
+          arch: x86_64
+          profile: pixel_7_pro
+          avd-name: danggui-readme-api36-${{ matrix.locale }}
+          force-avd-creation: true
+          emulator-port: 5554
+          emulator-boot-timeout: 600
+          emulator-options: >-
+            -no-window -gpu swiftshader_indirect -no-snapshot -noaudio
+            -no-boot-anim -camera-back none -camera-front none
+          disable-animations: true
+          disable-spellchecker: true
+          script: |
+            set -euo pipefail
+            mkdir -p "${DANGGUI_README_SCREENSHOT_OUTPUT}"
+            adb shell wm size 1080x2400
+            adb shell wm density 420
+            adb shell settings put system font_scale 1.0
+            adb shell settings put system time_12_24 24
+            flutter drive \
+              --driver=integration_test/support/readme_screenshot_driver.dart \
+              --target=integration_test/readme_screenshots_test.dart \
+              --device-id="${ANDROID_SERIAL}" \
+              --dart-define="README_SCREENSHOT_LOCALE=${README_SCREENSHOT_LOCALE}"
+            dart run tool/readme_screenshots/verify_outputs.dart \
+              --locale "${README_SCREENSHOT_LOCALE}" \
+              --directory "${DANGGUI_README_SCREENSHOT_OUTPUT}"
+
+      - name: Upload raw PNGs and manifest
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: danggui-readme-screenshots-api36-${{ matrix.locale }}-${{ github.sha }}
+          path: ${{ env.DANGGUI_README_SCREENSHOT_OUTPUT }}/
+          if-no-files-found: warn
+          retention-days: 14
