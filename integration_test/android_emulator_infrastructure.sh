@@ -18,15 +18,19 @@ danggui_alarm_dump_has_scheduled_notification() {
   [[ "${expected_epoch_millis}" =~ ^[0-9]+$ ]] || return 1
 
   # Match an active Alarm entry and its immediately following delivery tag.
-  # v1.1.3 sound/vibration reminders use Danggui's native alarm receiver while
-  # silent/legacy registrations can still use flutter_local_notifications.
+  # v1.1.4 reminders start the ringing service directly, v1.1.3 registrations
+  # can still target the compatibility receiver, and silent/legacy
+  # registrations can still use flutter_local_notifications.
   # Package allowlists and cancellation-history snapshots can contain the same
   # strings, so independent whole-file greps are not proof of a pending alarm.
   awk \
     -v package_name="${package_name}" \
     -v expected_epoch_millis="${expected_epoch_millis}" '
       BEGIN {
-        native_tag = "tag=*walarm*:" package_name ".action.FIRE_ALARM"
+        ringing_service_tag = "tag=*walarm*:" package_name \
+          ".action.FIRE_RINGING_SERVICE"
+        compatibility_receiver_tag = "tag=*walarm*:" package_name \
+          ".action.FIRE_ALARM"
         legacy_tag = "tag=*walarm*:" package_name \
           "/com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
       }
@@ -39,7 +43,9 @@ danggui_alarm_dump_has_scheduled_notification() {
       candidate_line > 0 &&
       NR > candidate_line &&
       NR - candidate_line <= 3 &&
-      (index($0, native_tag) || index($0, legacy_tag)) {
+      (index($0, ringing_service_tag) ||
+       index($0, compatibility_receiver_tag) ||
+       index($0, legacy_tag)) {
         found = 1
         exit
       }
