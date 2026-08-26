@@ -7,12 +7,14 @@
   },
   "scripts": {
     "dev": "vinext dev",
-    "build": "vinext build",
+    "build": "vinext build && node scripts/verify-built-assets.mjs",
     "start": "vinext start",
     "deploy:cloudflare": "npm run build && wrangler deploy --config dist/server/wrangler.json",
     "deploy:cloudflare:dry-run": "npm run build && wrangler deploy --dry-run --config dist/server/wrangler.json",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "test": "node --test lib/release-channel.test.mjs"
+    "test": "node --test lib/release-channel.test.mjs",
+    "verify:built-assets": "node scripts/verify-built-assets.mjs",
+    "smoke:cloudflare": "node scripts/check-live-assets.mjs"
   },
   "dependencies": {
     "next": "16.3.2",
