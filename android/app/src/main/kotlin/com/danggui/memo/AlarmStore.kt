@@ -9,111 +9,201 @@ import org.json.JSONObject
 
 internal data class AlarmReconciliation(val removed: List<AlarmRecord>)
 
+/**
+ * Device-protected durable mirror for native alarms.
+ *
+ * Records are keyed by reminder + revision so a committed old alarm and a pending
+ * replacement can coexist during the short two-phase installation transaction.
+ */
 internal class AlarmStore(context: Context) {
     private val preferences = openPreferences(context)
 
     fun get(reminderId: String): AlarmRecord? = synchronized(lock) {
-        readRecords()[reminderId]
+        activeRecord(readRecords(), reminderId)
+    }
+
+    fun get(reminderId: String, scheduleRevision: Long): AlarmRecord? = synchronized(lock) {
+        readRecords()[recordKey(reminderId, scheduleRevision)]
     }
 
     fun scheduled(): List<AlarmRecord> = synchronized(lock) {
-        readRecords().values
+        activeRecords(readRecords())
             .filter { it.state == AlarmRecord.STATE_SCHEDULED }
             .sortedBy { it.triggerAtEpochMs }
     }
 
     fun ringing(): List<AlarmRecord> = synchronized(lock) {
-        readRecords().values
+        activeRecords(readRecords())
             .filter { it.state == AlarmRecord.STATE_RINGING }
             .sortedBy { it.triggerAtEpochMs }
     }
 
-    fun put(record: AlarmRecord): Boolean = synchronized(lock) {
-        val records = readRecords()
-        records[record.reminderId] = record
-        writeRecords(records)
+    fun pending(): List<AlarmRecord> = synchronized(lock) {
+        readRecords().values
+            .filter { it.state == AlarmRecord.STATE_PENDING }
+            .sortedWith(compareBy(AlarmRecord::reminderId, AlarmRecord::scheduleRevision))
     }
 
-    fun restoreIfCurrent(expected: AlarmRecord, previous: AlarmRecord?): Boolean = synchronized(lock) {
+    fun cancellationPending(): List<AlarmRecord> = synchronized(lock) {
+        readRecords().values
+            .filter { it.state == AlarmRecord.STATE_CANCEL_PENDING }
+            .sortedWith(compareBy(AlarmRecord::reminderId, AlarmRecord::scheduleRevision))
+    }
+
+    fun latestRevision(reminderId: String): Long? = synchronized(lock) {
+        readRecords().values
+            .asSequence()
+            .filter {
+                it.reminderId == reminderId &&
+                    it.state != AlarmRecord.STATE_CANCEL_PENDING
+            }
+            .maxOfOrNull(AlarmRecord::scheduleRevision)
+    }
+
+    fun isDeliverable(record: AlarmRecord): Boolean = synchronized(lock) {
         val records = readRecords()
-        if (records[expected.reminderId] != expected) return@synchronized false
-        if (previous == null) {
-            records.remove(expected.reminderId)
-        } else {
-            records[expected.reminderId] = previous
+        records[recordKey(record)] == record && isDeliverableRecord(records, record)
+    }
+
+    fun stageReplacement(record: AlarmRecord): AlarmRecord? = synchronized(lock) {
+        val records = readRecords()
+        val previous = activeRecord(records, record.reminderId)
+        if (!AlarmIdentityPolicy.canReplace(previous?.scheduleRevision, record.scheduleRevision)) {
+            return@synchronized null
         }
-        writeRecords(records)
+        val pending =
+            record.copy(
+                state = AlarmRecord.STATE_PENDING,
+                sessionId = null,
+                ringStartedElapsedRealtimeMs = null,
+            )
+        if (records.values.any {
+                it.reminderId == record.reminderId &&
+                    it.state == AlarmRecord.STATE_CANCEL_PENDING
+            }
+        ) {
+            return@synchronized null
+        }
+        val existing = records[recordKey(pending)]
+        if (existing == pending) return@synchronized previous
+        val newestRevision =
+            records.values
+                .asSequence()
+                .filter { it.reminderId == record.reminderId }
+                .maxOfOrNull(AlarmRecord::scheduleRevision)
+        if (newestRevision != null && newestRevision >= record.scheduleRevision) {
+            return@synchronized null
+        }
+        records[recordKey(pending)] = pending
+        if (writeRecords(records)) previous else null
     }
 
-    fun replaceRingingAndAppendEvent(
-        expected: AlarmRecord,
-        replacement: AlarmRecord,
-        event: AlarmEvent,
-    ): Boolean = synchronized(lock) {
+    fun stageInitial(record: AlarmRecord): Boolean = synchronized(lock) {
         val records = readRecords()
-        val current = records[expected.reminderId]
-        if (
-            current != expected ||
-                current.state != AlarmRecord.STATE_RINGING ||
-                replacement.reminderId != expected.reminderId ||
-                replacement.taskId != expected.taskId ||
-                replacement.scheduleRevision != expected.scheduleRevision + 1 ||
-                replacement.state != AlarmRecord.STATE_SCHEDULED ||
-                event.reminderId != expected.reminderId ||
-                event.taskId != expected.taskId ||
-                event.scheduleRevision != expected.scheduleRevision ||
-                event.type != "snoozed" ||
-                event.nextTriggerAtEpochMs != replacement.triggerAtEpochMs
+        if (activeRecord(records, record.reminderId) != null) return@synchronized false
+        if (records.values.any {
+                it.reminderId == record.reminderId &&
+                    it.state == AlarmRecord.STATE_CANCEL_PENDING
+            }
         ) {
             return@synchronized false
         }
-        records[replacement.reminderId] = replacement
-        val events = appendAndTrim(readEvents(), event)
-        preferences.edit()
-            .putString(KEY_RECORDS, encodeRecords(records))
-            .putString(KEY_EVENTS, encodeEvents(events))
-            .commit()
-    }
-
-    fun rollbackReplacementAndEvent(
-        expectedReplacement: AlarmRecord,
-        previous: AlarmRecord,
-        eventId: String,
-    ): Boolean = synchronized(lock) {
-        val records = readRecords()
-        if (records[expectedReplacement.reminderId] != expectedReplacement) {
+        val newerRevision =
+            records.values
+                .asSequence()
+                .filter { it.reminderId == record.reminderId }
+                .maxOfOrNull(AlarmRecord::scheduleRevision)
+        if (newerRevision != null && newerRevision > record.scheduleRevision) {
             return@synchronized false
         }
-        records[previous.reminderId] = previous
-        val events = readEvents().filterNot { it.eventId == eventId }
-        val editor =
-            preferences.edit()
-                .putString(KEY_RECORDS, encodeRecords(records))
-        if (events.isEmpty()) {
-            editor.remove(KEY_EVENTS)
-        } else {
-            editor.putString(KEY_EVENTS, encodeEvents(events))
+        val pending =
+            record.copy(
+                state = AlarmRecord.STATE_PENDING,
+                sessionId = null,
+                ringStartedElapsedRealtimeMs = null,
+            )
+        records[recordKey(pending)] = pending
+        writeRecords(records)
+    }
+
+    fun commitPendingReplacement(
+        pending: AlarmRecord,
+        expectedPrevious: AlarmRecord?,
+        eventsToAppend: List<AlarmEvent>,
+    ): Boolean = synchronized(lock) {
+        val records = readRecords()
+        val pendingKey = recordKey(pending)
+        val storedPending = records[pendingKey]
+        if (storedPending != pending || storedPending.state != AlarmRecord.STATE_PENDING) {
+            return@synchronized false
         }
-        editor.commit()
+        val currentPrevious =
+            activeRecords(records)
+                .filter { it.reminderId == pending.reminderId && recordKey(it) != pendingKey }
+                .maxByOrNull { it.scheduleRevision }
+        if (currentPrevious != expectedPrevious) return@synchronized false
+
+        records.entries.removeAll {
+            it.value.reminderId == pending.reminderId && it.key != pendingKey
+        }
+        records[pendingKey] =
+            pending.copy(
+                state = AlarmRecord.STATE_SCHEDULED,
+                sessionId = null,
+                ringStartedElapsedRealtimeMs = null,
+            )
+        writeRecordsAndEvents(records, readEvents() + eventsToAppend)
+    }
+
+    /**
+     * Durably hides every revision before any PendingIntent is cancelled. A crash after this
+     * commit can only leave cancel-pending records, which recovery retires but never rearms.
+     * Null means the tombstone write failed; an empty list is a successful idempotent cancel.
+     */
+    fun stageCancellation(reminderId: String): List<AlarmRecord>? = synchronized(lock) {
+        val records = readRecords()
+        val targets = records.values.filter { it.reminderId == reminderId }
+        if (targets.isEmpty()) return@synchronized emptyList()
+        targets.forEach { record ->
+            records[recordKey(record)] = record.copy(state = AlarmRecord.STATE_CANCEL_PENDING)
+        }
+        if (writeRecords(records)) targets else null
+    }
+
+    fun finalizeCancellation(reminderId: String): Boolean = synchronized(lock) {
+        val records = readRecords()
+        val matching = records.values.filter { it.reminderId == reminderId }
+        if (matching.isEmpty()) return@synchronized true
+        if (matching.any { it.state != AlarmRecord.STATE_CANCEL_PENDING }) {
+            return@synchronized false
+        }
+        records.entries.removeAll { it.value.reminderId == reminderId }
+        writeRecords(records)
+    }
+
+    fun rollbackPending(expectedPending: AlarmRecord): Boolean = synchronized(lock) {
+        val records = readRecords()
+        val key = recordKey(expectedPending)
+        if (records[key] != expectedPending || expectedPending.state != AlarmRecord.STATE_PENDING) {
+            return@synchronized false
+        }
+        records.remove(key)
+        writeRecords(records)
     }
 
     fun remove(reminderId: String): AlarmRecord? = synchronized(lock) {
         val records = readRecords()
-        val removed = records.remove(reminderId) ?: return@synchronized null
+        val removed = activeRecord(records, reminderId) ?: return@synchronized null
+        records.entries.removeAll { it.value.reminderId == reminderId }
         if (writeRecords(records)) removed else null
     }
 
     fun removeScheduled(reminderId: String, scheduleRevision: Long): AlarmRecord? = synchronized(lock) {
         val records = readRecords()
-        val current = records[reminderId]
-        if (
-            current == null ||
-                current.scheduleRevision != scheduleRevision ||
-                current.state != AlarmRecord.STATE_SCHEDULED
-        ) {
-            return@synchronized null
-        }
-        records.remove(reminderId)
+        val key = recordKey(reminderId, scheduleRevision)
+        val current = records[key]
+        if (current?.state != AlarmRecord.STATE_SCHEDULED) return@synchronized null
+        records.remove(key)
         if (writeRecords(records)) current else null
     }
 
@@ -122,13 +212,10 @@ internal class AlarmStore(context: Context) {
         val records = readRecords()
         val removed = mutableListOf<AlarmRecord>()
         keys.forEach { (reminderId, scheduleRevision) ->
-            val current = records[reminderId]
-            if (
-                current != null &&
-                    current.scheduleRevision == scheduleRevision &&
-                    current.state == AlarmRecord.STATE_SCHEDULED
-            ) {
-                records.remove(reminderId)
+            val key = recordKey(reminderId, scheduleRevision)
+            val current = records[key]
+            if (current?.state == AlarmRecord.STATE_SCHEDULED) {
+                records.remove(key)
                 removed += current
             }
         }
@@ -138,244 +225,342 @@ internal class AlarmStore(context: Context) {
 
     fun reconcileScheduledAlarms(
         now: Long,
-        missedAlarmGraceMillis: Long,
         exactAlarmAllowed: Boolean,
     ): AlarmReconciliation = synchronized(lock) {
         val records = readRecords()
         val removed = mutableListOf<AlarmRecord>()
-        val expired = mutableListOf<AlarmRecord>()
+        val events = readEvents().toMutableList()
         records.values.toList().forEach { record ->
-            if (record.state != AlarmRecord.STATE_SCHEDULED) return@forEach
-            val missed = record.triggerAtEpochMs <= now - missedAlarmGraceMillis
-            val futureWithoutExactAccess =
-                !exactAlarmAllowed && record.triggerAtEpochMs > now
-            if (!missed && !futureWithoutExactAccess) return@forEach
-            records.remove(record.reminderId)
-            removed += record
-            if (missed) expired += record
+            if (records[recordKey(record)] != record) return@forEach
+            val pending = record.state == AlarmRecord.STATE_PENDING
+            val scheduled = record.state == AlarmRecord.STATE_SCHEDULED
+            if (!pending && !scheduled) return@forEach
+            val recoveryDecision =
+                AlarmTransactionPolicy.recoveryDecision(
+                    triggerAtEpochMs = record.triggerAtEpochMs,
+                    nowEpochMs = now,
+                    exactAlarmAllowed = exactAlarmAllowed,
+                )
+            if (recoveryDecision != AlarmRecoveryDecision.EXPIRE) return@forEach
+            val terminalRecords =
+                if (
+                    pending &&
+                        records.values
+                            .filter {
+                                it.reminderId == record.reminderId &&
+                                    it.state == AlarmRecord.STATE_PENDING
+                            }
+                            .maxByOrNull(AlarmRecord::scheduleRevision) == record
+                ) {
+                    records.values.filter {
+                        it.reminderId == record.reminderId &&
+                            it.state == AlarmRecord.STATE_PENDING
+                    }
+                } else {
+                    listOf(record)
+                }
+            terminalRecords.forEach { terminal ->
+                records.remove(recordKey(terminal))
+                removed += terminal
+                events +=
+                    AlarmEvent(
+                        reminderId = terminal.reminderId,
+                        taskId = terminal.taskId,
+                        scheduleRevision = terminal.scheduleRevision,
+                        type = "missed",
+                        occurredAtEpochMs = now,
+                        detailCode = "recovery_window_expired",
+                        delayMillis = now - terminal.triggerAtEpochMs,
+                    )
+            }
         }
         if (removed.isEmpty()) return@synchronized AlarmReconciliation(emptyList())
-
-        val events =
-            (
-                readEvents() +
-                    expired.map { record ->
-                        AlarmEvent(
-                            reminderId = record.reminderId,
-                            taskId = record.taskId,
-                            scheduleRevision = record.scheduleRevision,
-                            type = "stopped",
-                            occurredAtEpochMs = now,
-                        )
-                    }
-                ).takeLast(MAX_EVENTS)
-        val editor = preferences.edit().putString(KEY_RECORDS, encodeRecords(records))
-        if (expired.isNotEmpty()) editor.putString(KEY_EVENTS, encodeEvents(events))
-        if (editor.commit()) AlarmReconciliation(removed) else AlarmReconciliation(emptyList())
+        if (writeRecordsAndEvents(records, events)) {
+            AlarmReconciliation(removed)
+        } else {
+            AlarmReconciliation(emptyList())
+        }
     }
 
-    fun expireScheduled(
+    fun expireDeliverable(
         reminderId: String,
         scheduleRevision: Long,
         occurredAtEpochMs: Long,
     ): AlarmRecord? = synchronized(lock) {
         val records = readRecords()
-        val current = records[reminderId]
-        if (
-            current == null ||
-                current.scheduleRevision != scheduleRevision ||
-                current.state != AlarmRecord.STATE_SCHEDULED
-        ) {
-            return@synchronized null
+        val key = recordKey(reminderId, scheduleRevision)
+        val current = records[key]
+        if (current == null || !isDeliverableRecord(records, current)) return@synchronized null
+        if (current.state == AlarmRecord.STATE_PENDING) {
+            records.entries.removeAll {
+                it.value.reminderId == reminderId &&
+                    it.value.state == AlarmRecord.STATE_PENDING
+            }
+        } else {
+            records.remove(key)
         }
-        records.remove(reminderId)
-        val events =
-            appendAndTrim(
-                readEvents(),
-                AlarmEvent(
-                    reminderId = current.reminderId,
-                    taskId = current.taskId,
-                    scheduleRevision = current.scheduleRevision,
-                    type = "stopped",
-                    occurredAtEpochMs = occurredAtEpochMs,
-                ),
+        val event =
+            AlarmEvent(
+                reminderId = current.reminderId,
+                taskId = current.taskId,
+                scheduleRevision = current.scheduleRevision,
+                type = "missed",
+                occurredAtEpochMs = occurredAtEpochMs,
+                detailCode = "recovery_window_expired",
+                delayMillis = occurredAtEpochMs - current.triggerAtEpochMs,
             )
-        val committed =
-            preferences.edit()
-                .putString(KEY_RECORDS, encodeRecords(records))
-                .putString(KEY_EVENTS, encodeEvents(events))
-                .commit()
-        if (committed) current else null
+        if (writeRecordsAndEvents(records, readEvents() + event)) current else null
     }
 
-    fun markRingingAndAppendFired(
+    fun markRingingAndAppendDelivered(
         reminderId: String,
         scheduleRevision: Long,
         occurredAtEpochMs: Long,
+        sessionId: String,
+        ringStartedElapsedRealtimeMs: Long,
     ): AlarmRecord? = synchronized(lock) {
         val records = readRecords()
-        val current = records[reminderId]
-        if (
-            current == null ||
-                current.scheduleRevision != scheduleRevision ||
-                current.state != AlarmRecord.STATE_SCHEDULED
-        ) {
-            return@synchronized null
+        val key = recordKey(reminderId, scheduleRevision)
+        val current = records[key]
+        if (current == null || !isDeliverableRecord(records, current)) return@synchronized null
+        if (current.state == AlarmRecord.STATE_PENDING) {
+            records.entries.removeAll { it.value.reminderId == reminderId && it.key != key }
         }
-        val ringing = current.copy(state = AlarmRecord.STATE_RINGING)
-        records[reminderId] = ringing
-        val events =
-            appendAndTrim(
-                readEvents(),
-                AlarmEvent(
-                    reminderId = current.reminderId,
-                    taskId = current.taskId,
-                    scheduleRevision = current.scheduleRevision,
-                    type = "fired",
-                    occurredAtEpochMs = occurredAtEpochMs,
-                ),
+        val ringing =
+            current.copy(
+                state = AlarmRecord.STATE_RINGING,
+                sessionId = sessionId,
+                ringStartedElapsedRealtimeMs = ringStartedElapsedRealtimeMs,
             )
-        val committed =
-            preferences.edit()
-                .putString(KEY_RECORDS, encodeRecords(records))
-                .putString(KEY_EVENTS, encodeEvents(events))
-                .commit()
-        if (committed) ringing else null
+        records[key] = ringing
+        val event =
+            AlarmEvent(
+                reminderId = current.reminderId,
+                taskId = current.taskId,
+                scheduleRevision = current.scheduleRevision,
+                type = "delivered",
+                occurredAtEpochMs = occurredAtEpochMs,
+                sessionId = ringing.sessionId,
+                delayMillis = (occurredAtEpochMs - current.triggerAtEpochMs).coerceAtLeast(0L),
+            )
+        if (writeRecordsAndEvents(records, readEvents() + event)) ringing else null
     }
 
     fun removeRingingAndAppendStopped(
         expected: AlarmRecord,
         occurredAtEpochMs: Long = System.currentTimeMillis(),
+        detailCode: String? = null,
+    ): AlarmRecord? =
+        removeRingingAndAppendStopped(
+            reminderId = expected.reminderId,
+            scheduleRevision = expected.scheduleRevision,
+            sessionId = expected.sessionId,
+            occurredAtEpochMs = occurredAtEpochMs,
+            detailCode = detailCode,
+        )
+
+    fun removeRingingAndAppendStopped(
+        reminderId: String,
+        scheduleRevision: Long,
+        sessionId: String?,
+        occurredAtEpochMs: Long = System.currentTimeMillis(),
+        detailCode: String? = null,
     ): AlarmRecord? = synchronized(lock) {
         val records = readRecords()
-        val current = records[expected.reminderId]
-        if (current != expected || current.state != AlarmRecord.STATE_RINGING) {
+        val current = activeRecord(records, reminderId)
+        if (current?.state != AlarmRecord.STATE_RINGING) return@synchronized null
+        if (current.scheduleRevision != scheduleRevision) {
             return@synchronized null
         }
-        val removed = records.remove(expected.reminderId) ?: return@synchronized null
-        val events =
-            appendAndTrim(
-                readEvents(),
-                AlarmEvent(
-                    reminderId = removed.reminderId,
-                    taskId = removed.taskId,
-                    scheduleRevision = removed.scheduleRevision,
-                    type = "stopped",
-                    occurredAtEpochMs = occurredAtEpochMs,
-                ),
+        if (current.sessionId != sessionId) return@synchronized null
+        records.remove(recordKey(current))
+        val event =
+            AlarmEvent(
+                reminderId = current.reminderId,
+                taskId = current.taskId,
+                scheduleRevision = current.scheduleRevision,
+                type = "stopped",
+                occurredAtEpochMs = occurredAtEpochMs,
+                sessionId = current.sessionId,
+                detailCode = detailCode,
             )
-        val committed =
-            preferences.edit()
-                .putString(KEY_RECORDS, encodeRecords(records))
-                .putString(KEY_EVENTS, encodeEvents(events))
-                .commit()
-        if (committed) removed else null
+        if (writeRecordsAndEvents(records, readEvents() + event)) current else null
     }
 
     fun appendEvent(event: AlarmEvent): Boolean = synchronized(lock) {
-        preferences.edit()
-            .putString(KEY_EVENTS, encodeEvents(appendAndTrim(readEvents(), event)))
-            .commit()
+        val encoded = encodeEvents(trimEvents(readEvents() + event))
+        val editor = preferences.edit()
+        editor.putString(KEY_EVENTS_BACKUP, validEncodedEventsOrBackup() ?: encoded)
+        editor.putString(KEY_EVENTS, encoded).commit()
     }
 
-    fun events(): List<AlarmEvent> = synchronized(lock) {
-        readEvents()
-    }
+    fun events(): List<AlarmEvent> = synchronized(lock) { readEvents() }
 
     fun acknowledgeEvents(eventIds: Set<String>): Boolean = synchronized(lock) {
         if (eventIds.isEmpty()) return@synchronized true
         val remaining = readEvents().filterNot { eventIds.contains(it.eventId) }
+        val encoded = encodeEvents(remaining)
         val editor = preferences.edit()
-        if (remaining.isEmpty()) {
-            editor.remove(KEY_EVENTS)
-        } else {
-            editor.putString(KEY_EVENTS, encodeEvents(remaining))
-        }
+        editor.putString(KEY_EVENTS_BACKUP, validEncodedEventsOrBackup() ?: encoded)
+        editor.putString(KEY_EVENTS, encoded)
         editor.commit()
     }
 
-    /**
-     * Clears a pre-reboot ringing session and records its terminal events exactly once per boot.
-     * The boot token is stored in the same device-protected transaction as the records/events.
-     */
     fun recoverAfterBoot(bootToken: String, occurredAtEpochMs: Long): Int =
-        recoverRingingAfterInterruption(
-            markerKey = KEY_LAST_RECOVERED_BOOT,
-            interruptionToken = bootToken,
-            occurredAtEpochMs = occurredAtEpochMs,
-        )
+        recoverRingingAfterInterruption(KEY_LAST_RECOVERED_BOOT, bootToken, occurredAtEpochMs)
 
-    fun recoverAfterPackageReplacement(
-        packageToken: String,
-        occurredAtEpochMs: Long,
-    ): Int =
-        recoverRingingAfterInterruption(
-            markerKey = KEY_LAST_RECOVERED_PACKAGE,
-            interruptionToken = packageToken,
-            occurredAtEpochMs = occurredAtEpochMs,
-        )
+    fun recoverAfterPackageReplacement(packageToken: String, occurredAtEpochMs: Long): Int =
+        recoverRingingAfterInterruption(KEY_LAST_RECOVERED_PACKAGE, packageToken, occurredAtEpochMs)
 
     private fun recoverRingingAfterInterruption(
         markerKey: String,
         interruptionToken: String,
         occurredAtEpochMs: Long,
     ): Int = synchronized(lock) {
-        if (preferences.getString(markerKey, null) == interruptionToken) {
-            return@synchronized 0
-        }
+        if (safeGetString(preferences, markerKey) == interruptionToken) return@synchronized 0
         val records = readRecords()
         val ringing = records.values.filter { it.state == AlarmRecord.STATE_RINGING }
-        ringing.forEach { records.remove(it.reminderId) }
-        val events =
-            (
-                readEvents() +
-                    ringing.map { record ->
-                        AlarmEvent(
-                            reminderId = record.reminderId,
-                            taskId = record.taskId,
-                            scheduleRevision = record.scheduleRevision,
-                            type = "stopped",
-                            occurredAtEpochMs = occurredAtEpochMs,
-                        )
-                    }
-                ).takeLast(MAX_EVENTS)
+        ringing.forEach { records.remove(recordKey(it)) }
+        val terminalEvents =
+            ringing.map { record ->
+                AlarmEvent(
+                    reminderId = record.reminderId,
+                    taskId = record.taskId,
+                    scheduleRevision = record.scheduleRevision,
+                    type = "stopped",
+                    occurredAtEpochMs = occurredAtEpochMs,
+                    sessionId = record.sessionId,
+                    detailCode = "system_interruption",
+                )
+            }
         val editor = preferences.edit().putString(markerKey, interruptionToken)
         if (ringing.isNotEmpty()) {
+            val encodedRecords = encodeRecords(records)
+            val encodedEvents = encodeEvents(trimEvents(readEvents() + terminalEvents))
             editor
-                .putString(KEY_RECORDS, encodeRecords(records))
-                .putString(KEY_EVENTS, encodeEvents(events))
+                .putString(
+                    KEY_RECORDS_BACKUP,
+                    validEncodedRecordsOrBackup() ?: encodedRecords,
+                )
+                .putString(KEY_EVENTS_BACKUP, validEncodedEventsOrBackup() ?: encodedEvents)
+                .putString(KEY_RECORDS, encodedRecords)
+                .putString(KEY_EVENTS, encodedEvents)
         }
         if (editor.commit()) ringing.size else 0
     }
 
     private fun readRecords(): LinkedHashMap<String, AlarmRecord> =
-        decodeRecords(preferences.getString(KEY_RECORDS, null))
+        decodeRecordsOrNull(safeGetString(preferences, KEY_RECORDS))
+            ?: decodeRecordsOrNull(safeGetString(preferences, KEY_RECORDS_BACKUP))
+            ?: linkedMapOf()
 
-    private fun writeRecords(records: Map<String, AlarmRecord>): Boolean =
-        preferences.edit().putString(KEY_RECORDS, encodeRecords(records)).commit()
+    private fun writeRecords(records: Map<String, AlarmRecord>): Boolean {
+        val encoded = encodeRecords(records)
+        val editor = preferences.edit()
+        editor.putString(KEY_RECORDS_BACKUP, validEncodedRecordsOrBackup() ?: encoded)
+        return editor.putString(KEY_RECORDS, encoded).commit()
+    }
+
+    private fun writeRecordsAndEvents(
+        records: Map<String, AlarmRecord>,
+        events: List<AlarmEvent>,
+    ): Boolean {
+        val encodedRecords = encodeRecords(records)
+        val encodedEvents = encodeEvents(trimEvents(events))
+        val editor = preferences.edit()
+        editor.putString(
+            KEY_RECORDS_BACKUP,
+            validEncodedRecordsOrBackup() ?: encodedRecords,
+        )
+        editor.putString(KEY_EVENTS_BACKUP, validEncodedEventsOrBackup() ?: encodedEvents)
+        return editor
+            .putString(KEY_RECORDS, encodedRecords)
+            .putString(KEY_EVENTS, encodedEvents)
+            .commit()
+    }
 
     private fun readEvents(): List<AlarmEvent> =
-        decodeEvents(preferences.getString(KEY_EVENTS, null))
+        decodeEventsOrNull(safeGetString(preferences, KEY_EVENTS))
+            ?: decodeEventsOrNull(safeGetString(preferences, KEY_EVENTS_BACKUP))
+            ?: emptyList()
+
+    private fun validEncodedRecordsOrBackup(): String? =
+        safeGetString(preferences, KEY_RECORDS)?.takeIf { decodeRecordsOrNull(it) != null }
+            ?: safeGetString(preferences, KEY_RECORDS_BACKUP)
+                ?.takeIf { decodeRecordsOrNull(it) != null }
+
+    private fun validEncodedEventsOrBackup(): String? =
+        safeGetString(preferences, KEY_EVENTS)?.takeIf { decodeEventsOrNull(it) != null }
+            ?: safeGetString(preferences, KEY_EVENTS_BACKUP)
+                ?.takeIf { decodeEventsOrNull(it) != null }
 
     companion object {
         private const val PREFERENCES_NAME = "danggui_native_alarm_store_v1"
         private const val KEY_RECORDS = "records"
+        private const val KEY_RECORDS_BACKUP = "records_backup"
         private const val KEY_EVENTS = "events"
+        private const val KEY_EVENTS_BACKUP = "events_backup"
         private const val KEY_DEVICE_STORAGE_MIGRATED = "device_storage_migrated"
         private const val KEY_LAST_RECOVERED_BOOT = "last_recovered_boot"
         private const val KEY_LAST_RECOVERED_PACKAGE = "last_recovered_package"
-        private const val MAX_EVENTS = 200
+        internal const val MAX_EVENTS = 200
         private val lock = Any()
+
+        private fun recordKey(record: AlarmRecord): String =
+            recordKey(record.reminderId, record.scheduleRevision)
+
+        private fun recordKey(reminderId: String, scheduleRevision: Long): String =
+            "$reminderId#$scheduleRevision"
+
+        private fun activeRecord(
+            records: Map<String, AlarmRecord>,
+            reminderId: String,
+        ): AlarmRecord? =
+            records.values
+                .asSequence()
+                .filter {
+                    it.reminderId == reminderId &&
+                        it.state != AlarmRecord.STATE_PENDING &&
+                        it.state != AlarmRecord.STATE_CANCEL_PENDING
+                }
+                .maxByOrNull { it.scheduleRevision }
+
+        private fun activeRecords(records: Map<String, AlarmRecord>): List<AlarmRecord> =
+            records.values
+                .filter {
+                    it.state != AlarmRecord.STATE_PENDING &&
+                        it.state != AlarmRecord.STATE_CANCEL_PENDING
+                }
+                .groupBy(AlarmRecord::reminderId)
+                .values
+                .mapNotNull { candidates -> candidates.maxByOrNull { it.scheduleRevision } }
+
+        private fun isDeliverableRecord(
+            records: Map<String, AlarmRecord>,
+            record: AlarmRecord,
+        ): Boolean =
+            when (record.state) {
+                AlarmRecord.STATE_SCHEDULED -> activeRecord(records, record.reminderId) == record
+                AlarmRecord.STATE_PENDING -> {
+                    val hasCommittedRecord = activeRecord(records, record.reminderId) != null
+                    val newestPending =
+                        records.values
+                            .asSequence()
+                            .filter {
+                                it.reminderId == record.reminderId &&
+                                    it.state == AlarmRecord.STATE_PENDING
+                            }
+                            .maxByOrNull { it.scheduleRevision }
+                    !hasCommittedRecord && newestPending == record
+                }
+                else -> false
+            }
 
         private fun openPreferences(context: Context): SharedPreferences {
             val applicationContext = context.applicationContext
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-                return applicationContext.getSharedPreferences(
-                    PREFERENCES_NAME,
-                    Context.MODE_PRIVATE,
-                )
+                return applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
             }
-
             val deviceContext = applicationContext.createDeviceProtectedStorageContext()
             val devicePreferences =
                 deviceContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
@@ -392,56 +577,49 @@ internal class AlarmStore(context: Context) {
             context: Context,
             devicePreferences: SharedPreferences,
         ) {
-            if (devicePreferences.getBoolean(KEY_DEVICE_STORAGE_MIGRATED, false)) return
+            if (runCatching {
+                    devicePreferences.getBoolean(KEY_DEVICE_STORAGE_MIGRATED, false)
+                }.getOrDefault(false)
+            ) {
+                return
+            }
             val credentialPreferences =
                 context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
-            val deviceRecords =
-                decodeRecords(devicePreferences.getString(KEY_RECORDS, null))
-
             val mergedRecords =
-                decodeRecords(credentialPreferences.getString(KEY_RECORDS, null)).apply {
-                    deviceRecords.forEach { (reminderId, deviceRecord) ->
-                        val credentialRecord = this[reminderId]
-                        if (
-                            credentialRecord == null ||
-                                deviceRecord.scheduleRevision >= credentialRecord.scheduleRevision
-                        ) {
-                            this[reminderId] = deviceRecord
-                        }
+                storedRecords(credentialPreferences).apply {
+                    storedRecords(devicePreferences).forEach {
+                            (key, deviceRecord) ->
+                        this[key] = deviceRecord
                     }
                 }
             val mergedEvents =
-                (
-                    decodeEvents(credentialPreferences.getString(KEY_EVENTS, null)) +
-                        decodeEvents(devicePreferences.getString(KEY_EVENTS, null))
-                    ).distinctBy(AlarmEvent::eventId)
-                    .sortedBy(AlarmEvent::occurredAtEpochMs)
-                    .takeLast(MAX_EVENTS)
-
-            val editor =
-                devicePreferences.edit()
-                    .putBoolean(KEY_DEVICE_STORAGE_MIGRATED, true)
-            if (mergedRecords.isNotEmpty()) {
-                editor.putString(KEY_RECORDS, encodeRecords(mergedRecords))
-            }
-            if (mergedEvents.isNotEmpty()) {
-                editor.putString(KEY_EVENTS, encodeEvents(mergedEvents))
-            }
+                trimEvents(
+                    (
+                        storedEvents(credentialPreferences) + storedEvents(devicePreferences)
+                        ).distinctBy(AlarmEvent::eventId).sortedBy(AlarmEvent::occurredAtEpochMs),
+                )
+            val editor = devicePreferences.edit().putBoolean(KEY_DEVICE_STORAGE_MIGRATED, true)
+            if (mergedRecords.isNotEmpty()) editor.putString(KEY_RECORDS, encodeRecords(mergedRecords))
+            if (mergedEvents.isNotEmpty()) editor.putString(KEY_EVENTS, encodeEvents(mergedEvents))
             editor.commit()
         }
 
-        private fun decodeRecords(encoded: String?): LinkedHashMap<String, AlarmRecord> {
-            if (encoded == null) return linkedMapOf()
+        private fun decodeRecords(encoded: String?): LinkedHashMap<String, AlarmRecord> =
+            decodeRecordsOrNull(encoded) ?: linkedMapOf()
+
+        private fun decodeRecordsOrNull(encoded: String?): LinkedHashMap<String, AlarmRecord>? {
+            if (encoded == null) return null
             return runCatching {
                 val root = JSONObject(encoded)
                 val records = linkedMapOf<String, AlarmRecord>()
                 val keys = root.keys()
                 while (keys.hasNext()) {
-                    val key = keys.next()
-                    records[key] = AlarmRecord.fromJson(root.getJSONObject(key))
+                    val legacyKey = keys.next()
+                    val record = AlarmRecord.fromJson(root.getJSONObject(legacyKey))
+                    records[recordKey(record)] = record
                 }
                 records
-            }.getOrDefault(linkedMapOf())
+            }.getOrNull()
         }
 
         private fun encodeRecords(records: Map<String, AlarmRecord>): String {
@@ -450,8 +628,11 @@ internal class AlarmStore(context: Context) {
             return root.toString()
         }
 
-        private fun decodeEvents(encoded: String?): List<AlarmEvent> {
-            if (encoded == null) return emptyList()
+        private fun decodeEvents(encoded: String?): List<AlarmEvent> =
+            decodeEventsOrNull(encoded) ?: emptyList()
+
+        private fun decodeEventsOrNull(encoded: String?): List<AlarmEvent>? {
+            if (encoded == null) return null
             return runCatching {
                 val array = JSONArray(encoded)
                 buildList {
@@ -459,13 +640,24 @@ internal class AlarmStore(context: Context) {
                         add(AlarmEvent.fromJson(array.getJSONObject(index)))
                     }
                 }
-            }.getOrDefault(emptyList())
+            }.getOrNull()
         }
+
+        private fun safeGetString(preferences: SharedPreferences, key: String): String? =
+            runCatching { preferences.getString(key, null) }.getOrNull()
+
+        private fun storedRecords(preferences: SharedPreferences): LinkedHashMap<String, AlarmRecord> =
+            decodeRecordsOrNull(safeGetString(preferences, KEY_RECORDS))
+                ?: decodeRecords(safeGetString(preferences, KEY_RECORDS_BACKUP))
+
+        private fun storedEvents(preferences: SharedPreferences): List<AlarmEvent> =
+            decodeEventsOrNull(safeGetString(preferences, KEY_EVENTS))
+                ?: decodeEvents(safeGetString(preferences, KEY_EVENTS_BACKUP))
 
         private fun encodeEvents(events: List<AlarmEvent>): String =
             JSONArray(events.map(AlarmEvent::toJson)).toString()
 
-        private fun appendAndTrim(events: List<AlarmEvent>, event: AlarmEvent): List<AlarmEvent> =
-            (events + event).takeLast(MAX_EVENTS)
+        private fun trimEvents(events: List<AlarmEvent>): List<AlarmEvent> =
+            events.takeLast(MAX_EVENTS)
     }
 }

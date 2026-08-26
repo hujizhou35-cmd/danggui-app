@@ -14,6 +14,8 @@ internal data class AlarmRecord(
     val vibrationEnabled: Boolean,
     val defaultSnoozeMinutes: Int,
     val state: String = STATE_SCHEDULED,
+    val sessionId: String? = null,
+    val ringStartedElapsedRealtimeMs: Long? = null,
 ) {
     fun toJson(): JSONObject =
         JSONObject().apply {
@@ -27,25 +29,36 @@ internal data class AlarmRecord(
             put("vibrationEnabled", vibrationEnabled)
             put("defaultSnoozeMinutes", defaultSnoozeMinutes)
             put("state", state)
+            sessionId?.let { put("sessionId", it) }
+            ringStartedElapsedRealtimeMs?.let { put("ringStartedElapsedRealtimeMs", it) }
         }
 
     fun toMap(): Map<String, Any> =
-        mapOf(
-            "reminderId" to reminderId,
-            "taskId" to taskId,
-            "scheduleRevision" to scheduleRevision,
-            "triggerAtEpochMs" to triggerAtEpochMs,
-            "title" to title,
-            "body" to body,
-            "localeTag" to localeTag,
-            "vibrationEnabled" to vibrationEnabled,
-            "defaultSnoozeMinutes" to defaultSnoozeMinutes,
-            "state" to state,
-        )
+        buildMap {
+            put("platformId", platformId)
+            put("reminderId", reminderId)
+            put("taskId", taskId)
+            put("scheduleRevision", scheduleRevision)
+            put("revision", scheduleRevision)
+            put("triggerAtEpochMs", triggerAtEpochMs)
+            put("title", title)
+            put("body", body)
+            put("localeTag", localeTag)
+            put("vibrationEnabled", vibrationEnabled)
+            put("defaultSnoozeMinutes", defaultSnoozeMinutes)
+            put("state", state)
+            sessionId?.let { put("sessionId", it) }
+            ringStartedElapsedRealtimeMs?.let { put("ringStartedElapsedRealtimeMs", it) }
+        }
+
+    val platformId: String
+        get() = "$reminderId:$scheduleRevision"
 
     companion object {
         const val STATE_SCHEDULED = "scheduled"
+        const val STATE_PENDING = "pending"
         const val STATE_RINGING = "ringing"
+        const val STATE_CANCEL_PENDING = "cancel_pending"
 
         fun fromJson(json: JSONObject): AlarmRecord =
             AlarmRecord(
@@ -59,6 +72,9 @@ internal data class AlarmRecord(
                 vibrationEnabled = json.optBoolean("vibrationEnabled", true),
                 defaultSnoozeMinutes = json.optInt("defaultSnoozeMinutes", 10).coerceIn(1, 24 * 60),
                 state = json.optString("state", STATE_SCHEDULED),
+                sessionId = json.optStringOrNull("sessionId"),
+                ringStartedElapsedRealtimeMs =
+                    json.optLongOrNull("ringStartedElapsedRealtimeMs"),
             )
     }
 }
@@ -72,6 +88,9 @@ internal data class AlarmEvent(
     val occurredAtEpochMs: Long = System.currentTimeMillis(),
     val snoozeMinutes: Int? = null,
     val nextTriggerAtEpochMs: Long? = null,
+    val sessionId: String? = null,
+    val detailCode: String? = null,
+    val delayMillis: Long? = null,
 ) {
     fun toJson(): JSONObject =
         JSONObject().apply {
@@ -83,6 +102,9 @@ internal data class AlarmEvent(
             put("occurredAtEpochMs", occurredAtEpochMs)
             snoozeMinutes?.let { put("snoozeMinutes", it) }
             nextTriggerAtEpochMs?.let { put("nextTriggerAtEpochMs", it) }
+            sessionId?.let { put("sessionId", it) }
+            detailCode?.let { put("detailCode", it) }
+            delayMillis?.let { put("delayMillis", it) }
         }
 
     fun toMap(): Map<String, Any> = buildMap {
@@ -94,6 +116,9 @@ internal data class AlarmEvent(
         put("occurredAtEpochMs", occurredAtEpochMs)
         snoozeMinutes?.let { put("snoozeMinutes", it) }
         nextTriggerAtEpochMs?.let { put("nextTriggerAtEpochMs", it) }
+        sessionId?.let { put("sessionId", it) }
+        detailCode?.let { put("detailCode", it) }
+        delayMillis?.let { put("delayMillis", it) }
     }
 
     companion object {
@@ -107,6 +132,9 @@ internal data class AlarmEvent(
                 occurredAtEpochMs = json.optLong("occurredAtEpochMs"),
                 snoozeMinutes = json.optIntOrNull("snoozeMinutes"),
                 nextTriggerAtEpochMs = json.optLongOrNull("nextTriggerAtEpochMs"),
+                sessionId = json.optStringOrNull("sessionId"),
+                detailCode = json.optStringOrNull("detailCode"),
+                delayMillis = json.optLongOrNull("delayMillis"),
             )
     }
 }
@@ -116,3 +144,6 @@ private fun JSONObject.optIntOrNull(name: String): Int? =
 
 private fun JSONObject.optLongOrNull(name: String): Long? =
     if (has(name) && !isNull(name)) getLong(name) else null
+
+private fun JSONObject.optStringOrNull(name: String): String? =
+    if (has(name) && !isNull(name)) getString(name).takeIf(String::isNotBlank) else null

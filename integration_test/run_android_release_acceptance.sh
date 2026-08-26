@@ -639,6 +639,7 @@ sha256sum "${evidence_dir}/alarm-after-explicit-overlay.txt" \
   "${evidence_dir}/alarm-after-verify.txt" \
   > "${evidence_dir}/alarm-dumps.sha256"
 
+danggui_set_acceptance_phase 'real-scheduled-notification-delivery'
 deadline_seconds=$(( scheduled_seconds + 30 ))
 current_seconds="$(device_epoch_seconds)"
 remaining_seconds=$(( deadline_seconds - current_seconds ))
@@ -684,6 +685,7 @@ printf '%s\n' \
 jq -e '.latenessSeconds >= -2 and .latenessSeconds <= .maximumAllowedLatenessSeconds' \
   "${evidence_dir}/notification-timing.json" >/dev/null
 
+danggui_set_acceptance_phase 'production-notification-content-click'
 bounded_adb shell input keyevent KEYCODE_WAKEUP >/dev/null
 bounded_adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
 if ! bounded_adb shell cmd statusbar expand-notifications \

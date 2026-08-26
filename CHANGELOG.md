@@ -3,6 +3,35 @@
 All notable changes to Danggui are documented here. The project follows
 [Semantic Versioning](https://semver.org/) for public releases.
 
+## 1.1.4 - alarm reliability hardening pre-release (2026-08-26)
+
+### Fixed
+
+- Android 8+ exact alarms now enter the foreground ringing service directly;
+  Android 7/7.1 use a non-exported receiver protected by a bounded wakeful
+  hand-off. Every new Android process re-submits only future database alarms,
+  recovering system registrations removed by force-stop, package replacement,
+  or OEM cleanup without ever turning app launch into catch-up ringing.
+- The ringing service validates reminder revision and session, holds only a
+  bounded wake lock, and never starts an alarm more than 15 minutes late.
+- Made stop, snooze, replacement, audio, vibration, recovery, and diagnostics
+  independently fault tolerant. Legacy v1.1.3 broadcast alarms remain
+  recognized for one compatibility release.
+- Serialized iOS AlarmKit mutations, made native identifiers revision-aware,
+  and persisted recoverable replacement transactions so editing or snoozing
+  cannot silently remove the last valid alarm before its successor exists.
+- Added platform alarm snapshots, delivery-strength levels, capacity deferral,
+  and privacy-safe lifecycle diagnostics shared by Android, iOS, and Dart.
+
+### Delivery
+
+- Set product version `1.1.4`, build number `5`, universal Android version code
+  `5`, and split APK codes `1005`, `2005`, and `4005`.
+- Added native Android and iOS contract tests and made RunnerTests part of the
+  unsigned macOS CI gate. The public iOS delivery remains source plus unsigned
+  build evidence, not an IPA; Xcode Simulator and physical-device limitations
+  remain explicitly documented.
+
 ## 1.1.3 - reliable alarms and long-page navigation pre-release (2026-08-25)
 
 ### Fixed

@@ -31,6 +31,7 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
             "stopAlarm" -> stopAlarm(call.arguments, result)
             "snoozeAlarm" -> snoozeAlarm(call.arguments, result)
             "listScheduledAlarms" -> result.success(listActiveAlarms())
+            "listAlarmSnapshots" -> result.success(listActiveAlarms())
             "drainAlarmEvents" -> {
                 reconcileStoredAlarms()
                 result.success(store.events().map(AlarmEvent::toMap))
@@ -59,20 +60,38 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
         val oemLauncher = OemSettingsLauncher(activity)
         val alarmVolume = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
         val maxAlarmVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+        val notificationsEnabled = notificationManager.areNotificationsEnabled()
+        val alarmChannelImportance =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                channel?.importance ?: NotificationManager.IMPORTANCE_HIGH
+            } else {
+                NotificationManager.IMPORTANCE_HIGH
+            }
+        val alarmChannelEnabled =
+            alarmChannelImportance != NotificationManager.IMPORTANCE_NONE
+        val capabilityLevel =
+            when {
+                exactAlarmAllowed &&
+                    notificationPermissionGranted &&
+                    notificationsEnabled &&
+                    alarmChannelEnabled -> "alarm-grade"
+                notificationPermissionGranted && notificationsEnabled ->
+                    "time-sensitive-best-effort"
+                notificationsEnabled -> "ordinary"
+                else -> "unavailable"
+            }
         return mapOf(
             "platform" to "android",
             "sdkInt" to Build.VERSION.SDK_INT,
             "manufacturer" to Build.MANUFACTURER,
             "brand" to Build.BRAND,
             "model" to Build.MODEL,
-            "notificationsEnabled" to notificationManager.areNotificationsEnabled(),
+            "notificationsEnabled" to notificationsEnabled,
             "notificationPermissionGranted" to notificationPermissionGranted,
             "exactAlarmAllowed" to exactAlarmAllowed,
             "fullScreenAllowed" to fullScreenAllowed,
-            "alarmChannelEnabled" to
-                (channel == null || channel.importance != NotificationManager.IMPORTANCE_NONE),
-            "alarmChannelImportance" to
-                (channel?.importance ?: NotificationManager.IMPORTANCE_HIGH),
+            "alarmChannelEnabled" to alarmChannelEnabled,
+            "alarmChannelImportance" to alarmChannelImportance,
             "alarmVolume" to alarmVolume,
             "alarmMaxVolume" to maxAlarmVolume,
             "alarmVolumeAudible" to (alarmVolume > 0),
@@ -85,6 +104,7 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
             "scheduledAlarmCount" to store.scheduled().size,
             "ringingAlarmCount" to store.ringing().size,
             "canScheduleStrongAlarm" to exactAlarmAllowed,
+            "capabilityLevel" to capabilityLevel,
         )
     }
 
@@ -115,7 +135,18 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
             }
         }.getOrNull() != null
         if (!serviceStarted) {
-            store.ringing().forEach { store.removeRingingAndAppendStopped(it) }
+            store.ringing().forEach { record ->
+                store.appendEvent(
+                    AlarmEvent(
+                        reminderId = record.reminderId,
+                        taskId = record.taskId,
+                        scheduleRevision = record.scheduleRevision,
+                        type = "error",
+                        sessionId = record.sessionId,
+                        detailCode = "ringing_service_recovery_failed",
+                    ),
+                )
+            }
         }
     }
 
@@ -175,43 +206,64 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
     private fun scheduleAlarm(arguments: Any?, result: MethodChannel.Result) {
         val argumentsMap = arguments.asArguments(result) ?: return
         val record = parseRecord(argumentsMap, result) ?: return
-        val wasRinging = store.get(record.reminderId)?.state == AlarmRecord.STATE_RINGING
-        if (wasRinging) AlarmActions.stop(activity, record.reminderId)
         val scheduled = scheduler.schedule(record)
-        if (scheduled) {
-            result.success(null)
-        } else {
-            result.error(
-                "exact_alarm_permission_required",
-                "Exact alarm access is required before scheduling a strong alarm.",
-                null,
-            )
-        }
+        completeScheduleResult(scheduled, result)
     }
 
     private fun cancelAlarm(arguments: Any?, result: MethodChannel.Result) {
         val argumentsMap = arguments.asArguments(result) ?: return
         val reminderId = argumentsMap.requiredString("reminderId", result) ?: return
-        val removed = scheduler.cancel(reminderId)
-        if (removed?.state == AlarmRecord.STATE_RINGING) {
-            AlarmActions.refreshSession(activity)
-        }
-        result.success(null)
+        completeScheduleResult(scheduler.cancel(reminderId).result, result)
     }
 
     private fun stopAlarm(arguments: Any?, result: MethodChannel.Result) {
-        val argumentsMap = arguments.asOptionalArguments(result) ?: return
-        val reminderId = argumentsMap["reminderId"] as? String
-        AlarmActions.stop(activity, reminderId)
-        result.success(null)
+        val argumentsMap = arguments.asArguments(result) ?: return
+        val reminderId = (argumentsMap["reminderId"] as? String)?.trim()?.takeIf(String::isNotEmpty)
+        val scheduleRevision =
+            ((argumentsMap["scheduleRevision"] ?: argumentsMap["revision"]) as? Number)?.toLong()
+        val sessionId = (argumentsMap["sessionId"] as? String)?.trim()?.takeIf(String::isNotEmpty)
+        if (!AlarmIdentityPolicy.hasCompleteCurrentIdentity(reminderId, scheduleRevision, sessionId)) {
+            result.error(
+                "invalid_alarm_identity",
+                "reminderId, scheduleRevision, and sessionId are required",
+                null,
+            )
+            return
+        }
+        val outcome =
+            AlarmActions.stop(
+                activity,
+                requireNotNull(reminderId),
+                requireNotNull(scheduleRevision),
+                requireNotNull(sessionId),
+            )
+        completeScheduleResult(outcome.result, result)
     }
 
     private fun snoozeAlarm(arguments: Any?, result: MethodChannel.Result) {
-        val argumentsMap = arguments.asOptionalArguments(result) ?: return
-        val reminderId = argumentsMap["reminderId"] as? String
+        val argumentsMap = arguments.asArguments(result) ?: return
+        val reminderId = (argumentsMap["reminderId"] as? String)?.trim()?.takeIf(String::isNotEmpty)
+        val scheduleRevision =
+            ((argumentsMap["scheduleRevision"] ?: argumentsMap["revision"]) as? Number)?.toLong()
+        val sessionId = (argumentsMap["sessionId"] as? String)?.trim()?.takeIf(String::isNotEmpty)
+        if (!AlarmIdentityPolicy.hasCompleteCurrentIdentity(reminderId, scheduleRevision, sessionId)) {
+            result.error(
+                "invalid_alarm_identity",
+                "reminderId, scheduleRevision, and sessionId are required",
+                null,
+            )
+            return
+        }
         val minutes = (argumentsMap["minutes"] as? Number)?.toInt() ?: 10
-        AlarmActions.snooze(activity, reminderId, minutes)
-        result.success(null)
+        val outcome =
+            AlarmActions.snooze(
+                context = activity,
+                reminderId = requireNotNull(reminderId),
+                scheduleRevision = requireNotNull(scheduleRevision),
+                sessionId = requireNotNull(sessionId),
+                minutes = minutes,
+            )
+        completeScheduleResult(outcome.result, result)
     }
 
     private fun acknowledgeAlarmEvents(arguments: Any?, result: MethodChannel.Result) {
@@ -250,14 +302,10 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
                 defaultSnoozeMinutes = 10,
             )
         val scheduled = scheduler.schedule(record)
-        if (scheduled) {
+        if (scheduled == AlarmScheduleResult.SUCCESS) {
             result.success(null)
         } else {
-            result.error(
-                "exact_alarm_permission_required",
-                "Exact alarm access is required before scheduling a test alarm.",
-                null,
-            )
+            completeScheduleResult(scheduled, result)
         }
     }
 
@@ -308,6 +356,35 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
                 false
             }
         }
+    }
+
+    private fun completeScheduleResult(
+        scheduleResult: AlarmScheduleResult,
+        result: MethodChannel.Result,
+    ) {
+        if (scheduleResult == AlarmScheduleResult.SUCCESS) {
+            result.success(null)
+            return
+        }
+        result.error(
+            scheduleResult.errorCode ?: "alarm_operation_failed",
+            when (scheduleResult) {
+                AlarmScheduleResult.INVALID_TRIGGER_TIME -> "The alarm trigger time must be in the future."
+                AlarmScheduleResult.EXACT_ALARM_PERMISSION_REQUIRED ->
+                    "Exact alarm access is required before scheduling a strong alarm."
+                AlarmScheduleResult.STALE_SCHEDULE_REVISION ->
+                    "The alarm revision or ringing session is no longer current."
+                AlarmScheduleResult.DURABLE_STORE_WRITE_FAILED,
+                AlarmScheduleResult.DURABLE_COMMIT_FAILED ->
+                    "The alarm could not be committed to durable storage."
+                AlarmScheduleResult.SYSTEM_ALARM_INSTALL_FAILED ->
+                    "Android rejected the alarm installation."
+                AlarmScheduleResult.SYSTEM_ALARM_CANCEL_FAILED ->
+                    "Android rejected the alarm cancellation; the durable tombstone was retained."
+                AlarmScheduleResult.SUCCESS -> ""
+            },
+            mapOf("status" to scheduleResult.name.lowercase()),
+        )
     }
 
     private fun Any?.asArguments(result: MethodChannel.Result): Map<*, *>? {

@@ -698,8 +698,13 @@ run_alarm_dump_contract_tests() (
   local case_root
   local active_dump
   local cancellation_dump
+  local ringing_service_dump
   local native_dump
   local unrelated_dump
+  local stale_next_wake_dump
+  # The production acceptance caller exposes this exact readonly name. Keep it
+  # in the parser contract so a helper-local name collision cannot regress.
+  readonly package_name='com.danggui.memo'
   # Most infrastructure tests source the helpers inside isolated subshells;
   # this small pure-parser contract runs in the parent shell.
   source "${script_dir}/android_emulator_infrastructure.sh"
@@ -717,6 +722,22 @@ run_alarm_dump_contract_tests() (
   if danggui_alarm_dump_has_scheduled_notification \
        "${active_dump}" com.danggui.memo 1787517844000; then
     echo 'A different scheduled instant was incorrectly accepted.' >&2
+    return 1
+  fi
+
+  ringing_service_dump="${case_root}/ringing-service.txt"
+  printf '%s\n' \
+    '22 pending alarms:' \
+    '  RTC_WAKEUP #2: Alarm{beb9681 type 0 origWhen 1787517843563 whenElapsed 643808 com.danggui.memo}' \
+    '    tag=*walarm*:com.danggui.memo.action.FIRE_RINGING_SERVICE' \
+    '    type=RTC_WAKEUP origWhen=2026-08-23 20:44:03.563 window=0 exactAllowReason=permission' \
+    '    operation=PendingIntent{4194d14: PendingIntentRecord{5ba19bd com.danggui.memo startForegroundService}}' \
+    > "${ringing_service_dump}"
+  danggui_alarm_dump_has_scheduled_notification \
+    "${ringing_service_dump}" com.danggui.memo 1787517843563
+  if danggui_alarm_dump_has_scheduled_notification \
+       "${ringing_service_dump}" com.danggui.memo 1787517843000; then
+    echo 'A different ringing-service instant was incorrectly accepted.' >&2
     return 1
   fi
 
@@ -747,13 +768,28 @@ run_alarm_dump_contract_tests() (
     return 1
   fi
 
+  stale_next_wake_dump="${case_root}/stale-next-wake.txt"
+  printf '%s\n' \
+    'Pending alarm batches: 1' \
+    '  RTC_WAKEUP #0: Alarm{123 type 0 when 1787517000000 android}' \
+    '    tag=*walarm*:android.intent.action.TIME_SET' \
+    'Next wake from idle: Alarm{456 type 0 when 1787517843563 com.danggui.memo}' \
+    '  tag=*walarm*:com.danggui.memo.action.FIRE_ALARM' \
+    '  operation=PendingIntent{abc: PendingIntentRecord{def com.danggui.memo broadcastIntent}}' \
+    > "${stale_next_wake_dump}"
+  if danggui_alarm_dump_has_scheduled_notification \
+       "${stale_next_wake_dump}" com.danggui.memo 1787517843563; then
+    echo 'A stale Next-wake-from-idle pointer was incorrectly accepted.' >&2
+    return 1
+  fi
+
   printf '%s\n' \
     'Exact Alarm Candidates:' \
     '  com.danggui.memo' \
     'Removal history:' \
     '  #1: Reason=pi_cancelled' \
     '    Snapshot:' \
-    '      type=RTC_WAKEUP tag=*walarm*:com.danggui.memo.action.FIRE_ALARM' \
+    '      type=RTC_WAKEUP tag=*walarm*:com.danggui.memo.action.FIRE_RINGING_SERVICE' \
     > "${cancellation_dump}"
   if danggui_alarm_dump_has_scheduled_notification \
        "${cancellation_dump}" com.danggui.memo 1787517843000; then

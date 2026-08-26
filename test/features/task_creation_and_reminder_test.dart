@@ -556,9 +556,19 @@ void main() {
   testWidgets(
     'task editor saves the reminder and surfaces a permission-query failure',
     (tester) async {
-      final fixedNow = DateTime.now();
-      final reminderAt = nextReminderTime(fixedNow)
-          .add(const Duration(hours: 1));
+      final tomorrow = DateTime.now().add(const Duration(days: 1));
+      final fixedNow = DateTime(
+        tomorrow.year,
+        tomorrow.month,
+        tomorrow.day,
+        10,
+      );
+      final reminderAt = DateTime(
+        tomorrow.year,
+        tomorrow.month,
+        tomorrow.day,
+        11,
+      );
       final taskId = (await tester.runAsync(
         () => controller.createTask(title: '权限失败仍保存'),
       ))!;
@@ -581,7 +591,7 @@ void main() {
 
       final dialog = tester.widget<ReminderDialog>(find.byType(ReminderDialog));
       dialog.onConfirm(TimeOfDay.fromDateTime(reminderAt));
-      await tester.pump();
+      await tester.pumpAndSettle();
       await tester.pump(const Duration(milliseconds: 30));
 
       final deadline = DateTime.now().add(const Duration(seconds: 3));
@@ -600,6 +610,7 @@ void main() {
         );
         await tester.pump();
       }
+      await tester.pump();
 
       final task = container.read(appStoreProvider).requireValue.tasks.single;
       expect(task.reminderAt, reminderAt);

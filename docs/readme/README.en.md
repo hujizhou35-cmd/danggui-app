@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version: v1.1.3 public pre-release" src="https://img.shields.io/badge/version-v1.1.3%20pre--release-B5684C?style=flat-square" />
+  <img alt="Version: v1.1.4 public pre-release" src="https://img.shields.io/badge/version-v1.1.4%20pre--release-B5684C?style=flat-square" />
   <img alt="Platforms: Android and iOS source" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20source-6F8068?style=flat-square" />
   <img alt="Data: local-first and portable" src="https://img.shields.io/badge/data-local--first%20%7C%20portable-81786F?style=flat-square" />
   <img alt="License: Apache 2.0" src="https://img.shields.io/badge/code-Apache--2.0-2E2925?style=flat-square" />
@@ -88,10 +88,10 @@ Use the [official download page](https://danggui.hujizhou35.workers.dev/en/downl
 
 | Platform | Recommended entry | Current delivery |
 | --- | --- | --- |
-| Android 7.0+ | [v1.1.3 public pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3) | Formally signed universal APK; most users want `danggui-android-universal-release.apk` |
+| Android 7.0+ | [v1.1.4 public pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.4) | Formally signed universal APK; most users want `danggui-android-universal-release.apk` |
 | iOS | [Source build guide](../architecture/ios-source-build.md) | Complete Xcode source and unsigned build evidence; no IPA or TestFlight distribution |
 
-v1.1.3 remains a **Pre-release**. Automated acceptance has passed, while native alarms, lock-screen behavior, sound, vibration, and overlay upgrades are still being checked across physical Android devices from different manufacturers. Back up existing data before installing and verify the file against `SHA256SUMS` in the Release. Split APKs, the AAB, iOS build evidence, and signing certificate and verification records are grouped in `danggui-developer-assets-v1.1.3.zip`; most users do not need it. See the [delivery guide](../architecture/platform-delivery.md) and [v1.1.3 checklist](../release/v1.1.3-release-checklist.md) for the full boundary.
+v1.1.4 remains a **Pre-release**. It is published only after Android automation and the unsigned iOS build pass, while lock-screen delivery, sound, haptics, and overnight behavior still need broader physical Android and iPhone coverage. Back up existing data before installing and verify the file against `SHA256SUMS` in the Release. Split APKs, the AAB, iOS build evidence, and signing records are grouped in `danggui-developer-assets-v1.1.4.zip`; most users do not need it. See the [delivery guide](../architecture/platform-delivery.md) and [v1.1.4 checklist](../release/v1.1.4-release-checklist.md) for the full boundary.
 
 ## Version journey
 
@@ -101,6 +101,7 @@ v1.1.3 remains a **Pre-release**. Automated acceptance has passed, while native 
 | [v1.1.0](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.0) | Strengthened editor and reminder lifecycle reliability and restored the complete ball-and-sprout launch experience. |
 | [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | Added minute-by-minute reminder selection and explicit save feedback, compacted Past, and removed the duplicate launch composition. |
 | [v1.1.3](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3) | Upgraded sound reminders to native alarms, added in-app permission guidance and long-page fast scrollbars, and fixed feedback that stayed visible indefinitely. |
+| [v1.1.4](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.4) | Hardened Android's direct ringing path, aligned revision transactions and the 15-minute expiry contract, and added auditable alarm snapshots and diagnostics. |
 
 See the full [CHANGELOG](../../CHANGELOG.md).
 

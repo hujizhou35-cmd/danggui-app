@@ -9,37 +9,56 @@ readonly DANGGUI_INFRA_RETRY_EXIT_STATUS=75
 readonly DANGGUI_INFRA_RETRY_SIGNAL='DANGGUI_FRESH_AVD_RETRY_V1'
 
 danggui_alarm_dump_has_scheduled_notification() {
-  local source_path="$1"
-  local package_name="$2"
-  local expected_epoch_millis="$3"
+  local alarm_dump_path="$1"
+  local alarm_package="$2"
+  local alarm_epoch_millis="$3"
 
-  [[ -s "${source_path}" ]] || return 1
-  [[ -n "${package_name}" ]] || return 1
-  [[ "${expected_epoch_millis}" =~ ^[0-9]+$ ]] || return 1
+  [[ -s "${alarm_dump_path}" ]] || return 1
+  [[ -n "${alarm_package}" ]] || return 1
+  [[ "${alarm_epoch_millis}" =~ ^[0-9]+$ ]] || return 1
 
-  # Match an active Alarm entry and its immediately following delivery tag.
-  # v1.1.3 sound/vibration reminders use Danggui's native alarm receiver while
-  # silent/legacy registrations can still use flutter_local_notifications.
+  # Match an Alarm entry in the real pending-alarm section and its immediately
+  # following delivery tag. Android 8+ enters the foreground service directly;
+  # Android 7/7.1 and v1.1.3 compatibility registrations target the wakeful
+  # receiver; silent/legacy registrations can use flutter_local_notifications.
   # Package allowlists and cancellation-history snapshots can contain the same
-  # strings, so independent whole-file greps are not proof of a pending alarm.
+  # strings. Android 7 can also leave a stale "Next wake from idle" pointer
+  # after force-stop removes the real batch, so whole-file greps are not proof.
   awk \
-    -v package_name="${package_name}" \
-    -v expected_epoch_millis="${expected_epoch_millis}" '
+    -v package_name="${alarm_package}" \
+    -v expected_epoch_millis="${alarm_epoch_millis}" '
       BEGIN {
-        native_tag = "tag=*walarm*:" package_name ".action.FIRE_ALARM"
+        ringing_service_tag = "tag=*walarm*:" package_name \
+          ".action.FIRE_RINGING_SERVICE"
+        compatibility_receiver_tag = "tag=*walarm*:" package_name \
+          ".action.FIRE_ALARM"
         legacy_tag = "tag=*walarm*:" package_name \
           "/com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
       }
+      /^[[:space:]]*Pending alarm batches:/ ||
+      /^[[:space:]]*[0-9]+ pending alarms:[[:space:]]*$/ {
+        in_pending_alarms = 1
+        candidate_line = 0
+        next
+      }
+      /^[[:space:]]*(Next wake from idle|Past-due non-wakeup alarms|Pending user blocked background alarms|Pending alarms per uid|Top Alarms|Alarm Stats|App Alarm history):/ {
+        in_pending_alarms = 0
+        candidate_line = 0
+      }
+      in_pending_alarms &&
       index($0, "Alarm{") &&
       index($0, package_name) &&
       index($0, expected_epoch_millis) {
         candidate_line = NR
         next
       }
+      in_pending_alarms &&
       candidate_line > 0 &&
       NR > candidate_line &&
       NR - candidate_line <= 3 &&
-      (index($0, native_tag) || index($0, legacy_tag)) {
+      (index($0, ringing_service_tag) ||
+       index($0, compatibility_receiver_tag) ||
+       index($0, legacy_tag)) {
         found = 1
         exit
       }
@@ -47,7 +66,7 @@ danggui_alarm_dump_has_scheduled_notification() {
         candidate_line = 0
       }
       END { exit(found ? 0 : 1) }
-    ' "${source_path}"
+    ' "${alarm_dump_path}"
 }
 
 danggui_wait_for_independent_process_group() {

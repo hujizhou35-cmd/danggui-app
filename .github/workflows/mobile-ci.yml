@@ -184,6 +184,29 @@ jobs:
       - name: Build app bundle
         run: flutter build appbundle --release
 
+      - name: Run Android native unit tests and release lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/android
+          set +e
+          ./android/gradlew -p android \
+            :app:testDebugUnitTest :app:lintRelease --stacktrace \
+            2>&1 | tee dist/android/ANDROID_NATIVE_TESTS.txt
+          gradle_status="${PIPESTATUS[0]}"
+          set -e
+          if (( gradle_status != 0 )); then
+            lint_report="build/app/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt"
+            if [[ -f "${lint_report}" ]]; then
+              {
+                echo
+                echo '===== FULL APP RELEASE LINT REPORT ====='
+                cat "${lint_report}"
+              } | tee -a dist/android/ANDROID_NATIVE_TESTS.txt
+            fi
+          fi
+          exit "${gradle_status}"
+
       - name: Install pinned bundletool verifier
         shell: bash
         run: |
@@ -521,6 +544,48 @@ jobs:
 
       - name: Build unsigned iOS app
         run: bash tool/build_ios_unsigned.sh
+
+      - name: Run iOS RunnerTests on the newest available simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_identifier="$(
+            xcrun simctl list runtimes available -j |
+              jq -r '
+                .runtimes
+                | map(select(.identifier | startswith("com.apple.CoreSimulator.SimRuntime.iOS-")))
+                | sort_by(.version | split(".") | map(tonumber))
+                | reverse
+                | .[0].identifier // empty
+              '
+          )"
+          if [[ -z "${runtime_identifier}" ]]; then
+            echo "No available iOS simulator runtime was found." >&2
+            exit 1
+          fi
+          simulator_udid="$(
+            xcrun simctl list devices available -j |
+              jq -r --arg runtime "${runtime_identifier}" '
+                (.devices[$runtime] // [])
+                | map(select(.name | startswith("iPhone")))
+                | .[0].udid // empty
+              '
+          )"
+          if [[ -z "${simulator_udid}" ]]; then
+            echo "No available iPhone simulator was found." >&2
+            exit 1
+          fi
+          xcrun simctl boot "${simulator_udid}" 2>/dev/null || true
+          {
+            printf 'runtime=%s\nsimulator_udid=%s\n' \
+              "${runtime_identifier}" "${simulator_udid}"
+            xcodebuild test \
+              -workspace ios/Runner.xcworkspace \
+              -scheme Runner \
+              -destination "platform=iOS Simulator,id=${simulator_udid}" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO
+          } 2>&1 | tee dist/ios/RUNNER_TESTS.txt
 
       - name: Finalize iOS archive checksums
         shell: bash

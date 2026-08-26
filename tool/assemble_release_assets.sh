@@ -63,6 +63,7 @@ assemble_release_assets() (
     "SIGNING_CERTIFICATE.txt"
     "SIGNING_CERTIFICATE_SHA256.txt"
     "TOOLCHAIN.txt"
+    "ANDROID_NATIVE_TESTS.txt"
   )
   local ios_evidence=(
     "danggui-ios-unsigned.app.zip"
@@ -70,6 +71,7 @@ assemble_release_assets() (
     "UNSIGNED.txt"
     "XCODE.txt"
     "TOOLCHAIN.txt"
+    "RUNNER_TESTS.txt"
     "SOURCE_COMMIT.txt"
     "SOURCE_ARCHIVE_CONTENTS.txt"
   )
@@ -128,12 +130,12 @@ assemble_release_assets() (
     "" \
     "## Contents / 内容" \
     "" \
-    "- \`android/\`: ABI-specific APKs, the AAB, signing mode/certificate evidence, and the pinned Flutter toolchain record." \
-    "- \`ios/\`: unsigned \`Runner.app\` build evidence, platform/Xcode/toolchain records, and the source commit/archive manifest. The app archive is not an IPA and cannot be installed on a normal iPhone." \
+    "- \`android/\`: ABI-specific APKs, the AAB, native-test/lint output, signing mode/certificate evidence, and the pinned Flutter toolchain record." \
+    "- \`ios/\`: unsigned \`Runner.app\` build evidence, RunnerTests output, platform/Xcode/toolchain records, and the source commit/archive manifest. The app archive is not an IPA and cannot be installed on a normal iPhone." \
     "- \`SHA256SUMS\`: SHA-256 for every other file in this archive, including this README." \
     "" \
-    "- \`android/\`：分架构 APK、AAB、签名模式/证书证据及 Flutter 工具链记录。" \
-    "- \`ios/\`：无签名 \`Runner.app\` 构建证据、平台/Xcode/工具链记录，以及源码提交和归档清单。该 app 压缩包不是 IPA，不能安装到普通 iPhone。" \
+    "- \`android/\`：分架构 APK、AAB、原生测试/Lint 输出、签名模式/证书证据及 Flutter 工具链记录。" \
+    "- \`ios/\`：无签名 \`Runner.app\` 构建证据、RunnerTests 输出、平台/Xcode/工具链记录，以及源码提交和归档清单。该 app 压缩包不是 IPA，不能安装到普通 iPhone。" \
     "- \`SHA256SUMS\`：本归档内除校验清单自身外所有文件（包括本说明）的 SHA-256。" \
     "" \
     "## Verify / 校验" \
@@ -198,6 +200,7 @@ self_test() (
   printf 'fixture certificate report\n' > "${test_root}/android/SIGNING_CERTIFICATE.txt"
   printf '%064d\n' 0 > "${test_root}/android/SIGNING_CERTIFICATE_SHA256.txt"
   printf 'fixture Android toolchain\n' > "${test_root}/android/TOOLCHAIN.txt"
+  printf 'fixture Android native tests passed\n' > "${test_root}/android/ANDROID_NATIVE_TESTS.txt"
   (
     cd "${test_root}/android"
     sha256sum ./*.apk ./*.aab > SHA256SUMS
@@ -213,6 +216,7 @@ self_test() (
   printf 'This archive is unsigned build evidence, not an installable IPA.\n' > "${test_root}/ios/UNSIGNED.txt"
   printf 'fixture Xcode\n' > "${test_root}/ios/XCODE.txt"
   printf 'fixture iOS toolchain\n' > "${test_root}/ios/TOOLCHAIN.txt"
+  printf 'fixture RunnerTests passed\n' > "${test_root}/ios/RUNNER_TESTS.txt"
   printf '%040d\n' 0 > "${test_root}/ios/SOURCE_COMMIT.txt"
   printf 'source.txt\n' > "${test_root}/ios/SOURCE_ARCHIVE_CONTENTS.txt"
   (

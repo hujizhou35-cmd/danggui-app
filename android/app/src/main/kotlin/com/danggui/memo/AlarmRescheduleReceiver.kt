@@ -3,6 +3,7 @@ package com.danggui.memo
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import java.util.concurrent.Executors
@@ -14,6 +15,15 @@ class AlarmRescheduleReceiver : BroadcastReceiver() {
 
         val pendingResult = goAsync()
         val applicationContext = context.applicationContext
+        val wakeLock =
+            applicationContext.getSystemService(PowerManager::class.java)
+                .newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "${applicationContext.packageName}:alarm-recovery",
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire(RECOVERY_WAKE_LOCK_TIMEOUT_MILLIS)
+                }
         executor.execute {
             try {
                 val store = AlarmStore(applicationContext)
@@ -34,6 +44,7 @@ class AlarmRescheduleReceiver : BroadcastReceiver() {
                 // Store writes are transactional; leave the last durable state for the next
                 // boot, package, time-change, or app-start reconciliation attempt.
             } finally {
+                if (wakeLock.isHeld) wakeLock.release()
                 pendingResult.finish()
             }
         }
@@ -60,6 +71,7 @@ class AlarmRescheduleReceiver : BroadcastReceiver() {
     }
 
     companion object {
+        private const val RECOVERY_WAKE_LOCK_TIMEOUT_MILLIS = 60_000L
         private val executor = Executors.newSingleThreadExecutor()
         private val SUPPORTED_ACTIONS =
             setOf(

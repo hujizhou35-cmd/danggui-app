@@ -169,8 +169,18 @@ class AlarmActivity : Activity() {
                     alarmString(R.string.alarm_minutes, minutes),
                     filled = false,
                 ) {
-                    AlarmActions.snooze(applicationContext, minutes = minutes)
-                    finishAndRemoveTask()
+                    val record = AlarmStore(applicationContext).ringing().firstOrNull()
+                    if (record != null) {
+                        AlarmActions.snooze(
+                            context = applicationContext,
+                            reminderId = record.reminderId,
+                            scheduleRevision = record.scheduleRevision,
+                            sessionId = record.sessionId,
+                            minutes = minutes,
+                            allowLegacyIdentity = record.sessionId == null,
+                        )
+                    }
+                    finishOnlyWhenSessionIsEmpty()
                 }
             snoozeRow.addView(
                 button,
@@ -189,8 +199,17 @@ class AlarmActivity : Activity() {
 
         val stopButton =
             createButton(alarmString(R.string.alarm_stop_button), filled = true) {
-                AlarmActions.stop(applicationContext)
-                finishAndRemoveTask()
+                val record = AlarmStore(applicationContext).ringing().firstOrNull()
+                if (record != null) {
+                    AlarmActions.stop(
+                        context = applicationContext,
+                        reminderId = record.reminderId,
+                        scheduleRevision = record.scheduleRevision,
+                        sessionId = record.sessionId,
+                        allowLegacyIdentity = record.sessionId == null,
+                    )
+                }
+                finishOnlyWhenSessionIsEmpty()
             }
         root.addView(
             stopButton,
@@ -237,6 +256,14 @@ class AlarmActivity : Activity() {
                 ringing.take(4).joinToString("\n") {
                     it.title.ifBlank { alarmString(R.string.alarm_default_title) }
                 }
+        }
+    }
+
+    private fun finishOnlyWhenSessionIsEmpty() {
+        if (AlarmStore(applicationContext).ringing().isEmpty()) {
+            finishAndRemoveTask()
+        } else {
+            refreshContent()
         }
     }
 
