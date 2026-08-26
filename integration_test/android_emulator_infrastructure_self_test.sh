@@ -701,6 +701,7 @@ run_alarm_dump_contract_tests() (
   local ringing_service_dump
   local native_dump
   local unrelated_dump
+  local stale_next_wake_dump
   # The production acceptance caller exposes this exact readonly name. Keep it
   # in the parser contract so a helper-local name collision cannot regress.
   readonly package_name='com.danggui.memo'
@@ -764,6 +765,21 @@ run_alarm_dump_contract_tests() (
   if danggui_alarm_dump_has_scheduled_notification \
        "${unrelated_dump}" com.danggui.memo 1787517843563; then
     echo 'An unrelated native alarm action was incorrectly accepted.' >&2
+    return 1
+  fi
+
+  stale_next_wake_dump="${case_root}/stale-next-wake.txt"
+  printf '%s\n' \
+    'Pending alarm batches: 1' \
+    '  RTC_WAKEUP #0: Alarm{123 type 0 when 1787517000000 android}' \
+    '    tag=*walarm*:android.intent.action.TIME_SET' \
+    'Next wake from idle: Alarm{456 type 0 when 1787517843563 com.danggui.memo}' \
+    '  tag=*walarm*:com.danggui.memo.action.FIRE_ALARM' \
+    '  operation=PendingIntent{abc: PendingIntentRecord{def com.danggui.memo broadcastIntent}}' \
+    > "${stale_next_wake_dump}"
+  if danggui_alarm_dump_has_scheduled_notification \
+       "${stale_next_wake_dump}" com.danggui.memo 1787517843563; then
+    echo 'A stale Next-wake-from-idle pointer was incorrectly accepted.' >&2
     return 1
   fi
 

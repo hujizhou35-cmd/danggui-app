@@ -7,10 +7,13 @@ All notable changes to Danggui are documented here. The project follows
 
 ### Fixed
 
-- Removed Android's fragile alarm-to-broadcast-to-service hand-off. Exact
-  alarms now enter the foreground ringing service directly, validate the
-  reminder revision and session, hold only a bounded wake lock, and never
-  start an alarm more than 15 minutes late merely because the app was opened.
+- Android 8+ exact alarms now enter the foreground ringing service directly;
+  Android 7/7.1 use a non-exported receiver protected by a bounded wakeful
+  hand-off. Every new Android process re-submits only future database alarms,
+  recovering system registrations removed by force-stop, package replacement,
+  or OEM cleanup without ever turning app launch into catch-up ringing.
+- The ringing service validates reminder revision and session, holds only a
+  bounded wake lock, and never starts an alarm more than 15 minutes late.
 - Made stop, snooze, replacement, audio, vibration, recovery, and diagnostics
   independently fault tolerant. Legacy v1.1.3 broadcast alarms remain
   recognized for one compatibility release.

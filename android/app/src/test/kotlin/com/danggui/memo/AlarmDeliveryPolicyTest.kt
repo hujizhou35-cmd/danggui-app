@@ -5,6 +5,30 @@ import org.junit.Test
 
 class AlarmDeliveryPolicyTest {
     @Test
+    fun `Android seven uses bounded wakeful receiver delivery`() {
+        assertEquals(
+            AlarmDispatchRoute.WAKEFUL_RECEIVER,
+            AlarmDeliveryPolicy.dispatchRouteForSdk(24),
+        )
+        assertEquals(
+            AlarmDispatchRoute.WAKEFUL_RECEIVER,
+            AlarmDeliveryPolicy.dispatchRouteForSdk(25),
+        )
+    }
+
+    @Test
+    fun `Android eight and newer enter the foreground service directly`() {
+        assertEquals(
+            AlarmDispatchRoute.DIRECT_FOREGROUND_SERVICE,
+            AlarmDeliveryPolicy.dispatchRouteForSdk(26),
+        )
+        assertEquals(
+            AlarmDispatchRoute.DIRECT_FOREGROUND_SERVICE,
+            AlarmDeliveryPolicy.dispatchRouteForSdk(36),
+        )
+    }
+
+    @Test
     fun `delivery at trigger is accepted`() {
         assertEquals(
             AlarmDeliveryDecision.DELIVER,

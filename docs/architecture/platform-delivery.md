@@ -27,7 +27,7 @@ Android 主清单只包含以下八项经审计权限：
 - `WAKE_LOCK`：闹钟到点时短暂唤醒并维持必要处理。
 - `FOREGROUND_SERVICE` 与 `FOREGROUND_SERVICE_MEDIA_PLAYBACK`：仅在闹钟正在响铃时运行媒体播放前台服务。
 
-原生 `AlarmReceiver`、`AlarmActionReceiver`、`AlarmRescheduleReceiver`、`AlarmRingingService` 与 `AlarmActivity` 均不导出；插件的 `ScheduledNotificationReceiver`、`ScheduledNotificationBootReceiver` 和 `ActionBroadcastReceiver` 也全部 `exported=false`。v1.1.4 新建的 AlarmManager PendingIntent 直接进入 `AlarmRingingService`，`AlarmReceiver` 仅承接 v1.1.3 升级兼容。`AlarmRescheduleReceiver` 在重启、应用升级、系统时间/时区及精确权限状态变化后差异恢复未来闹钟。小米、华为、荣耀、OPPO、一加、vivo、iQOO 和三星的后台/自启动页面只作为用户可操作入口，应用不会自行改变厂商策略。
+原生 `AlarmReceiver`、`AlarmActionReceiver`、`AlarmRescheduleReceiver`、`AlarmRingingService` 与 `AlarmActivity` 均不导出；插件的 `ScheduledNotificationReceiver`、`ScheduledNotificationBootReceiver` 和 `ActionBroadcastReceiver` 也全部 `exported=false`。v1.1.4 在 Android 8+ 让 AlarmManager PendingIntent 直接进入 `AlarmRingingService`；Android 7/7.1 则按平台的广播闹钟合同进入 `AlarmReceiver`，由 20 秒有界唤醒锁保护到 `startService` 完成，服务随后立即取得自己的有界唤醒锁。Receiver 同时承接 v1.1.3 升级兼容。Android 无法可靠查询某个 PendingIntent 是否仍在 AlarmManager 的真实队列，因此每个新进程首次协调都会以业务数据库为权威，仅幂等重装未来提醒；已经到点的提醒不因打开应用而补响。`AlarmRescheduleReceiver` 在重启、应用升级、系统时间/时区及精确权限状态变化后差异恢复未来闹钟。小米、华为、荣耀、OPPO、一加、vivo、iQOO 和三星的后台/自启动页面只作为用户可操作入口，应用不会自行改变厂商策略。
 
 Android 启用 core library desugaring，并保留 `ic_stat_danggui` 通知小图标。普通通知仍由按声音/振动组合版本化的频道承载；原生响铃频道本身静音，实际声音通过 `USAGE_ALARM`/闹钟音频流播放，避免重复提示音。应用不声明 INTERNET、`USE_EXACT_ALARM` 或勿扰政策访问。
 

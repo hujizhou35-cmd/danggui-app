@@ -208,7 +208,15 @@ final class NotificationCoordinator {
     this._retryBaseDelay = const Duration(minutes: 1),
   }) : _gateway = gateway ?? _FlutterNotificationGateway(),
        _nowUtc = nowUtc ?? _systemNowUtc,
-       _systemLocaleName = systemLocaleName ?? _platformLocaleName;
+       _systemLocaleName = systemLocaleName ?? _platformLocaleName {
+    // Android does not expose a trustworthy query for this app's AlarmManager
+    // entries. A force-stop, package replacement, or OEM cleanup can therefore
+    // remove the system alarm while the durable native mirror still looks
+    // healthy. Re-submit only future database reminders once per new process;
+    // the startup SQL deliberately excludes already-due reminders so opening
+    // the app can never manufacture a catch-up ring.
+    _forceStartupReschedule = _gateway.platformName == 'android';
+  }
 
   final Future<DangguiDatabase> Function() _readDatabase;
   final NotificationGateway _gateway;

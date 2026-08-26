@@ -72,12 +72,12 @@ internal class AlarmScheduler(context: Context) {
                 it.reminderId == scheduledRecord.reminderId && it != pending
             }
         if (!store.commitPendingReplacement(pending, previous, replacementEvents(previous, scheduledRecord))) {
-            cancelDirectSystemAlarm(scheduledRecord)
+            cancelInstalledSystemAlarm(scheduledRecord)
             return AlarmScheduleResult.DURABLE_COMMIT_FAILED
         }
 
-        previous?.let { cancelDirectSystemAlarm(it) }
-        otherPending.forEach { cancelDirectSystemAlarm(it) }
+        previous?.let { cancelInstalledSystemAlarm(it) }
+        otherPending.forEach { cancelInstalledSystemAlarm(it) }
         cancelLegacySystemAlarm(scheduledRecord.reminderId)
         if (previous?.state == AlarmRecord.STATE_RINGING) {
             AlarmActions.refreshSession(context, store)
@@ -140,11 +140,11 @@ internal class AlarmScheduler(context: Context) {
                 eventsToAppend = listOf(snoozedEvent, registered),
             )
         ) {
-            cancelDirectSystemAlarm(scheduled)
+            cancelInstalledSystemAlarm(scheduled)
             return AlarmScheduleResult.DURABLE_COMMIT_FAILED
         }
 
-        cancelDirectSystemAlarm(ringingRecord)
+        cancelInstalledSystemAlarm(ringingRecord)
         cancelLegacySystemAlarm(ringingRecord.reminderId)
         AlarmScheduleResult.SUCCESS
     }
@@ -153,9 +153,9 @@ internal class AlarmScheduler(context: Context) {
         val targets =
             store.stageCancellation(reminderId)
                 ?: return AlarmActionOutcome(AlarmScheduleResult.DURABLE_STORE_WRITE_FAILED, 0)
-        val directCancelled = targets.map(::cancelDirectSystemAlarm).all { it }
+        val installedCancelled = targets.map(::cancelInstalledSystemAlarm).all { it }
         val legacyCancelled = cancelLegacySystemAlarm(reminderId)
-        val systemCancelled = directCancelled && legacyCancelled
+        val systemCancelled = installedCancelled && legacyCancelled
         val finalized = systemCancelled && store.finalizeCancellation(reminderId)
         val durableState =
             AlarmTransactionPolicy.afterCancelAttempt(
@@ -175,7 +175,7 @@ internal class AlarmScheduler(context: Context) {
     }
 
     fun cancelSystemAlarm(record: AlarmRecord): Unit = synchronized(schedulerLock) {
-        cancelDirectSystemAlarm(record)
+        cancelInstalledSystemAlarm(record)
         cancelLegacySystemAlarm(record.reminderId)
     }
 
@@ -218,9 +218,9 @@ internal class AlarmScheduler(context: Context) {
         store.cancellationPending()
             .groupBy(AlarmRecord::reminderId)
             .forEach { (reminderId, records) ->
-                val directCancelled = records.map(::cancelDirectSystemAlarm).all { it }
+                val installedCancelled = records.map(::cancelInstalledSystemAlarm).all { it }
                 val legacyCancelled = cancelLegacySystemAlarm(reminderId)
-                if (directCancelled && legacyCancelled) store.finalizeCancellation(reminderId)
+                if (installedCancelled && legacyCancelled) store.finalizeCancellation(reminderId)
             }
     }
 
@@ -231,7 +231,7 @@ internal class AlarmScheduler(context: Context) {
                 exactAlarmAllowed = canScheduleExactAlarms(),
             )
         reconciliation.removed.forEach { record ->
-            cancelDirectSystemAlarm(record)
+            cancelInstalledSystemAlarm(record)
             // A failed replacement can coexist with an older legacy alarm. Expiring only the
             // pending revision must not cancel that still-active reminder-only PendingIntent.
             if (store.get(record.reminderId) == null) {
@@ -255,7 +255,7 @@ internal class AlarmScheduler(context: Context) {
                 ) {
                     AlarmRecoveryDecision.RETAIN_DURABLE -> return@forEach
                     AlarmRecoveryDecision.EXPIRE -> {
-                        cancelDirectSystemAlarm(pending)
+                        cancelInstalledSystemAlarm(pending)
                         store.rollbackPending(pending)
                         return@forEach
                     }
@@ -263,7 +263,7 @@ internal class AlarmScheduler(context: Context) {
                 }
                 val previous = store.get(reminderId)
                 if (previous != null && pending.scheduleRevision <= previous.scheduleRevision) {
-                    cancelDirectSystemAlarm(pending)
+                    cancelInstalledSystemAlarm(pending)
                     store.rollbackPending(pending)
                     return@forEach
                 }
@@ -286,7 +286,7 @@ internal class AlarmScheduler(context: Context) {
                     return@forEach
                 }
                 if (!store.commitPendingReplacement(pending, previous, replacementEvents(previous, scheduled))) {
-                    cancelDirectSystemAlarm(scheduled)
+                    cancelInstalledSystemAlarm(scheduled)
                     store.appendEvent(
                         AlarmEvent(
                             reminderId = pending.reminderId,
@@ -298,8 +298,8 @@ internal class AlarmScheduler(context: Context) {
                     )
                     return@forEach
                 }
-                previous?.let { cancelDirectSystemAlarm(it) }
-                pendingRecords.filterNot { it == pending }.forEach { cancelDirectSystemAlarm(it) }
+                previous?.let { cancelInstalledSystemAlarm(it) }
+                pendingRecords.filterNot { it == pending }.forEach { cancelInstalledSystemAlarm(it) }
                 cancelLegacySystemAlarm(reminderId)
                 refreshRingingSession = refreshRingingSession || previous?.state == AlarmRecord.STATE_RINGING
             }
@@ -347,7 +347,7 @@ internal class AlarmScheduler(context: Context) {
         triggerAtEpochMs: Long = record.triggerAtEpochMs,
     ): Boolean {
         if (!canScheduleExactAlarms()) return false
-        val operation = directFirePendingIntent(record)
+        val operation = alarmDeliveryPendingIntent(record)
         val showIntent =
             PendingIntent.getActivity(
                 context,
@@ -373,24 +373,39 @@ internal class AlarmScheduler(context: Context) {
         }
     }
 
-    private fun directFirePendingIntent(record: AlarmRecord): PendingIntent {
-        val intent =
-            Intent(context, AlarmRingingService::class.java).apply {
-                action = AlarmRingingService.ACTION_FIRE
-                data = alarmIdentityUri(record.reminderId, record.scheduleRevision)
-                putExtra(EXTRA_REMINDER_ID, record.reminderId)
-                putExtra(EXTRA_SCHEDULE_REVISION, record.scheduleRevision)
-            }
+    private fun alarmDeliveryPendingIntent(record: AlarmRecord): PendingIntent {
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            PendingIntent.getForegroundService(context, FIRE_ALARM_REQUEST_CODE, intent, flags)
-        } else {
-            PendingIntent.getService(context, FIRE_ALARM_REQUEST_CODE, intent, flags)
+        val identityUri = alarmIdentityUri(record.reminderId, record.scheduleRevision)
+        return when (AlarmDeliveryPolicy.dispatchRouteForSdk(Build.VERSION.SDK_INT)) {
+            AlarmDispatchRoute.WAKEFUL_RECEIVER ->
+                PendingIntent.getBroadcast(
+                    context,
+                    FIRE_ALARM_REQUEST_CODE,
+                    Intent(context, AlarmReceiver::class.java).apply {
+                        action = ACTION_FIRE_ALARM
+                        data = identityUri
+                        putExtra(EXTRA_REMINDER_ID, record.reminderId)
+                        putExtra(EXTRA_SCHEDULE_REVISION, record.scheduleRevision)
+                    },
+                    flags,
+                )
+            AlarmDispatchRoute.DIRECT_FOREGROUND_SERVICE ->
+                PendingIntent.getForegroundService(
+                    context,
+                    FIRE_ALARM_REQUEST_CODE,
+                    Intent(context, AlarmRingingService::class.java).apply {
+                        action = AlarmRingingService.ACTION_FIRE
+                        data = identityUri
+                        putExtra(EXTRA_REMINDER_ID, record.reminderId)
+                        putExtra(EXTRA_SCHEDULE_REVISION, record.scheduleRevision)
+                    },
+                    flags,
+                )
         }
     }
 
-    private fun cancelDirectSystemAlarm(record: AlarmRecord): Boolean =
-        runCatching { alarmManager.cancel(directFirePendingIntent(record)) }.isSuccess
+    private fun cancelInstalledSystemAlarm(record: AlarmRecord): Boolean =
+        runCatching { alarmManager.cancel(alarmDeliveryPendingIntent(record)) }.isSuccess
 
     /** Cancels a v1.1.3 broadcast PendingIntent whose identity did not include revision. */
     private fun cancelLegacySystemAlarm(reminderId: String): Boolean =

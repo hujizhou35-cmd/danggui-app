@@ -6,9 +6,26 @@ internal enum class AlarmDeliveryDecision {
     MISSED,
 }
 
+internal enum class AlarmDispatchRoute {
+    WAKEFUL_RECEIVER,
+    DIRECT_FOREGROUND_SERVICE,
+}
+
 /** Pure timing rules shared by the service and local JVM tests. */
 internal object AlarmDeliveryPolicy {
     const val MISSED_ALARM_GRACE_MILLIS = 15 * 60_000L
+
+    /**
+     * Android 7/7.1 use the platform's canonical alarm broadcast contract and
+     * a bounded wakeful hand-off. Android 8+ can enter a foreground service
+     * directly, avoiding an additional background-start transition.
+     */
+    fun dispatchRouteForSdk(sdkInt: Int): AlarmDispatchRoute =
+        if (sdkInt >= 26) {
+            AlarmDispatchRoute.DIRECT_FOREGROUND_SERVICE
+        } else {
+            AlarmDispatchRoute.WAKEFUL_RECEIVER
+        }
 
     fun decide(triggerAtEpochMs: Long, nowEpochMs: Long): AlarmDeliveryDecision =
         when {

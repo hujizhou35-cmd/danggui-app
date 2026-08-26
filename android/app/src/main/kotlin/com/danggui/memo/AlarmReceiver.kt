@@ -6,7 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
 
-/** Compatibility handoff for alarms registered by v1.1.3 and earlier. */
+/** Android 7/7.1 wakeful delivery plus compatibility for v1.1.3 registrations. */
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != AlarmScheduler.ACTION_FIRE_ALARM) return
@@ -21,13 +21,13 @@ class AlarmReceiver : BroadcastReceiver() {
         powerManager
             .newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
-                "${applicationContext.packageName}:legacy-alarm-handoff",
+                "${applicationContext.packageName}:alarm-handoff",
             )
             .apply {
                 setReferenceCounted(false)
                 // The service takes its own bounded lock. Keeping this lock until its timeout
-                // closes the old BroadcastReceiver -> foreground-service CPU sleep gap.
-                acquire(LEGACY_HANDOFF_TIMEOUT_MILLIS)
+                // closes the BroadcastReceiver -> service CPU sleep gap.
+                acquire(HANDOFF_TIMEOUT_MILLIS)
             }
 
         try {
@@ -54,7 +54,7 @@ class AlarmReceiver : BroadcastReceiver() {
                             taskId = record.taskId,
                             scheduleRevision = record.scheduleRevision,
                             type = "error",
-                            detailCode = "legacy_service_handoff_failed",
+                            detailCode = "service_handoff_failed",
                         ),
                     )
                 }
@@ -65,6 +65,6 @@ class AlarmReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        private const val LEGACY_HANDOFF_TIMEOUT_MILLIS = 20_000L
+        private const val HANDOFF_TIMEOUT_MILLIS = 20_000L
     }
 }

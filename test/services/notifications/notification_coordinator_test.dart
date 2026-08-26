@@ -141,6 +141,74 @@ void main() {
     );
   });
 
+  test('Android startup reinstalls a future alarm despite a matching durable snapshot', () async {
+    gateway.platformNameValue = 'android';
+    coordinator = NotificationCoordinator(
+      () async => database,
+      gateway: gateway,
+      nowUtc: () => nowUtc,
+      systemLocaleName: () => 'zh_CN',
+    );
+    await _createFutureReminder(tasks, nowUtc);
+    await coordinator.reconcile();
+    final reminder = await database.select(database.reminders).getSingle();
+
+    gateway = FakeNotificationGateway()
+      ..platformNameValue = 'android'
+      ..nativeSnapshots.add(
+        NativeAlarmSnapshot(
+          reminderId: reminder.id,
+          platformId: 'native-${reminder.id}',
+          scheduleRevision: reminder.scheduleRevision,
+          triggerAtEpochMs:
+              reminder.scheduledAtUtc ~/ Duration.microsecondsPerMillisecond,
+          state: NativeAlarmSnapshotState.registered,
+        ),
+      );
+    coordinator = NotificationCoordinator(
+      () async => database,
+      gateway: gateway,
+      nowUtc: () => nowUtc,
+      systemLocaleName: () => 'zh_CN',
+    );
+
+    await coordinator.reconcile();
+    await coordinator.reconcile();
+
+    expect(gateway.scheduleCalls, 1);
+    expect(
+      gateway.scheduled.single.scheduleRevision,
+      reminder.scheduleRevision,
+    );
+  });
+
+  test('Android startup never reinstalls an already-due alarm', () async {
+    gateway.platformNameValue = 'android';
+    coordinator = NotificationCoordinator(
+      () async => database,
+      gateway: gateway,
+      nowUtc: () => nowUtc,
+      systemLocaleName: () => 'zh_CN',
+    );
+    await _createFutureReminder(tasks, nowUtc);
+    await coordinator.reconcile();
+
+    nowUtc = nowUtc.add(const Duration(hours: 2, minutes: 5));
+    gateway = FakeNotificationGateway()..platformNameValue = 'android';
+    coordinator = NotificationCoordinator(
+      () async => database,
+      gateway: gateway,
+      nowUtc: () => nowUtc,
+      systemLocaleName: () => 'zh_CN',
+    );
+
+    await coordinator.reconcile();
+
+    expect(gateway.scheduleCalls, 0);
+    final reminder = await database.select(database.reminders).getSingle();
+    expect(reminder.status, ReminderStatus.scheduled);
+  });
+
   test('startup diff replaces a stale native revision', () async {
     await _createFutureReminder(tasks, nowUtc);
     await coordinator.reconcile();
