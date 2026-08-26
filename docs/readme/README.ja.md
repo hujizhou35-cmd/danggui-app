@@ -24,7 +24,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3"><strong>Android 版をダウンロード</strong></a> ·
+  <a href="https://danggui.hujizhou35.workers.dev/ja"><strong>公式サイト</strong></a> ·
+  <a href="https://danggui.hujizhou35.workers.dev/ja/download">アプリを入手</a> ·
   <a href="#プレビュー">プレビュー</a> ·
   <a href="#データとプライバシー">プライバシー</a> ·
   <a href="#参加する">参加する</a>
@@ -82,6 +83,8 @@
 検証可能な詳細は[可読エクスポート仕様](../portable-export-format.md)と[プラットフォーム・プライバシー監査](../qa/privacy-platform-audit.md)をご覧ください。
 
 ## ダウンロード
+
+現在の入手方法、公開バージョンの状態、iPhone 版の準備状況は[公式サイトのダウンロードページ](https://danggui.hujizhou35.workers.dev/ja/download)をご確認ください。以下には検証用として、現在の Release、チェックサム、ソースビルド手順、バージョン情報を残しています。
 
 | プラットフォーム | 推奨入口 | 現在の提供内容 |
 | --- | --- | --- |

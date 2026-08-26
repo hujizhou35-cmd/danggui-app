@@ -24,7 +24,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3"><strong>Download for Android</strong></a> ·
+  <a href="https://danggui.hujizhou35.workers.dev/en"><strong>Official website</strong></a> ·
+  <a href="https://danggui.hujizhou35.workers.dev/en/download">Get the app</a> ·
   <a href="#preview">Preview</a> ·
   <a href="#your-data-stays-yours">Privacy</a> ·
   <a href="#contributing">Contributing</a>
@@ -82,6 +83,8 @@ Danggui's privacy position is a product boundary you can inspect:
 See the [portable export specification](../portable-export-format.md) and [platform privacy audit](../qa/privacy-platform-audit.md) for the verifiable details.
 
 ## Download
+
+Use the [official download page](https://danggui.hujizhou35.workers.dev/en/download) for current ways to get Danggui, public release status, and iPhone availability. The current Release, checksums, source-build guidance, and version details remain below for verification.
 
 | Platform | Recommended entry | Current delivery |
 | --- | --- | --- |
