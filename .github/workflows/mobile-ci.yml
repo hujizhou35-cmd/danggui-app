@@ -189,7 +189,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/android
-          ./android/gradlew -p android testDebugUnitTest lintRelease --stacktrace \
+          ./android/gradlew -p android \
+            :app:testDebugUnitTest :app:lintRelease --stacktrace \
             2>&1 | tee dist/android/ANDROID_NATIVE_TESTS.txt
 
       - name: Install pinned bundletool verifier
