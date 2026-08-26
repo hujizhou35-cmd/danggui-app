@@ -1,0 +1,45 @@
+name: Sync public release channel
+
+on:
+  release:
+    types: [published, edited, unpublished, deleted, prereleased, released]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+
+concurrency:
+  group: danggui-release-channel
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Reconcile published releases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out protected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Verify release channel contract
+        run: node --test tool/test/sync_release_channel.test.mjs
+
+      - name: Generate current channel
+        run: |
+          git fetch --force --tags origin
+          git fetch --no-tags origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          node tool/sync_release_channel.mjs \
+            --repository "${GITHUB_REPOSITORY}" \
+            --verify-git \
+            --output release-channel/current.json
+
+      - name: Publish atomic channel update
+        run: bash tool/publish_release_channel.sh release-channel/current.json

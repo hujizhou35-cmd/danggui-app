@@ -24,7 +24,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3"><strong>下载 Android</strong></a> ·
+  <a href="https://danggui.hujizhou35.workers.dev/zh-CN"><strong>官方网站</strong></a> ·
+  <a href="https://danggui.hujizhou35.workers.dev/zh-CN/download">获取应用</a> ·
   <a href="#产品预览">产品预览</a> ·
   <a href="#数据与隐私">数据与隐私</a> ·
   <a href="#参与项目">参与项目</a>
@@ -82,6 +83,8 @@
 格式细节见[可读导出规范](docs/portable-export-format.md)，平台边界与验证结果见[隐私平台审计](docs/qa/privacy-platform-audit.md)。
 
 ## 下载
+
+当前获取方式、公开版本状态和 iPhone 版本进度以[官方网站下载页](https://danggui.hujizhou35.workers.dev/zh-CN/download)为准。下面保留当前 Release、校验值、源码构建和版本信息，便于核对与审计。
 
 | 平台 | 推荐入口 | 当前交付 |
 | --- | --- | --- |

@@ -1,0 +1,36 @@
+import type { Metadata, Viewport } from 'next';
+import { isLocale } from '@/lib/content';
+import { SOCIAL_IMAGE_PATH, siteUrl } from '@/lib/site-config';
+import '../globals.css';
+
+export const metadata: Metadata = {
+  metadataBase: siteUrl,
+  title: {
+    default: '当归｜本地记录，不上传，不调用 AI',
+    template: '%s｜当归',
+  },
+  description: '一款把事项、完成后的过往记录和独立笔记放在一起的本地优先应用。',
+  icons: { icon: '/favicon.png' },
+  openGraph: {
+    siteName: '当归',
+    type: 'website',
+    images: [{ url: SOCIAL_IMAGE_PATH, width: 1280, height: 640, alt: '当归 · 本地记录' }],
+  },
+};
+
+export const viewport: Viewport = { themeColor: '#F4EFE7' };
+
+export default async function LocaleLayout({
+  children,
+  params,
+}: Readonly<{
+  children: React.ReactNode;
+  params: Promise<{ locale: string }>;
+}>) {
+  const { locale } = await params;
+  return (
+    <html lang={isLocale(locale) ? locale : 'zh-CN'}>
+      <body>{children}</body>
+    </html>
+  );
+}
