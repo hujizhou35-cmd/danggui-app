@@ -9,13 +9,13 @@ readonly DANGGUI_INFRA_RETRY_EXIT_STATUS=75
 readonly DANGGUI_INFRA_RETRY_SIGNAL='DANGGUI_FRESH_AVD_RETRY_V1'
 
 danggui_alarm_dump_has_scheduled_notification() {
-  local source_path="$1"
-  local package_name="$2"
-  local expected_epoch_millis="$3"
+  local alarm_dump_path="$1"
+  local alarm_package="$2"
+  local alarm_epoch_millis="$3"
 
-  [[ -s "${source_path}" ]] || return 1
-  [[ -n "${package_name}" ]] || return 1
-  [[ "${expected_epoch_millis}" =~ ^[0-9]+$ ]] || return 1
+  [[ -s "${alarm_dump_path}" ]] || return 1
+  [[ -n "${alarm_package}" ]] || return 1
+  [[ "${alarm_epoch_millis}" =~ ^[0-9]+$ ]] || return 1
 
   # Match an active Alarm entry and its immediately following delivery tag.
   # v1.1.4 reminders start the ringing service directly, v1.1.3 registrations
@@ -24,8 +24,8 @@ danggui_alarm_dump_has_scheduled_notification() {
   # Package allowlists and cancellation-history snapshots can contain the same
   # strings, so independent whole-file greps are not proof of a pending alarm.
   awk \
-    -v package_name="${package_name}" \
-    -v expected_epoch_millis="${expected_epoch_millis}" '
+    -v package_name="${alarm_package}" \
+    -v expected_epoch_millis="${alarm_epoch_millis}" '
       BEGIN {
         ringing_service_tag = "tag=*walarm*:" package_name \
           ".action.FIRE_RINGING_SERVICE"
@@ -53,7 +53,7 @@ danggui_alarm_dump_has_scheduled_notification() {
         candidate_line = 0
       }
       END { exit(found ? 0 : 1) }
-    ' "${source_path}"
+    ' "${alarm_dump_path}"
 }
 
 danggui_wait_for_independent_process_group() {

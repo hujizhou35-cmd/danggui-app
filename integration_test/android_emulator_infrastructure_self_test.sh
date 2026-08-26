@@ -701,6 +701,9 @@ run_alarm_dump_contract_tests() (
   local ringing_service_dump
   local native_dump
   local unrelated_dump
+  # The production acceptance caller exposes this exact readonly name. Keep it
+  # in the parser contract so a helper-local name collision cannot regress.
+  readonly package_name='com.danggui.memo'
   # Most infrastructure tests source the helpers inside isolated subshells;
   # this small pure-parser contract runs in the parent shell.
   source "${script_dir}/android_emulator_infrastructure.sh"
