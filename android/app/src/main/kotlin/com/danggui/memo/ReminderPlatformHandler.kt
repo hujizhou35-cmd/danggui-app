@@ -61,8 +61,14 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
         val alarmVolume = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
         val maxAlarmVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
         val notificationsEnabled = notificationManager.areNotificationsEnabled()
+        val alarmChannelImportance =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                channel?.importance ?: NotificationManager.IMPORTANCE_HIGH
+            } else {
+                NotificationManager.IMPORTANCE_HIGH
+            }
         val alarmChannelEnabled =
-            channel == null || channel.importance != NotificationManager.IMPORTANCE_NONE
+            alarmChannelImportance != NotificationManager.IMPORTANCE_NONE
         val capabilityLevel =
             when {
                 exactAlarmAllowed &&
@@ -85,8 +91,7 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
             "exactAlarmAllowed" to exactAlarmAllowed,
             "fullScreenAllowed" to fullScreenAllowed,
             "alarmChannelEnabled" to alarmChannelEnabled,
-            "alarmChannelImportance" to
-                (channel?.importance ?: NotificationManager.IMPORTANCE_HIGH),
+            "alarmChannelImportance" to alarmChannelImportance,
             "alarmVolume" to alarmVolume,
             "alarmMaxVolume" to maxAlarmVolume,
             "alarmVolumeAudible" to (alarmVolume > 0),

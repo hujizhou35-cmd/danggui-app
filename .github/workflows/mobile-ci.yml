@@ -189,9 +189,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/android
+          set +e
           ./android/gradlew -p android \
             :app:testDebugUnitTest :app:lintRelease --stacktrace \
             2>&1 | tee dist/android/ANDROID_NATIVE_TESTS.txt
+          gradle_status="${PIPESTATUS[0]}"
+          set -e
+          if (( gradle_status != 0 )); then
+            lint_report="build/app/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt"
+            if [[ -f "${lint_report}" ]]; then
+              {
+                echo
+                echo '===== FULL APP RELEASE LINT REPORT ====='
+                cat "${lint_report}"
+              } | tee -a dist/android/ANDROID_NATIVE_TESTS.txt
+            fi
+          fi
+          exit "${gradle_status}"
 
       - name: Install pinned bundletool verifier
         shell: bash
