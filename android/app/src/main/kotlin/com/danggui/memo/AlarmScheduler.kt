@@ -390,17 +390,21 @@ internal class AlarmScheduler(context: Context) {
                     flags,
                 )
             AlarmDispatchRoute.DIRECT_FOREGROUND_SERVICE ->
-                PendingIntent.getForegroundService(
-                    context,
-                    FIRE_ALARM_REQUEST_CODE,
-                    Intent(context, AlarmRingingService::class.java).apply {
-                        action = AlarmRingingService.ACTION_FIRE
-                        data = identityUri
-                        putExtra(EXTRA_REMINDER_ID, record.reminderId)
-                        putExtra(EXTRA_SCHEDULE_REVISION, record.scheduleRevision)
-                    },
-                    flags,
-                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    PendingIntent.getForegroundService(
+                        context,
+                        FIRE_ALARM_REQUEST_CODE,
+                        Intent(context, AlarmRingingService::class.java).apply {
+                            action = AlarmRingingService.ACTION_FIRE
+                            data = identityUri
+                            putExtra(EXTRA_REMINDER_ID, record.reminderId)
+                            putExtra(EXTRA_SCHEDULE_REVISION, record.scheduleRevision)
+                        },
+                        flags,
+                    )
+                } else {
+                    error("Foreground-service alarm route requires Android 8 or newer")
+                }
         }
     }
 
