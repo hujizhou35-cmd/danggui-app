@@ -18,9 +18,9 @@ void main() {
     expect(report.checks.length, greaterThanOrEqualTo(50));
     expect(expectedApplicationId, 'com.danggui.memo');
     final version = readReleaseVersion(repositoryRoot);
-    expect(version.name, '1.1.3');
-    expect(version.buildNumber, 4);
-    expect(version.technical, '1.1.3+4');
+    expect(version.name, '1.1.4');
+    expect(version.buildNumber, 5);
+    expect(version.technical, '1.1.4+5');
     expect(appVersionName, version.name);
     expect(appBuildNumber, version.buildNumber);
     expect(appTechnicalVersion, version.technical);

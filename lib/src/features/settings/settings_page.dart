@@ -14,6 +14,7 @@ import '../../domain/models.dart';
 import '../../services/backup/automatic_backup_coordinator.dart';
 import '../../services/backup/backup_service.dart';
 import '../../services/export/portable_export_service.dart';
+import '../../services/notifications/native_alarm_platform.dart';
 import '../../services/notifications/notification_coordinator.dart';
 import '../../ui/components/components.dart';
 import 'recently_deleted_page.dart';
@@ -870,8 +871,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             vibrationEnabled: settings.defaultVibrationEnabled,
           );
       if (!authorization.notificationsGranted ||
-          !authorization.exactSchedulingAvailable ||
-          !authorization.strongAlarmAuthorized) {
+          authorization.deliveryLevel == ReminderDeliveryLevel.unavailable) {
         throw StateError(permissionDenied);
       }
       await coordinator.scheduleTestAlarm(

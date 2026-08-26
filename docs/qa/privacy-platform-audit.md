@@ -1,4 +1,4 @@
-# 当归 1.1.3 隐私与平台发布前审计
+# 当归 1.1.4 隐私与平台发布前审计
 
 - 审计日期：2026-08-25
 - 审计对象：Android 与 iOS 的已检入源配置、Dart 生产源码、`pubspec.lock`，以及执行 `flutter pub get` 后解析到的移动端原生插件元数据。
@@ -15,7 +15,7 @@
 | 范围 | 验证结果 | 自动化门禁 |
 | --- | --- | --- |
 | 应用身份 | Android `namespace`/`applicationId` 与 iOS bundle ID 均为 `com.danggui.memo` | Dart 审计 + 平台静态测试 + APK 检查 |
-| 版本 | `1.1.3+4`；帮助与隐私和许可页显示产品版本 `1.1.3`，备份/导出记录技术版本；Android 通用/AAB versionCode 为 `4`，三分架构为 `1004`/`2004`/`4004`，iOS 构建值均从 `pubspec.yaml` 派生 | Dart 审计 + APK 检查 + iOS 构建脚本 |
+| 版本 | `1.1.4+5`；帮助与隐私和许可页显示产品版本 `1.1.4`，备份/导出记录技术版本；Android 通用/AAB versionCode 为 `5`，三分架构为 `1005`/`2005`/`4005`，iOS 构建值均从 `pubspec.yaml` 派生 | Dart 审计 + APK 检查 + iOS 构建脚本 |
 | Android SDK | min 24、target 36、compile 36；Java/Kotlin 17 | Dart 审计 + APK 检查 |
 | iOS 目标 | iOS 15.0；iPhone/iPad 均只允许竖屏 | Dart 审计 + iOS 构建脚本 |
 | Android 权限 | 精确为 `POST_NOTIFICATIONS`、`VIBRATE`、`RECEIVE_BOOT_COMPLETED`、`SCHEDULE_EXACT_ALARM`、`USE_FULL_SCREEN_INTENT`、`WAKE_LOCK`、`FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_MEDIA_PLAYBACK`；继续禁止 `USE_EXACT_ALARM`、INTERNET 与勿扰政策访问 | 源清单精确集合 + 解析插件清单 + 最终 APK 精确集合 |
@@ -70,7 +70,7 @@ dart run tool/audit_offline_boundary.dart
 flutter test test/platform/privacy_platform_config_test.dart --reporter expanded
 ```
 
-静态测试还会在临时副本中主动注入 INTERNET/`USE_EXACT_ALARM`、Firebase 依赖、未受控通知调度 API、HTTPS 端点和未经审阅的 iOS entitlement，并破坏 iOS 系统备份排除及 Keychain 本机限定选项，确认审计器会失败关闭，而不是只验证当前“恰好通过”的文件。v1.1.3 标签的 Android/iOS 编译、最终二进制和实体机门禁在真实完成前仍保持未签署状态。
+静态测试还会在临时副本中主动注入 INTERNET/`USE_EXACT_ALARM`、Firebase 依赖、未受控通知调度 API、HTTPS 端点和未经审阅的 iOS entitlement，并破坏 iOS 系统备份排除及 Keychain 本机限定选项，确认审计器会失败关闭，而不是只验证当前“恰好通过”的文件。v1.1.4 标签的 Android/iOS 编译、最终二进制和实体机门禁在真实完成前仍保持未签署状态。
 
 ## 源配置与最终产物的边界
 

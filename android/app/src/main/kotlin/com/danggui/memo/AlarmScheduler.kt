@@ -15,105 +15,339 @@ internal class AlarmScheduler(context: Context) {
     fun canScheduleExactAlarms(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
 
-    fun schedule(record: AlarmRecord): Boolean = synchronized(schedulerLock) {
-        if (record.triggerAtEpochMs <= System.currentTimeMillis()) return false
-        if (!canScheduleExactAlarms()) return false
+    fun schedule(record: AlarmRecord): AlarmScheduleResult = synchronized(schedulerLock) {
+        if (record.triggerAtEpochMs <= System.currentTimeMillis()) {
+            return AlarmScheduleResult.INVALID_TRIGGER_TIME
+        }
 
-        val scheduledRecord = record.copy(state = AlarmRecord.STATE_SCHEDULED)
-        val previousRecord = store.get(record.reminderId)
-        // Persist first: a fired PendingIntent must never point at a missing mirror record.
-        if (!store.put(scheduledRecord)) return false
+        val scheduledRecord = normalizedScheduled(record)
+        val previous = store.get(record.reminderId)
+        if (previous == scheduledRecord) {
+            if (!canScheduleExactAlarms()) {
+                return AlarmScheduleResult.EXACT_ALARM_PERMISSION_REQUIRED
+            }
+            val installed = installSystemAlarm(scheduledRecord)
+            if (installed) cancelLegacySystemAlarm(scheduledRecord.reminderId)
+            return if (installed) {
+                AlarmScheduleResult.SUCCESS
+            } else if (!canScheduleExactAlarms()) {
+                AlarmScheduleResult.EXACT_ALARM_PERMISSION_REQUIRED
+            } else {
+                AlarmScheduleResult.SYSTEM_ALARM_INSTALL_FAILED
+            }
+        }
+        if (previous != null && scheduledRecord.scheduleRevision <= previous.scheduleRevision) {
+            return AlarmScheduleResult.STALE_SCHEDULE_REVISION
+        }
 
-        if (installSystemAlarm(scheduledRecord)) return true
-        store.restoreIfCurrent(scheduledRecord, previousRecord)
-        false
+        val pending = scheduledRecord.copy(state = AlarmRecord.STATE_PENDING)
+        val alreadyStaged = store.get(record.reminderId, record.scheduleRevision) == pending
+        val staged = alreadyStaged ||
+            if (previous == null) {
+                store.stageInitial(scheduledRecord)
+            } else {
+                store.stageReplacement(scheduledRecord) == previous
+            }
+        if (!staged) {
+            return if ((store.latestRevision(record.reminderId) ?: Long.MIN_VALUE) >= record.scheduleRevision) {
+                AlarmScheduleResult.STALE_SCHEDULE_REVISION
+            } else {
+                AlarmScheduleResult.DURABLE_STORE_WRITE_FAILED
+            }
+        }
+        if (!canScheduleExactAlarms()) {
+            return AlarmScheduleResult.EXACT_ALARM_PERMISSION_REQUIRED
+        }
+
+        if (!installSystemAlarm(scheduledRecord)) {
+            return if (!canScheduleExactAlarms()) {
+                AlarmScheduleResult.EXACT_ALARM_PERMISSION_REQUIRED
+            } else {
+                AlarmScheduleResult.SYSTEM_ALARM_INSTALL_FAILED
+            }
+        }
+
+        val otherPending =
+            store.pending().filter {
+                it.reminderId == scheduledRecord.reminderId && it != pending
+            }
+        if (!store.commitPendingReplacement(pending, previous, replacementEvents(previous, scheduledRecord))) {
+            cancelDirectSystemAlarm(scheduledRecord)
+            return AlarmScheduleResult.DURABLE_COMMIT_FAILED
+        }
+
+        previous?.let { cancelDirectSystemAlarm(it) }
+        otherPending.forEach { cancelDirectSystemAlarm(it) }
+        cancelLegacySystemAlarm(scheduledRecord.reminderId)
+        if (previous?.state == AlarmRecord.STATE_RINGING) {
+            AlarmActions.refreshSession(context, store)
+        }
+        AlarmScheduleResult.SUCCESS
     }
 
     fun scheduleSnooze(
         ringingRecord: AlarmRecord,
         snoozedRecord: AlarmRecord,
         snoozedEvent: AlarmEvent,
-    ): Boolean = synchronized(schedulerLock) {
-        if (snoozedRecord.triggerAtEpochMs <= System.currentTimeMillis()) return false
-        if (!canScheduleExactAlarms()) return false
+    ): AlarmScheduleResult = synchronized(schedulerLock) {
+        if (snoozedRecord.triggerAtEpochMs <= System.currentTimeMillis()) {
+            return AlarmScheduleResult.INVALID_TRIGGER_TIME
+        }
+        if (store.get(ringingRecord.reminderId) != ringingRecord) {
+            return AlarmScheduleResult.STALE_SCHEDULE_REVISION
+        }
+        if (ringingRecord.state != AlarmRecord.STATE_RINGING) {
+            return AlarmScheduleResult.STALE_SCHEDULE_REVISION
+        }
+        if (snoozedRecord.scheduleRevision <= ringingRecord.scheduleRevision) {
+            return AlarmScheduleResult.STALE_SCHEDULE_REVISION
+        }
+
+        val pending =
+            snoozedRecord.copy(
+                state = AlarmRecord.STATE_PENDING,
+                sessionId = null,
+                ringStartedElapsedRealtimeMs = null,
+            )
+        val alreadyStaged =
+            store.get(snoozedRecord.reminderId, snoozedRecord.scheduleRevision) == pending
+        if (!alreadyStaged && store.stageReplacement(snoozedRecord) != ringingRecord) {
+            return if ((store.latestRevision(snoozedRecord.reminderId) ?: Long.MIN_VALUE) >=
+                snoozedRecord.scheduleRevision
+            ) {
+                AlarmScheduleResult.STALE_SCHEDULE_REVISION
+            } else {
+                AlarmScheduleResult.DURABLE_STORE_WRITE_FAILED
+            }
+        }
+        if (!canScheduleExactAlarms()) {
+            return AlarmScheduleResult.EXACT_ALARM_PERMISSION_REQUIRED
+        }
+        val scheduled = normalizedScheduled(snoozedRecord)
+        if (!installSystemAlarm(scheduled)) {
+            return if (!canScheduleExactAlarms()) {
+                AlarmScheduleResult.EXACT_ALARM_PERMISSION_REQUIRED
+            } else {
+                AlarmScheduleResult.SYSTEM_ALARM_INSTALL_FAILED
+            }
+        }
+
+        val registered = registeredEvent(scheduled)
         if (
-            !store.replaceRingingAndAppendEvent(
-                expected = ringingRecord,
-                replacement = snoozedRecord,
-                event = snoozedEvent,
+            !store.commitPendingReplacement(
+                pending = pending,
+                expectedPrevious = ringingRecord,
+                eventsToAppend = listOf(snoozedEvent, registered),
             )
         ) {
-            return false
+            cancelDirectSystemAlarm(scheduled)
+            return AlarmScheduleResult.DURABLE_COMMIT_FAILED
         }
-        if (installSystemAlarm(snoozedRecord)) return true
 
-        store.rollbackReplacementAndEvent(
-            expectedReplacement = snoozedRecord,
-            previous = ringingRecord,
-            eventId = snoozedEvent.eventId,
-        )
-        false
+        cancelDirectSystemAlarm(ringingRecord)
+        cancelLegacySystemAlarm(ringingRecord.reminderId)
+        AlarmScheduleResult.SUCCESS
     }
 
-    fun cancel(reminderId: String): AlarmRecord? = synchronized(schedulerLock) {
-        cancelSystemAlarm(reminderId)
-        store.remove(reminderId)
+    fun cancel(reminderId: String): AlarmActionOutcome = synchronized(schedulerLock) {
+        val targets =
+            store.stageCancellation(reminderId)
+                ?: return AlarmActionOutcome(AlarmScheduleResult.DURABLE_STORE_WRITE_FAILED, 0)
+        val directCancelled = targets.map(::cancelDirectSystemAlarm).all { it }
+        val legacyCancelled = cancelLegacySystemAlarm(reminderId)
+        val systemCancelled = directCancelled && legacyCancelled
+        val finalized = systemCancelled && store.finalizeCancellation(reminderId)
+        val durableState =
+            AlarmTransactionPolicy.afterCancelAttempt(
+                systemCancelSucceeded = systemCancelled,
+                durableFinalizeSucceeded = finalized,
+            )
+        if (targets.any { it.state == AlarmRecord.STATE_RINGING }) {
+            AlarmActions.refreshSession(context, store)
+        }
+        if (durableState == AlarmDurableState.REMOVED) {
+            AlarmActionOutcome(AlarmScheduleResult.SUCCESS, targets.size)
+        } else if (!systemCancelled) {
+            AlarmActionOutcome(AlarmScheduleResult.SYSTEM_ALARM_CANCEL_FAILED, 0)
+        } else {
+            AlarmActionOutcome(AlarmScheduleResult.DURABLE_STORE_WRITE_FAILED, 0)
+        }
     }
 
-    fun cancelSystemAlarm(reminderId: String): Unit = synchronized(schedulerLock) {
-        alarmManager.cancel(firePendingIntent(reminderId, 0L))
+    fun cancelSystemAlarm(record: AlarmRecord): Unit = synchronized(schedulerLock) {
+        cancelDirectSystemAlarm(record)
+        cancelLegacySystemAlarm(record.reminderId)
     }
 
-    /**
-     * Reinstalls already-durable alarms without rewriting the JSON store once per alarm.
-     * This path is used by boot/time/package receivers, where synchronous O(N²) I/O can
-     * otherwise exceed the broadcast execution window.
-     */
+    /** Reinstalls durable alarms after boot, clock, timezone, permission, or package changes. */
     fun rescheduleAll(): Unit = synchronized(schedulerLock) {
-        reconcileStoredAlarms()
-        if (!canScheduleExactAlarms()) return
-
+        recoverCancellationTombstones()
+        reconcileExpiredStoredAlarms()
         val now = System.currentTimeMillis()
-        val failed = mutableListOf<AlarmRecord>()
+        recoverPendingTransactions(now)
+        if (!canScheduleExactAlarms()) return
         store.scheduled().forEach { record ->
-            // A Flutter schedule/cancel/snooze sequence uses the same process lock. The
-            // store check also rejects snapshots changed by a firing receiver.
-            if (store.get(record.reminderId) != record) return@forEach
+            if (store.get(record.reminderId, record.scheduleRevision) != record) return@forEach
             val installed =
-                // A reboot or package replacement may have occurred just after the due time.
-                // Re-arm records still inside the grace window for prompt delivery.
                 installSystemAlarm(
                     record,
                     triggerAtEpochMs = maxOf(record.triggerAtEpochMs, now + 1_000L),
                 )
-            if (!installed) failed += record
-        }
-        if (!canScheduleExactAlarms()) {
-            reconcileStoredAlarms()
-            return
-        }
-        if (failed.isNotEmpty()) {
-            store.removeScheduled(failed.map { it.reminderId to it.scheduleRevision }.toSet())
+            if (!installed) {
+                store.appendEvent(
+                    AlarmEvent(
+                        reminderId = record.reminderId,
+                        taskId = record.taskId,
+                        scheduleRevision = record.scheduleRevision,
+                        type = "error",
+                        detailCode = "system_alarm_install_failed",
+                    ),
+                )
+            }
         }
     }
 
     fun reconcileStoredAlarms(now: Long = System.currentTimeMillis()): Unit =
         synchronized(schedulerLock) {
-            val reconciliation =
-                store.reconcileScheduledAlarms(
-                    now = now,
-                    missedAlarmGraceMillis = MISSED_ALARM_GRACE_MILLIS,
-                    exactAlarmAllowed = canScheduleExactAlarms(),
-                )
-            reconciliation.removed.forEach { cancelSystemAlarm(it.reminderId) }
+            recoverCancellationTombstones()
+            reconcileExpiredStoredAlarms(now)
+            recoverPendingTransactions(now)
         }
+
+    private fun recoverCancellationTombstones() {
+        store.cancellationPending()
+            .groupBy(AlarmRecord::reminderId)
+            .forEach { (reminderId, records) ->
+                val directCancelled = records.map(::cancelDirectSystemAlarm).all { it }
+                val legacyCancelled = cancelLegacySystemAlarm(reminderId)
+                if (directCancelled && legacyCancelled) store.finalizeCancellation(reminderId)
+            }
+    }
+
+    private fun reconcileExpiredStoredAlarms(now: Long = System.currentTimeMillis()) {
+        val reconciliation =
+            store.reconcileScheduledAlarms(
+                now = now,
+                exactAlarmAllowed = canScheduleExactAlarms(),
+            )
+        reconciliation.removed.forEach { record ->
+            cancelDirectSystemAlarm(record)
+            // A failed replacement can coexist with an older legacy alarm. Expiring only the
+            // pending revision must not cancel that still-active reminder-only PendingIntent.
+            if (store.get(record.reminderId) == null) {
+                cancelLegacySystemAlarm(record.reminderId)
+            }
+        }
+    }
+
+    private fun recoverPendingTransactions(now: Long) {
+        var refreshRingingSession = false
+        store.pending()
+            .groupBy(AlarmRecord::reminderId)
+            .forEach { (reminderId, pendingRecords) ->
+                val pending = pendingRecords.maxByOrNull(AlarmRecord::scheduleRevision) ?: return@forEach
+                when (
+                    AlarmTransactionPolicy.recoveryDecision(
+                        triggerAtEpochMs = pending.triggerAtEpochMs,
+                        nowEpochMs = now,
+                        exactAlarmAllowed = canScheduleExactAlarms(),
+                    )
+                ) {
+                    AlarmRecoveryDecision.RETAIN_DURABLE -> return@forEach
+                    AlarmRecoveryDecision.EXPIRE -> {
+                        cancelDirectSystemAlarm(pending)
+                        store.rollbackPending(pending)
+                        return@forEach
+                    }
+                    AlarmRecoveryDecision.INSTALL -> Unit
+                }
+                val previous = store.get(reminderId)
+                if (previous != null && pending.scheduleRevision <= previous.scheduleRevision) {
+                    cancelDirectSystemAlarm(pending)
+                    store.rollbackPending(pending)
+                    return@forEach
+                }
+                val scheduled = normalizedScheduled(pending)
+                val installed =
+                    installSystemAlarm(
+                        scheduled,
+                        triggerAtEpochMs = maxOf(scheduled.triggerAtEpochMs, now + 1_000L),
+                    )
+                if (!installed) {
+                    store.appendEvent(
+                        AlarmEvent(
+                            reminderId = pending.reminderId,
+                            taskId = pending.taskId,
+                            scheduleRevision = pending.scheduleRevision,
+                            type = "error",
+                            detailCode = "pending_alarm_install_failed",
+                        ),
+                    )
+                    return@forEach
+                }
+                if (!store.commitPendingReplacement(pending, previous, replacementEvents(previous, scheduled))) {
+                    cancelDirectSystemAlarm(scheduled)
+                    store.appendEvent(
+                        AlarmEvent(
+                            reminderId = pending.reminderId,
+                            taskId = pending.taskId,
+                            scheduleRevision = pending.scheduleRevision,
+                            type = "error",
+                            detailCode = "pending_alarm_commit_failed",
+                        ),
+                    )
+                    return@forEach
+                }
+                previous?.let { cancelDirectSystemAlarm(it) }
+                pendingRecords.filterNot { it == pending }.forEach { cancelDirectSystemAlarm(it) }
+                cancelLegacySystemAlarm(reminderId)
+                refreshRingingSession = refreshRingingSession || previous?.state == AlarmRecord.STATE_RINGING
+            }
+        if (refreshRingingSession) AlarmActions.refreshSession(context, store)
+    }
+
+    private fun normalizedScheduled(record: AlarmRecord): AlarmRecord =
+        record.copy(
+            state = AlarmRecord.STATE_SCHEDULED,
+            sessionId = null,
+            ringStartedElapsedRealtimeMs = null,
+        )
+
+    private fun replacementEvents(
+        previous: AlarmRecord?,
+        scheduled: AlarmRecord,
+    ): List<AlarmEvent> =
+        buildList {
+            if (previous?.state == AlarmRecord.STATE_RINGING) {
+                add(
+                    AlarmEvent(
+                        reminderId = previous.reminderId,
+                        taskId = previous.taskId,
+                        scheduleRevision = previous.scheduleRevision,
+                        type = "stopped",
+                        sessionId = previous.sessionId,
+                        detailCode = "replaced_by_schedule",
+                    ),
+                )
+            }
+            add(registeredEvent(scheduled))
+        }
+
+    private fun registeredEvent(record: AlarmRecord): AlarmEvent =
+        AlarmEvent(
+            reminderId = record.reminderId,
+            taskId = record.taskId,
+            scheduleRevision = record.scheduleRevision,
+            type = "registered",
+            nextTriggerAtEpochMs = record.triggerAtEpochMs,
+        )
 
     private fun installSystemAlarm(
         record: AlarmRecord,
         triggerAtEpochMs: Long = record.triggerAtEpochMs,
     ): Boolean {
         if (!canScheduleExactAlarms()) return false
-        val operation = firePendingIntent(record)
+        val operation = directFirePendingIntent(record)
         val showIntent =
             PendingIntent.getActivity(
                 context,
@@ -134,24 +368,50 @@ internal class AlarmScheduler(context: Context) {
             false
         } catch (_: IllegalArgumentException) {
             false
+        } catch (_: IllegalStateException) {
+            false
         }
     }
 
-    private fun firePendingIntent(record: AlarmRecord): PendingIntent =
-        firePendingIntent(record.reminderId, record.scheduleRevision)
+    private fun directFirePendingIntent(record: AlarmRecord): PendingIntent {
+        val intent =
+            Intent(context, AlarmRingingService::class.java).apply {
+                action = AlarmRingingService.ACTION_FIRE
+                data = alarmIdentityUri(record.reminderId, record.scheduleRevision)
+                putExtra(EXTRA_REMINDER_ID, record.reminderId)
+                putExtra(EXTRA_SCHEDULE_REVISION, record.scheduleRevision)
+            }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(context, FIRE_ALARM_REQUEST_CODE, intent, flags)
+        } else {
+            PendingIntent.getService(context, FIRE_ALARM_REQUEST_CODE, intent, flags)
+        }
+    }
 
-    private fun firePendingIntent(reminderId: String, scheduleRevision: Long): PendingIntent =
-        PendingIntent.getBroadcast(
-            context,
-            FIRE_ALARM_REQUEST_CODE,
-            Intent(context, AlarmReceiver::class.java).apply {
-                action = ACTION_FIRE_ALARM
-                data = Uri.Builder().scheme("danggui").authority("alarm").appendPath(reminderId).build()
-                putExtra(EXTRA_REMINDER_ID, reminderId)
-                putExtra(EXTRA_SCHEDULE_REVISION, scheduleRevision)
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+    private fun cancelDirectSystemAlarm(record: AlarmRecord): Boolean =
+        runCatching { alarmManager.cancel(directFirePendingIntent(record)) }.isSuccess
+
+    /** Cancels a v1.1.3 broadcast PendingIntent whose identity did not include revision. */
+    private fun cancelLegacySystemAlarm(reminderId: String): Boolean =
+        runCatching {
+            val legacy =
+                PendingIntent.getBroadcast(
+                    context,
+                    FIRE_ALARM_REQUEST_CODE,
+                    Intent(context, AlarmReceiver::class.java).apply {
+                        action = ACTION_FIRE_ALARM
+                        data =
+                            Uri.Builder()
+                                .scheme("danggui")
+                                .authority("alarm")
+                                .appendPath(reminderId)
+                                .build()
+                    },
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+            alarmManager.cancel(legacy)
+        }.isSuccess
 
     companion object {
         const val ACTION_FIRE_ALARM = "com.danggui.memo.action.FIRE_ALARM"
@@ -160,7 +420,14 @@ internal class AlarmScheduler(context: Context) {
         const val EXTRA_SCHEDULE_REVISION = "scheduleRevision"
         private const val FIRE_ALARM_REQUEST_CODE = 7101
         private const val SHOW_ALARM_REQUEST_CODE = 7102
-        private const val MISSED_ALARM_GRACE_MILLIS = 2 * 60_000L
         private val schedulerLock = Any()
+
+        internal fun alarmIdentityUri(reminderId: String, scheduleRevision: Long): Uri =
+            Uri.Builder()
+                .scheme("danggui")
+                .authority("alarm")
+                .appendPath(reminderId)
+                .appendPath(scheduleRevision.toString())
+                .build()
     }
 }

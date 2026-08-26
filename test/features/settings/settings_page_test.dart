@@ -47,7 +47,7 @@ void main() {
     expect(settings.autoBackupMinuteLocal, 35);
   });
 
-  testWidgets('shows the 1.1.3 product version without build metadata', (
+  testWidgets('shows the 1.1.4 product version without build metadata', (
     tester,
   ) async {
     _setPhoneSize(tester);
@@ -61,8 +61,8 @@ void main() {
 
     await _scrollToText(tester, '关于当归', maximumDrags: 20);
     expect(find.text('帮助与隐私'), findsOneWidget);
-    expect(find.text('版本 1.1.3'), findsOneWidget);
-    expect(find.textContaining('1.1.3+4'), findsNothing);
+    expect(find.text('版本 1.1.4'), findsOneWidget);
+    expect(find.textContaining('1.1.4+5'), findsNothing);
   });
 
   testWidgets('shows complete settings and exposes every locale choice', (

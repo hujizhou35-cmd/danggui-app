@@ -7,6 +7,25 @@ const reminderPlatformChannelName = 'com.danggui.memo/reminder_platform';
 
 enum NativeAlarmAuthorization { unavailable, notDetermined, denied, authorized }
 
+/// Cross-platform delivery guarantees exposed to the Dart layer.
+///
+/// The wire values intentionally use kebab-case so diagnostics produced by
+/// Android, iOS and Dart can be compared without platform-specific aliases.
+enum ReminderDeliveryLevel {
+  alarmGrade,
+  timeSensitiveBestEffort,
+  ordinary,
+  unavailable;
+
+  String get wireName => switch (this) {
+    ReminderDeliveryLevel.alarmGrade => 'alarm-grade',
+    ReminderDeliveryLevel.timeSensitiveBestEffort =>
+      'time-sensitive-best-effort',
+    ReminderDeliveryLevel.ordinary => 'ordinary',
+    ReminderDeliveryLevel.unavailable => 'unavailable',
+  };
+}
+
 final class NativeAlarmCapabilities {
   const NativeAlarmCapabilities({
     required this.supported,
@@ -21,6 +40,7 @@ final class NativeAlarmCapabilities {
     this.manufacturer,
     this.alarmAuthorization = NativeAlarmAuthorization.unavailable,
     this.timeSensitiveEnabled,
+    this.reportedDeliveryLevel,
   });
 
   const NativeAlarmCapabilities.unsupported()
@@ -35,7 +55,8 @@ final class NativeAlarmCapabilities {
       oemSetupAvailable = false,
       manufacturer = null,
       alarmAuthorization = NativeAlarmAuthorization.unavailable,
-      timeSensitiveEnabled = null;
+      timeSensitiveEnabled = null,
+      reportedDeliveryLevel = ReminderDeliveryLevel.unavailable;
 
   final bool supported;
   final String platform;
@@ -49,13 +70,46 @@ final class NativeAlarmCapabilities {
   final String? manufacturer;
   final NativeAlarmAuthorization alarmAuthorization;
   final bool? timeSensitiveEnabled;
+  final ReminderDeliveryLevel? reportedDeliveryLevel;
+
+  ReminderDeliveryLevel get deliveryLevel {
+    final reported = reportedDeliveryLevel;
+    if (reported != null) return reported;
+    if (platform == 'ios') {
+      if (supported &&
+          alarmAuthorization == NativeAlarmAuthorization.authorized) {
+        return ReminderDeliveryLevel.alarmGrade;
+      }
+      if (notificationsEnabled == false) {
+        return ReminderDeliveryLevel.unavailable;
+      }
+      if (timeSensitiveEnabled == true) {
+        return ReminderDeliveryLevel.timeSensitiveBestEffort;
+      }
+      return notificationsEnabled == true
+          ? ReminderDeliveryLevel.ordinary
+          : ReminderDeliveryLevel.unavailable;
+    }
+    if (platform == 'android') {
+      if (supported && exactAlarmAllowed == true) {
+        return ReminderDeliveryLevel.alarmGrade;
+      }
+      return notificationsEnabled == false
+          ? ReminderDeliveryLevel.unavailable
+          : ReminderDeliveryLevel.ordinary;
+    }
+    return supported
+        ? ReminderDeliveryLevel.ordinary
+        : ReminderDeliveryLevel.unavailable;
+  }
 
   bool get strongAlarmAuthorized {
     if (!supported) return false;
     if (platform == 'ios') {
-      return alarmAuthorization == NativeAlarmAuthorization.authorized;
+      return supported &&
+          alarmAuthorization == NativeAlarmAuthorization.authorized;
     }
-    return exactAlarmAllowed != false;
+    return exactAlarmAllowed == true;
   }
 
   factory NativeAlarmCapabilities.fromMap(Map<Object?, Object?> map) {
@@ -107,6 +161,78 @@ final class NativeAlarmCapabilities {
           _bool(map, 'timeSensitiveEnabled') ??
           _bool(map, 'timeSensitiveSupported') ??
           _bool(map, 'timeSensitiveAuthorized'),
+      reportedDeliveryLevel: _deliveryLevel(
+        _string(map, 'deliveryLevel') ??
+            _string(map, 'deliveryCapability') ??
+            _string(map, 'capabilityLevel'),
+      ),
+    );
+  }
+}
+
+enum NativeAlarmSnapshotState {
+  registered,
+  ringing,
+  stopped,
+  snoozed,
+  missed,
+  capacityDeferred,
+  unknown;
+
+  bool get isActive =>
+      this == NativeAlarmSnapshotState.registered ||
+      this == NativeAlarmSnapshotState.ringing ||
+      this == NativeAlarmSnapshotState.snoozed;
+}
+
+/// Authoritative platform state used for startup diff reconciliation.
+final class NativeAlarmSnapshot {
+  const NativeAlarmSnapshot({
+    required this.reminderId,
+    required this.platformId,
+    required this.scheduleRevision,
+    required this.triggerAtEpochMs,
+    required this.state,
+  });
+
+  final String reminderId;
+  final String platformId;
+  final int scheduleRevision;
+  final int triggerAtEpochMs;
+  final NativeAlarmSnapshotState state;
+
+  factory NativeAlarmSnapshot.fromMap(Map<Object?, Object?> map) {
+    final reminderId =
+        _string(map, 'reminderId') ?? _string(map, 'alarmId') ?? '';
+    final rawState = _normalizedWireName(
+      _string(map, 'state') ?? _string(map, 'status'),
+    );
+    return NativeAlarmSnapshot(
+      reminderId: reminderId,
+      platformId:
+          _string(map, 'platformId') ??
+          _string(map, 'nativeId') ??
+          _string(map, 'id') ??
+          reminderId,
+      scheduleRevision:
+          _int(map, 'scheduleRevision') ?? _int(map, 'revision') ?? 0,
+      triggerAtEpochMs:
+          _int(map, 'triggerAtEpochMs') ??
+          _int(map, 'scheduledAtEpochMs') ??
+          _int(map, 'triggerAt') ??
+          0,
+      state: switch (rawState) {
+        'registered' ||
+        'scheduled' ||
+        'pending' => NativeAlarmSnapshotState.registered,
+        'ringing' || 'firing' || 'active' => NativeAlarmSnapshotState.ringing,
+        'stopped' || 'stop' => NativeAlarmSnapshotState.stopped,
+        'snoozed' || 'snooze' => NativeAlarmSnapshotState.snoozed,
+        'missed' || 'expired' => NativeAlarmSnapshotState.missed,
+        'capacitydeferred' ||
+        'deferred' => NativeAlarmSnapshotState.capacityDeferred,
+        _ => NativeAlarmSnapshotState.unknown,
+      },
     );
   }
 }
@@ -150,7 +276,18 @@ final class NativeAlarmRequest {
   };
 }
 
-enum NativeAlarmEventType { fired, stopped, snoozed }
+enum NativeAlarmEventType {
+  registered,
+  delivered,
+  foreground,
+  systemAlert,
+  audio,
+  vibration,
+  missed,
+  stopped,
+  snoozed,
+  error,
+}
 
 final class NativeAlarmEvent {
   const NativeAlarmEvent({
@@ -161,6 +298,9 @@ final class NativeAlarmEvent {
     required this.type,
     required this.occurredAtUtc,
     this.snoozeMinutes,
+    this.successorTriggerAtEpochMs,
+    this.sessionId,
+    this.errorCode,
   });
 
   final String eventId;
@@ -170,9 +310,14 @@ final class NativeAlarmEvent {
   final NativeAlarmEventType type;
   final DateTime occurredAtUtc;
   final int? snoozeMinutes;
+  final int? successorTriggerAtEpochMs;
+  final String? sessionId;
+  final String? errorCode;
 
   factory NativeAlarmEvent.fromMap(Map<Object?, Object?> map) {
-    final rawType = _string(map, 'type') ?? _string(map, 'eventType');
+    final rawType = _normalizedWireName(
+      _string(map, 'type') ?? _string(map, 'eventType'),
+    );
     final occurredAtMs =
         _int(map, 'occurredAtEpochMs') ??
         _int(map, 'occurredAt') ??
@@ -185,16 +330,28 @@ final class NativeAlarmEvent {
       taskId: _string(map, 'taskId') ?? '',
       scheduleRevision:
           _int(map, 'scheduleRevision') ?? _int(map, 'revision') ?? 0,
-      type: switch (rawType?.toLowerCase()) {
+      type: switch (rawType) {
+        'registered' || 'scheduled' => NativeAlarmEventType.registered,
+        'delivered' || 'fired' || 'fire' => NativeAlarmEventType.delivered,
+        'foreground' => NativeAlarmEventType.foreground,
+        'systemalert' => NativeAlarmEventType.systemAlert,
+        'audio' => NativeAlarmEventType.audio,
+        'vibration' || 'vibrate' => NativeAlarmEventType.vibration,
+        'missed' || 'expired' => NativeAlarmEventType.missed,
         'stopped' || 'stop' => NativeAlarmEventType.stopped,
         'snoozed' || 'snooze' => NativeAlarmEventType.snoozed,
-        _ => NativeAlarmEventType.fired,
+        _ => NativeAlarmEventType.error,
       },
       occurredAtUtc: DateTime.fromMillisecondsSinceEpoch(
         occurredAtMs,
         isUtc: true,
       ),
       snoozeMinutes: _int(map, 'snoozeMinutes'),
+      successorTriggerAtEpochMs:
+          _int(map, 'successorTriggerAtEpochMs') ??
+          _int(map, 'nextTriggerAtEpochMs'),
+      sessionId: _string(map, 'sessionId') ?? _string(map, 'session'),
+      errorCode: _string(map, 'errorCode') ?? _string(map, 'code'),
     );
   }
 }
@@ -211,8 +368,18 @@ abstract interface class NativeAlarmPlatform {
   Future<bool> openOemAutostartSettings();
   Future<void> scheduleAlarm(NativeAlarmRequest request);
   Future<void> cancelAlarm(String reminderId);
-  Future<void> stopAlarm(String reminderId);
-  Future<void> snoozeAlarm(String reminderId, int minutes);
+  Future<void> stopAlarm(
+    String reminderId, {
+    required int scheduleRevision,
+    required String sessionId,
+  });
+  Future<void> snoozeAlarm(
+    String reminderId,
+    int minutes, {
+    required int scheduleRevision,
+    required String sessionId,
+  });
+  Future<List<NativeAlarmSnapshot>> listAlarmSnapshots();
   Future<Set<String>> listScheduledAlarmIds();
   Future<List<NativeAlarmEvent>> drainAlarmEvents();
   Future<void> acknowledgeAlarmEvents(Set<String> eventIds);
@@ -224,13 +391,23 @@ abstract interface class NativeAlarmPlatform {
 }
 
 final class MethodChannelNativeAlarmPlatform implements NativeAlarmPlatform {
-  MethodChannelNativeAlarmPlatform({MethodChannel? channel})
-    : _channel = channel ?? const MethodChannel(reminderPlatformChannelName);
+  MethodChannelNativeAlarmPlatform({
+    MethodChannel? channel,
+    bool? isSupportedOverride,
+  }) : this._(
+         channel ?? const MethodChannel(reminderPlatformChannelName),
+         isSupportedOverride,
+       );
+
+  MethodChannelNativeAlarmPlatform._(this._channel, this._isSupportedOverride);
 
   final MethodChannel _channel;
+  final bool? _isSupportedOverride;
 
   @override
-  bool get isSupported => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+  bool get isSupported =>
+      _isSupportedOverride ??
+      (!kIsWeb && (Platform.isAndroid || Platform.isIOS));
 
   @override
   Future<NativeAlarmCapabilities> getCapabilities() async {
@@ -281,38 +458,61 @@ final class MethodChannelNativeAlarmPlatform implements NativeAlarmPlatform {
   );
 
   @override
-  Future<void> stopAlarm(String reminderId) => _channel.invokeMethod<void>(
-    'stopAlarm',
-    <String, Object?>{'reminderId': reminderId, 'alarmId': reminderId},
-  );
+  Future<void> stopAlarm(
+    String reminderId, {
+    required int scheduleRevision,
+    required String sessionId,
+  }) => _channel.invokeMethod<void>('stopAlarm', <String, Object?>{
+    'reminderId': reminderId,
+    'alarmId': reminderId,
+    'scheduleRevision': scheduleRevision,
+    'revision': scheduleRevision,
+    'sessionId': sessionId,
+    'session': sessionId,
+  });
 
   @override
-  Future<void> snoozeAlarm(String reminderId, int minutes) =>
-      _channel.invokeMethod<void>('snoozeAlarm', <String, Object?>{
-        'reminderId': reminderId,
-        'alarmId': reminderId,
-        'minutes': minutes,
-        'snoozeMinutes': minutes,
-      });
+  Future<void> snoozeAlarm(
+    String reminderId,
+    int minutes, {
+    required int scheduleRevision,
+    required String sessionId,
+  }) => _channel.invokeMethod<void>('snoozeAlarm', <String, Object?>{
+    'reminderId': reminderId,
+    'alarmId': reminderId,
+    'minutes': minutes,
+    'snoozeMinutes': minutes,
+    'scheduleRevision': scheduleRevision,
+    'revision': scheduleRevision,
+    'sessionId': sessionId,
+    'session': sessionId,
+  });
+
+  @override
+  Future<List<NativeAlarmSnapshot>> listAlarmSnapshots() async {
+    if (!isSupported) return const <NativeAlarmSnapshot>[];
+    try {
+      final value = await _channel.invokeMethod<Object?>('listAlarmSnapshots');
+      return _snapshotsFromValue(value);
+    } on MissingPluginException {
+      try {
+        final legacy = await _channel.invokeMethod<Object?>(
+          'listScheduledAlarms',
+        );
+        return _snapshotsFromValue(legacy);
+      } on MissingPluginException {
+        return const <NativeAlarmSnapshot>[];
+      }
+    }
+  }
 
   @override
   Future<Set<String>> listScheduledAlarmIds() async {
-    if (!isSupported) return const <String>{};
-    try {
-      final value = await _channel.invokeMethod<Object?>('listScheduledAlarms');
-      if (value is! List<Object?>) return const <String>{};
-      return <String>{
-        for (final item in value)
-          if (item is String && item.isNotEmpty)
-            item
-          else if (_asMap(item) case final map?)
-            if ((_string(map, 'reminderId') ?? _string(map, 'alarmId'))
-                case final id? when id.isNotEmpty)
-              id,
-      };
-    } on MissingPluginException {
-      return const <String>{};
-    }
+    return <String>{
+      for (final snapshot in await listAlarmSnapshots())
+        if (snapshot.reminderId.isNotEmpty && snapshot.state.isActive)
+          snapshot.reminderId,
+    };
   }
 
   @override
@@ -364,6 +564,36 @@ final class MethodChannelNativeAlarmPlatform implements NativeAlarmPlatform {
     }
   }
 }
+
+List<NativeAlarmSnapshot> _snapshotsFromValue(Object? value) {
+  if (value is! List<Object?>) return const <NativeAlarmSnapshot>[];
+  return <NativeAlarmSnapshot>[
+    for (final item in value)
+      if (item is String && item.isNotEmpty)
+        NativeAlarmSnapshot(
+          reminderId: item,
+          platformId: item,
+          scheduleRevision: 0,
+          triggerAtEpochMs: 0,
+          state: NativeAlarmSnapshotState.registered,
+        )
+      else if (_asMap(item) case final map?)
+        NativeAlarmSnapshot.fromMap(map),
+  ];
+}
+
+ReminderDeliveryLevel? _deliveryLevel(String? value) {
+  return switch (_normalizedWireName(value)) {
+    'alarmgrade' => ReminderDeliveryLevel.alarmGrade,
+    'timesensitivebesteffort' => ReminderDeliveryLevel.timeSensitiveBestEffort,
+    'ordinary' => ReminderDeliveryLevel.ordinary,
+    'unavailable' => ReminderDeliveryLevel.unavailable,
+    _ => null,
+  };
+}
+
+String _normalizedWireName(String? value) =>
+    (value ?? '').toLowerCase().replaceAll(RegExp('[^a-z0-9]'), '');
 
 Map<Object?, Object?>? _asMap(Object? value) {
   if (value is Map<Object?, Object?>) return value;

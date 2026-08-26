@@ -109,6 +109,70 @@ void main() {
     },
   );
 
+  test('startup diff preserves a matching native snapshot', () async {
+    await _createFutureReminder(tasks, nowUtc);
+    await coordinator.reconcile();
+    final reminder = await database.select(database.reminders).getSingle();
+
+    gateway = FakeNotificationGateway()
+      ..nativeSnapshots.add(
+        NativeAlarmSnapshot(
+          reminderId: reminder.id,
+          platformId: 'native-${reminder.id}',
+          scheduleRevision: reminder.scheduleRevision,
+          triggerAtEpochMs:
+              reminder.scheduledAtUtc ~/ Duration.microsecondsPerMillisecond,
+          state: NativeAlarmSnapshotState.registered,
+        ),
+      );
+    coordinator = NotificationCoordinator(
+      () async => database,
+      gateway: gateway,
+      nowUtc: () => nowUtc,
+      systemLocaleName: () => 'zh_CN',
+    );
+
+    await coordinator.reconcile();
+
+    expect(gateway.scheduleCalls, 0);
+    expect(
+      await database.select(database.notificationRegistrations).get(),
+      hasLength(1),
+    );
+  });
+
+  test('startup diff replaces a stale native revision', () async {
+    await _createFutureReminder(tasks, nowUtc);
+    await coordinator.reconcile();
+    final reminder = await database.select(database.reminders).getSingle();
+
+    gateway = FakeNotificationGateway()
+      ..nativeSnapshots.add(
+        NativeAlarmSnapshot(
+          reminderId: reminder.id,
+          platformId: 'native-${reminder.id}',
+          scheduleRevision: reminder.scheduleRevision - 1,
+          triggerAtEpochMs:
+              reminder.scheduledAtUtc ~/ Duration.microsecondsPerMillisecond,
+          state: NativeAlarmSnapshotState.registered,
+        ),
+      );
+    coordinator = NotificationCoordinator(
+      () async => database,
+      gateway: gateway,
+      nowUtc: () => nowUtc,
+      systemLocaleName: () => 'zh_CN',
+    );
+
+    await coordinator.reconcile();
+
+    expect(gateway.scheduleCalls, 1);
+    expect(
+      gateway.scheduled.single.scheduleRevision,
+      reminder.scheduleRevision,
+    );
+  });
+
   test(
     'reconcile preserves an already-delivered notification when it expires',
     () async {
@@ -169,19 +233,22 @@ void main() {
     );
   });
 
-  test('a native alarm remains scheduled until Stop or Snooze', () async {
-    await _createFutureReminder(tasks, nowUtc);
-    await coordinator.reconcile();
-    final reminder = await database.select(database.reminders).getSingle();
-    gateway.activeNativeReminderIds.add(reminder.id);
+  test(
+    'a native alarm is bounded by the shared fifteen-minute window',
+    () async {
+      await _createFutureReminder(tasks, nowUtc);
+      await coordinator.reconcile();
+      final reminder = await database.select(database.reminders).getSingle();
+      gateway.activeNativeReminderIds.add(reminder.id);
 
-    nowUtc = nowUtc.add(const Duration(hours: 5));
-    await coordinator.reconcile();
+      nowUtc = nowUtc.add(const Duration(hours: 2, minutes: 16));
+      await coordinator.reconcile();
 
-    final unchanged = await database.select(database.reminders).getSingle();
-    expect(unchanged.status, ReminderStatus.scheduled);
-    expect(gateway.cancelled, isEmpty);
-  });
+      final expired = await database.select(database.reminders).getSingle();
+      expect(expired.status, ReminderStatus.expired);
+      expect(gateway.cancelled, isNotEmpty);
+    },
+  );
 
   test(
     'failed startup reschedule retries without creating another outbox job',
@@ -579,13 +646,16 @@ void main() {
       await coordinator.reconcile();
       final reminder = await database.select(database.reminders).getSingle();
       final firedAt = nowUtc.add(const Duration(hours: 2));
+      final successorAt = firedAt.add(
+        const Duration(minutes: 30, milliseconds: 123),
+      );
       gateway.nativeEvents.addAll(<NativeAlarmEvent>[
         NativeAlarmEvent(
           eventId: 'fired-1',
           reminderId: reminder.id,
           taskId: task.id.value,
           scheduleRevision: reminder.scheduleRevision,
-          type: NativeAlarmEventType.fired,
+          type: NativeAlarmEventType.delivered,
           occurredAtUtc: firedAt,
         ),
         NativeAlarmEvent(
@@ -596,6 +666,7 @@ void main() {
           type: NativeAlarmEventType.snoozed,
           occurredAtUtc: firedAt.add(const Duration(seconds: 1)),
           snoozeMinutes: 30,
+          successorTriggerAtEpochMs: successorAt.millisecondsSinceEpoch,
         ),
       ]);
 
@@ -605,12 +676,7 @@ void main() {
       expect(updated.status, ReminderStatus.scheduled);
       expect(updated.scheduleRevision, reminder.scheduleRevision + 1);
       expect(updated.snoozeCount, 1);
-      expect(
-        updated.scheduledAtUtc,
-        firedAt
-            .add(const Duration(seconds: 1, minutes: 30))
-            .microsecondsSinceEpoch,
-      );
+      expect(updated.scheduledAtUtc, successorAt.microsecondsSinceEpoch);
       expect(gateway.scheduled.last.scheduleRevision, updated.scheduleRevision);
       expect(gateway.nativeEvents, isEmpty);
     },
@@ -643,6 +709,33 @@ void main() {
     expect(gateway.nativeEvents, isEmpty);
   });
 
+  test('native missed event expires exactly one matching revision', () async {
+    final task = await _createFutureReminder(tasks, nowUtc);
+    await coordinator.reconcile();
+    final reminder = await database.select(database.reminders).getSingle();
+    final missed = NativeAlarmEvent(
+      eventId: 'missed-1',
+      reminderId: reminder.id,
+      taskId: task.id.value,
+      scheduleRevision: reminder.scheduleRevision,
+      type: NativeAlarmEventType.missed,
+      occurredAtUtc: nowUtc.add(const Duration(hours: 2, minutes: 16)),
+      sessionId: 'session-${reminder.scheduleRevision}',
+    );
+    gateway.nativeEvents.addAll(<NativeAlarmEvent>[missed, missed]);
+
+    await coordinator.reconcile();
+
+    final updated = await database.select(database.reminders).getSingle();
+    expect(updated.status, ReminderStatus.expired);
+    expect(updated.scheduleRevision, reminder.scheduleRevision + 1);
+    expect(gateway.nativeEvents, isEmpty);
+    final cancelJobs = (await database.select(database.platformJobs).get())
+        .where((job) => job.kind == PlatformJobKind.cancelReminder)
+        .toList();
+    expect(cancelJobs, hasLength(1));
+  });
+
   test(
     'iOS AlarmKit authorization can deliver without ordinary alerts',
     () async {
@@ -664,7 +757,76 @@ void main() {
   );
 
   test(
-    'pre-AlarmKit iOS needs no unavailable strong-alarm permission',
+    'iOS AlarmKit keeps sound alarms when ordinary alerts are denied',
+    () async {
+      gateway
+        ..platformNameValue = 'ios'
+        ..permissionGranted = false
+        ..nativeCapabilities = const NativeAlarmCapabilities(
+          supported: true,
+          platform: 'ios',
+          alarmAuthorization: NativeAlarmAuthorization.authorized,
+        );
+      final soundTask = await _createFutureReminder(tasks, nowUtc);
+      final silentTask = await _createFutureReminder(
+        tasks,
+        nowUtc,
+        soundEnabled: false,
+      );
+
+      await coordinator.reconcile();
+
+      final soundReminder = await (database.select(
+        database.reminders,
+      )..where((row) => row.taskId.equals(soundTask.id.value))).getSingle();
+      final silentReminder = await (database.select(
+        database.reminders,
+      )..where((row) => row.taskId.equals(silentTask.id.value))).getSingle();
+      expect(soundReminder.status, ReminderStatus.scheduled);
+      expect(silentReminder.status, ReminderStatus.permissionDenied);
+      expect(gateway.scheduled, hasLength(1));
+      expect(gateway.scheduled.single.reminderId, soundReminder.id);
+    },
+  );
+
+  test(
+    'iOS AlarmKit alarms do not consume the sixty ordinary notification slots',
+    () async {
+      gateway
+        ..platformNameValue = 'ios'
+        ..nativeCapabilities = const NativeAlarmCapabilities(
+          supported: true,
+          platform: 'ios',
+          alarmAuthorization: NativeAlarmAuthorization.authorized,
+          notificationsEnabled: true,
+        );
+      for (var index = 0; index < 3; index++) {
+        await _createFutureReminder(tasks, nowUtc);
+      }
+      for (var index = 0; index < 62; index++) {
+        await _createFutureReminder(tasks, nowUtc, soundEnabled: false);
+      }
+
+      await coordinator.reconcile();
+
+      expect(gateway.scheduled, hasLength(63));
+      final deferred = (await database.select(database.platformJobs).get())
+          .where((job) => job.lastErrorCode == 'capacity_deferred')
+          .toList();
+      expect(deferred, hasLength(2));
+      expect(
+        gateway.scheduled.where((request) => request.soundEnabled),
+        hasLength(3),
+      );
+      expect(
+        gateway.scheduled.where((request) => !request.soundEnabled),
+        hasLength(60),
+      );
+    },
+  );
+
+  test(
+    'pre-AlarmKit iOS reports best-effort instead of strong alarm',
     () async {
       gateway.nativeCapabilities = const NativeAlarmCapabilities(
         supported: false,
@@ -676,8 +838,48 @@ void main() {
       final result = await coordinator.ensurePermissionsForFutureReminder();
 
       expect(result.notificationsGranted, isTrue);
-      expect(result.strongAlarmAuthorized, isTrue);
+      expect(result.strongAlarmAuthorized, isFalse);
+      expect(
+        result.deliveryLevel,
+        ReminderDeliveryLevel.timeSensitiveBestEffort,
+      );
       expect(gateway.alarmAuthorizationRequests, 0);
+    },
+  );
+
+  test(
+    'legacy iOS keeps sixty ordinary notifications and fills a freed slot',
+    () async {
+      gateway
+        ..platformNameValue = 'ios'
+        ..nativeCapabilities = const NativeAlarmCapabilities(
+          supported: false,
+          platform: 'ios',
+          notificationsEnabled: true,
+          timeSensitiveEnabled: true,
+        );
+      final created = <TaskModel>[];
+      for (var index = 0; index < 62; index++) {
+        created.add(await _createFutureReminder(tasks, nowUtc));
+      }
+
+      await coordinator.reconcile();
+
+      expect(gateway.scheduled, hasLength(60));
+      var deferred = (await database.select(database.platformJobs).get())
+          .where((job) => job.lastErrorCode == 'capacity_deferred')
+          .toList();
+      expect(deferred, hasLength(2));
+
+      await tasks.removeReminder(created.first.id);
+      await coordinator.reconcile();
+
+      expect(gateway.scheduled, hasLength(61));
+      expect(gateway.pendingNotificationIdsValue, hasLength(60));
+      deferred = (await database.select(database.platformJobs).get())
+          .where((job) => job.lastErrorCode == 'capacity_deferred')
+          .toList();
+      expect(deferred, hasLength(1));
     },
   );
 
@@ -714,7 +916,7 @@ void main() {
     },
   );
 
-  test('delivered exact reminder expires after its two-minute grace', () async {
+  test('delivered exact reminder uses the fifteen-minute window', () async {
     await _createFutureReminder(tasks, nowUtc);
     await coordinator.reconcile();
     final notificationId = gateway.scheduled.single.notificationId;
@@ -729,23 +931,46 @@ void main() {
     nowUtc = nowUtc.add(const Duration(minutes: 2));
     await coordinator.reconcile();
     reminder = await database.select(database.reminders).getSingle();
+    expect(reminder.status, ReminderStatus.scheduled);
+
+    nowUtc = nowUtc.add(const Duration(minutes: 13));
+    await coordinator.reconcile();
+    reminder = await database.select(database.reminders).getSingle();
     expect(reminder.status, ReminderStatus.expired);
     expect(gateway.cancelled, isEmpty);
   });
 
   test(
-    'inexact fallback retains a seventy-five-minute delivery grace',
+    'exactly fifteen minutes late remains inside the shared window',
+    () async {
+      await _createFutureReminder(tasks, nowUtc);
+      await coordinator.reconcile();
+
+      nowUtc = nowUtc.add(const Duration(hours: 2, minutes: 15));
+      await coordinator.reconcile();
+      var reminder = await database.select(database.reminders).getSingle();
+      expect(reminder.status, ReminderStatus.scheduled);
+
+      nowUtc = nowUtc.add(const Duration(microseconds: 1));
+      await coordinator.reconcile();
+      reminder = await database.select(database.reminders).getSingle();
+      expect(reminder.status, ReminderStatus.expired);
+    },
+  );
+
+  test(
+    'inexact fallback uses the same fifteen-minute delivery window',
     () async {
       gateway.exactSchedulingAvailable = false;
       await _createFutureReminder(tasks, nowUtc);
       await coordinator.reconcile();
 
-      nowUtc = nowUtc.add(const Duration(hours: 3));
+      nowUtc = nowUtc.add(const Duration(hours: 2, minutes: 14));
       await coordinator.reconcile();
       var reminder = await database.select(database.reminders).getSingle();
       expect(reminder.status, ReminderStatus.scheduled);
 
-      nowUtc = nowUtc.add(const Duration(minutes: 16));
+      nowUtc = nowUtc.add(const Duration(minutes: 2));
       await coordinator.reconcile();
       reminder = await database.select(database.reminders).getSingle();
       expect(reminder.status, ReminderStatus.expired);
@@ -754,7 +979,7 @@ void main() {
   );
 
   test(
-    'granting exact access does not shrink an inexact delivery grace',
+    'granting exact access does not change the shared delivery window',
     () async {
       gateway.exactSchedulingAvailable = false;
       await _createFutureReminder(tasks, nowUtc);
@@ -769,7 +994,7 @@ void main() {
       expect(reminder.status, ReminderStatus.scheduled);
       expect(gateway.cancelled, isEmpty);
 
-      nowUtc = nowUtc.add(const Duration(minutes: 66));
+      nowUtc = nowUtc.add(const Duration(minutes: 6));
       await coordinator.reconcile();
       reminder = await database.select(database.reminders).getSingle();
       expect(reminder.status, ReminderStatus.expired);
@@ -902,6 +1127,7 @@ final class FakeNotificationGateway
   int exactPermissionRequests = 0;
   bool? soundAvailable = true;
   bool? vibrationAvailable = true;
+  ReminderDeliveryLevel? deliveryLevelValue;
   int scheduleCalls = 0;
   int scheduleFailuresRemaining = 0;
   void Function(String? actionId, String? payload)? onAction;
@@ -911,6 +1137,7 @@ final class FakeNotificationGateway
   final List<NotificationPresentation> presentations = [];
   final Set<int> pendingNotificationIdsValue = <int>{};
   final Set<String> activeNativeReminderIds = <String>{};
+  final List<NativeAlarmSnapshot> nativeSnapshots = <NativeAlarmSnapshot>[];
   final List<NativeAlarmEvent> nativeEvents = <NativeAlarmEvent>[];
   NativeAlarmCapabilities nativeCapabilities =
       const NativeAlarmCapabilities.unsupported();
@@ -921,8 +1148,10 @@ final class FakeNotificationGateway
   @override
   bool get isSupported => true;
 
+  String platformNameValue = 'test';
+
   @override
-  String get platformName => 'test';
+  String get platformName => platformNameValue;
 
   @override
   Future<void> initialize({
@@ -958,7 +1187,20 @@ final class FakeNotificationGateway
     exactAlarmPermissionRequired: !exactSchedulingAvailable,
     soundAvailable: soundEnabled ? soundAvailable : null,
     vibrationAvailable: vibrationEnabled ? vibrationAvailable : null,
-    vibrationControlledBySystem: false,
+    vibrationControlledBySystem: platformName == 'ios',
+    deliveryLevel:
+        deliveryLevelValue ??
+        (platformName == 'ios' || nativeCapabilities.platform == 'ios'
+            ? nativeCapabilities.deliveryLevel
+            : exactSchedulingAvailable
+            ? ReminderDeliveryLevel.alarmGrade
+            : ReminderDeliveryLevel.ordinary),
+    strongAlarmAuthorized: platformName == 'ios'
+        ? nativeCapabilities.strongAlarmAuthorized
+        : exactSchedulingAvailable,
+    timeSensitiveAvailable: platformName == 'ios'
+        ? nativeCapabilities.timeSensitiveEnabled
+        : null,
   );
 
   @override
@@ -1037,8 +1279,18 @@ final class FakeNotificationGateway
   }) => cancel(notificationId);
 
   @override
-  Future<Set<String>> activeNativeAlarmIds() async =>
-      Set<String>.of(activeNativeReminderIds);
+  Future<List<NativeAlarmSnapshot>> activeNativeAlarmSnapshots() async =>
+      <NativeAlarmSnapshot>[
+        ...nativeSnapshots,
+        for (final reminderId in activeNativeReminderIds)
+          NativeAlarmSnapshot(
+            reminderId: reminderId,
+            platformId: reminderId,
+            scheduleRevision: 0,
+            triggerAtEpochMs: 0,
+            state: NativeAlarmSnapshotState.ringing,
+          ),
+      ];
 
   @override
   Future<List<NativeAlarmEvent>> drainAlarmEvents() async {
