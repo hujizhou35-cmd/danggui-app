@@ -3,6 +3,57 @@
 All notable changes to Danggui are documented here. The project follows
 [Semantic Versioning](https://semver.org/) for public releases.
 
+## 1.1.5 - reference-driven iOS reliability audit pre-release (2026-08-29)
+
+### Fixed
+
+- Prevented a partially decoded iOS alarm mirror from replacing its complete
+  last-known-good copy, and bound every Stop/Snooze path to the current
+  reminder, revision, and session. Ordinary iOS notification actions now use
+  the same versioned identity contract as AlarmKit.
+- Bound every native alarm, action, event, snapshot, and cancellation to the
+  database's active device generation. Replace restore rotates that fence
+  without deleting the inactive last-known-good mirror, so a failed pre-swap
+  restore can roll back without reviving or losing another generation.
+- Separated the 4096-entry acknowledged business-action outbox from the
+  200-entry diagnostic journal. Stop, Snooze, reboot recovery, and automatic
+  cutoff now fail closed into durable terminal state instead of ringing again
+  when the app opens under queue pressure.
+- Stopped treating an absent AlarmKit snapshot as proof that a user saw or
+  heard an alarm. The app records delivery only after observed alerting or an
+  authoritative action, while conservatively repairing a missing future alarm
+  inside the 15-minute recovery window.
+- Preserved canonical IANA time-zone identifiers across initial scheduling,
+  Snooze, restart reconciliation, and daylight-saving transitions instead of
+  degrading durable intent to an ambiguous abbreviation.
+- Made native-event acknowledgement retryable without blocking the same
+  reconciliation pass, and serialized permission-result writes with database
+  replacement so a transient channel failure or restore race cannot strand the
+  newest reminder revision.
+- Hardened database startup, backup, restore, temporary plaintext cleanup, and
+  iOS file protection around explicit integrity checks and recoverable fault
+  points. Private mirrors, diagnostics, databases, and automatic backups stay
+  excluded from iCloud backup and use an explicit protected-file policy.
+
+### Assurance
+
+- Added fixed-clock, identifier, filesystem, platform, and fault-injection
+  seams plus a 640-operation seeded task/note model test. The traceable audit
+  records contracts, fixed source revisions, licenses, counterexamples,
+  evidence gaps, and design decisions for all product features.
+- Fixed free GitHub-hosted gates to Xcode 16.4 + iOS 18.5 and Xcode 26.6 +
+  iOS 26.5, added native RunnerTests and two cross-module XCUITest scenarios,
+  and added a weekly iPhone/iPad deep-audit matrix with failure evidence.
+
+### Delivery
+
+- Set product version `1.1.5`, build number `6`, universal Android version code
+  `6`, and split APK codes `1006`, `2006`, and `4006`.
+- iOS remains source plus unsigned-build and Simulator evidence. No IPA or
+  TestFlight build is provided, and sound, haptics, Focus/silent-mode,
+  overnight lock-screen, reboot, and process-termination delivery remain
+  explicitly `device-unverified` until physical-iPhone testing exists.
+
 ## 1.1.4 - alarm reliability hardening pre-release (2026-08-26)
 
 ### Fixed

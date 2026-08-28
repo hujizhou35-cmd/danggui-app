@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img alt="Версия: публичная предварительная v1.1.4" src="https://img.shields.io/badge/version-v1.1.4%20pre--release-B5684C?style=flat-square" />
+  <img alt="Версия: публичная предварительная v1.1.5" src="https://img.shields.io/badge/version-v1.1.5%20pre--release-B5684C?style=flat-square" />
   <img alt="Платформы: Android и исходники iOS" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20source-6F8068?style=flat-square" />
   <img alt="Данные: локальные и переносимые" src="https://img.shields.io/badge/data-local--first%20%7C%20portable-81786F?style=flat-square" />
   <img alt="Лицензия: Apache 2.0" src="https://img.shields.io/badge/code-Apache--2.0-2E2925?style=flat-square" />
@@ -88,10 +88,10 @@
 
 | Платформа | Рекомендуемый источник | Текущая поставка |
 | --- | --- | --- |
-| Android 7.0+ | [Публичная предварительная версия v1.1.4](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.4) | Универсальный APK с официальной подписью; большинству нужен `danggui-android-universal-release.apk` |
+| Android 7.0+ | [Публичная предварительная версия v1.1.5](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5) | Универсальный APK с официальной подписью; большинству нужен `danggui-android-universal-release.apk` |
 | iOS | [Инструкция по сборке из исходников](../architecture/ios-source-build.md) | Полный проект Xcode и подтверждение сборки без подписи; без IPA и TestFlight |
 
-v1.1.4 остаётся **Pre-release**. Публикация выполняется только после автоматических проверок Android и unsigned-сборки iOS, но блокировка, звук, тактильная отдача и ночная доставка всё ещё требуют проверки на физических Android и iPhone. Сверяйте файлы с `SHA256SUMS`; доказательства для разработчиков находятся в `danggui-developer-assets-v1.1.4.zip`. Полные границы описаны в [руководстве](../architecture/platform-delivery.md) и [списке проверок v1.1.4](../release/v1.1.4-release-checklist.md).
+v1.1.5 остаётся **Pre-release**. Публикация выполняется только после проверок Android, двух закреплённых сред iOS Simulator и unsigned-сборки iOS. Результаты разделяются на `contract-proven`, `simulator-proven` и `device-unverified`; звук и тактильная отдача реального iPhone, беззвучный режим/Focus, ночная блокировка, перезагрузка и завершение процесса пока не проверены. Сверяйте `SHA256SUMS`; доказательства находятся в `danggui-developer-assets-v1.1.5.zip`. Полные границы описаны в [руководстве](../architecture/platform-delivery.md) и [списке проверок v1.1.5](../release/v1.1.5-release-checklist.md).
 
 ## История версий
 
@@ -102,6 +102,7 @@ v1.1.4 остаётся **Pre-release**. Публикация выполняет
 | [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | Добавил выбор напоминаний с точностью до минуты и явную обратную связь при сохранении, уплотнил «Прошлое» и убрал дублирование стартовой композиции. |
 | [v1.1.3](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3) | Перевёл звуковые напоминания на нативные будильники, добавил подсказки по разрешениям и быструю прокрутку длинных страниц, исправил не исчезавшие сообщения. |
 | [v1.1.4](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.4) | Укрепил прямой путь будильника Android, revision-транзакции обеих платформ, 15-минутную политику опоздания и диагностику. |
+| [v1.1.5](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5) | Провёл полный аудит iOS по закреплённым источникам, укрепил идентичность напоминаний, восстановление, часовые пояса и защиту локальных данных, добавил два Simulator-гейта. |
 
 Полный список изменений — в [CHANGELOG](../../CHANGELOG.md).
 
