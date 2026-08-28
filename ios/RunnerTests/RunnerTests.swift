@@ -1351,6 +1351,7 @@ class RunnerTests: XCTestCase {
     )
     var confirmed = transaction
     try confirmed.advance(to: .replacementScheduled)
+    confirmed.replacement.lastState = "scheduled"
     try confirmed.advance(to: .confirmed)
     XCTAssertTrue(
       DangguiAlarmSnoozePolicy.shouldStopPredecessor(transaction: confirmed)
@@ -1385,6 +1386,7 @@ class RunnerTests: XCTestCase {
       ownsMissingRecovery: true
     )
     try settledRecovery.advance(to: .replacementScheduled)
+    settledRecovery.replacement.lastState = "scheduled"
     try settledRecovery.advance(to: .confirmed)
     try settledRecovery.advance(to: .retired)
     XCTAssertFalse(
@@ -1404,6 +1406,7 @@ class RunnerTests: XCTestCase {
       ownsMissingRecovery: true
     )
     try owner.advance(to: .replacementScheduled)
+    owner.replacement.lastState = "scheduled"
     try owner.advance(to: .confirmed)
     try owner.advance(to: .retired)
     try DangguiAlarmStore.upsert(record)

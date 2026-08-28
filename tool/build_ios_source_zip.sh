@@ -76,6 +76,8 @@ required_archive_entries=(
   ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme
   ios/RunnerUITests/RunnerUITests.swift
   lib/main.dart
+  lib/xcui_main.dart
+  lib/src/testing/xcui_scenario_harness.dart
   LICENSE
   pubspec.lock
   pubspec.yaml

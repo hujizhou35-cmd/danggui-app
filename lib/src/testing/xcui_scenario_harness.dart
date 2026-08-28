@@ -15,7 +15,8 @@ import '../services/notifications/notification_coordinator.dart';
 
 /// Runs cross-module contracts from a real iOS application process.
 ///
-/// [main] only enables this surface in debug builds launched by RunnerUITests.
+/// The dedicated `xcui_main.dart` entrypoint only enables this surface in debug
+/// builds launched by RunnerUITests.
 /// It deliberately uses the production SQLite and backup implementations while
 /// replacing their storage roots and notification delivery with deterministic
 /// test boundaries. Each scenario starts from its own empty directory, so the

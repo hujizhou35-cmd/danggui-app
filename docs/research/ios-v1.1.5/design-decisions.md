@@ -84,7 +84,7 @@
 
 - **决定**：需要首次解锁后后台恢复的 DB/原生控制状态使用显式 `completeUntilFirstUserAuthentication`；设备密钥使用 `AfterFirstUnlockThisDeviceOnly`、不可同步。所有派生态排除 iCloud，属性写入必须验证或记录稳定错误。
 - **理由**：A08/A10/A11；D05 和 X11 表明默认继承/锁定行为不能靠猜。
-- **验证边界**：Simulator 可检查资源属性，真实锁屏/重启仍 device-unverified。
+- **验证边界**：Simulator 可真实检查备份排除，但其临时文件系统不保证回读 `NSFileProtectionKey`；文件保护写入通过可注入适配层验证，真实锁屏/重启语义仍为 device-unverified。
 
 ## DD15 — 不新增生产依赖作为默认修复
 
@@ -139,6 +139,30 @@
 - **决定**：原生事件先在 SQLite 事务中按 generation/revision/session compare-and-swap 提交，再刷新共享状态并尝试 ACK。ACK 异常只保留进程内待重试标志，由现有有界 retry timer 重新 drain/ACK；本轮容量计算、系统快照修复和 outbox 排期继续执行。
 - **理由**：Stop/Snooze/Missed 在事务提交后已成为权威业务状态；MethodChannel ACK 失败不能撤销该提交，也不能让新 revision 的提醒等待下一次生命周期才登记。重复事件由 revision/session 幂等拒绝。
 - **未采用**：ACK 异常直接让 reconcile 失败；这会同时跳过 UI 刷新和同轮派生态修复。立即循环 ACK 也未采用，避免平台持续故障时形成忙循环。
+
+## DD24 — XCUITest 使用独立 Flutter 入口，不在生产入口保留测试路由
+
+- **决定**：生产 `lib/main.dart` 不导入测试 harness；两条代表性 XCUITest 只通过 `lib/xcui_main.dart` 构建。该入口同时要求 Debug、编译期 `DANGGUI_XCUITEST_BUILD=true` 与 XCTest launch scenario。CI 先由固定 Flutter 生成并校验 `FLUTTER_TARGET`/`DART_DEFINES`，再交给 `xcodebuild`，退出时恢复生成配置。
+- **理由**：首轮 iOS 26.5 CI 证明 raw `xcodebuild` 覆盖单个 define 不能可靠改变先前配置的 Flutter app，导致 UI 测试启动真实首页；把 harness 从生产入口物理移除同时解决可靠性与发布边界问题。
+- **未采用**：仅依赖 launch environment 或在生产 `main.dart` 中保留 Debug 分支；前者没有编译期隔离，后者仍让破坏性测试代码进入普通构建依赖图。
+
+## DD25 — Simulator 文件保护测试验证写入意图，不虚构文件系统回读能力
+
+- **决定**：`DangguiDataProtection.apply` 保留真实 `FileManager.setAttributes` 默认实现，并增加内部可注入写入 seam；RunnerTests 确认根目录、已有子目录和文件均收到 `completeUntilFirstUserAuthentication`，同时真实验证根目录备份排除。写入失败继续映射为稳定 fail-closed 错误。
+- **理由**：首轮 iOS 26.5 Simulator 对成功写入的临时文件返回空 `NSFileProtectionKey`，不能据此判定生产策略未执行。A12 已限定 Simulator 不能证明锁屏文件保护语义。
+- **未采用**：删除文件保护断言，或把 Simulator 的 `nil` 当生产成功；前者失去调用合同，后者会虚高平台结论。
+
+## DD26 — Android 验收使用当前 Snooze 身份，但不冒充原生按钮点击
+
+- **决定**：连续 10/30/60 分钟验收每轮从当前 reminder/revision 与 device generation 派生 canonical v2/v3 session，调用生产 coordinator 后验证数据库、outbox、registration 与 AlarmManager。证据只记录 payload 版本、是否绑定 generation 和身份匹配布尔值，不记录完整 payload；明确写 `systemUiActionClickClaimed=false` 与 `nativeActionReceiverClickClaimed=false`。
+- **理由**：首轮 API 24 验收仍传 v1.1.4 的 `task:<id>`，而 v1.1.5 正确拒绝其修改提醒，造成假失败。fresh-install 设备验收实际覆盖 v2；v3 generation 仍由 restore 合同测试证明。
+- **未采用**：重新允许 legacy payload Snooze，或把直接 coordinator 调用描述为原生 Receiver 点击；两者都会破坏陈旧动作防护或夸大证据。
+
+## DD27 — 仅经归因的系统 Launcher ANR 可消耗一次全新 AVD 重试
+
+- **决定**：API 33+ 健康门禁解析默认 HOME component 与只读系统分区 package path；只有 Android ANR 对话框、当前 ANR 焦点包和该 HOME 包完全一致，且当归尚未安装时，才将其归为 `launcher` 基础设施故障并签发 attempt-1 的唯一 fresh-AVD token。Retry gate 独立复核全部证据。
+- **理由**：首轮 API 36 的 Permission Manager 已打开，但被系统 Quickstep ANR 遮挡；旧分类器把它误记为不可重试的 Permission Controller 不可见。该故障发生在当归安装前。
+- **未采用**：任意 `aerr_close`、任意应用 ANR 或当归自身 ANR都允许重试；这些情况必须直接失败，避免 CI 隐藏产品崩溃。
 
 ## 功能批次门禁
 

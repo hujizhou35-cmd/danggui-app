@@ -81,6 +81,7 @@ void main() {
       'integration_test/app_cold_start_test.dart',
       'ios/Runner.xcodeproj/project.pbxproj',
       'lib/main.dart',
+      'lib/xcui_main.dart',
       'pubspec.lock',
       'test/platform/privacy_platform_config_test.dart',
     ]) {
@@ -110,6 +111,10 @@ void main() {
     final simulatorScript = File(
       _join(repositoryRoot.path, 'tool/run_ios_simulator_tests.sh'),
     ).readAsStringSync();
+    final productionMain = File(_join(repositoryRoot.path, 'lib/main.dart'))
+        .readAsStringSync();
+    final xcuiMain = File(_join(repositoryRoot.path, 'lib/xcui_main.dart'))
+        .readAsStringSync();
     final releaseVerifier = File(
       _join(repositoryRoot.path, 'tool/verify_release_assets.sh'),
     ).readAsStringSync();
@@ -139,11 +144,25 @@ void main() {
       'xcresulttool get test-results summary',
       'ui_test_count=2',
       'system_delivery=device-unverified',
+      '--config-only',
+      r'FLUTTER_TARGET="${xcui_flutter_target}"',
+      'DANGGUI_XCUITEST_BUILD=true',
     ]) {
       expect(simulatorScript, contains(marker), reason: marker);
     }
     expect(simulatorScript, isNot(contains('simctl erase')));
     expect(simulatorScript, isNot(contains('mapfile')));
+    expect(productionMain, isNot(contains('xcui_scenario_harness.dart')));
+    expect(productionMain, isNot(contains('DANGGUI_XCUITEST_SCENARIO')));
+    expect(
+      xcuiMain,
+      contains("bool.fromEnvironment(\n    'DANGGUI_XCUITEST_BUILD'"),
+    );
+    expect(xcuiMain, contains('kDebugMode && harnessBuild'));
+    expect(
+      xcuiMain,
+      contains("Platform.environment['DANGGUI_XCUITEST_SCENARIO']"),
+    );
 
     for (final marker in <String>[
       'SOURCE_COMMIT.txt does not match the protected tag commit',

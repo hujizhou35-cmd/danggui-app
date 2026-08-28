@@ -45,6 +45,39 @@ validate_xcui_test_log() {
   [[ "${actual}" == "${expected}" ]]
 }
 
+xcconfig_value() {
+  local xcconfig_file="$1"
+  local key="$2"
+
+  awk -v expected_key="${key}" '
+    index($0, expected_key "=") == 1 {
+      value = substr($0, length(expected_key) + 2)
+      sub(/\r$/, "", value)
+      matches += 1
+    }
+    END {
+      if (matches != 1) exit 1
+      print value
+    }
+  ' "${xcconfig_file}"
+}
+
+validate_xcui_flutter_config() {
+  local xcconfig_file="$1"
+  local expected_target="$2"
+  local expected_define="$3"
+  local actual_target actual_defines
+
+  actual_target="$(xcconfig_value "${xcconfig_file}" FLUTTER_TARGET)" || return 1
+  actual_defines="$(xcconfig_value "${xcconfig_file}" DART_DEFINES)" || return 1
+  [[ "${actual_target}" == "${expected_target}" ]] || return 1
+  case ",${actual_defines}," in
+    *",${expected_define},"*) ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "${actual_defines}"
+}
+
 self_test_xcresult_summary_parser() (
   local test_root
   test_root="$(mktemp -d)"
@@ -118,7 +151,26 @@ self_test_xcresult_summary_parser() (
     exit 1
   fi
 
-  echo 'xcresult summary and XCUITest log parser self-test passed'
+  printf '%s\n' \
+    'FLUTTER_TARGET=lib/xcui_main.dart' \
+    'DART_DEFINES=other,REFOR0dVSV9YQ1VJVEVTVF9CVUlMRD10cnVl' \
+    > "${test_root}/Generated.xcconfig"
+  [[ "$(
+    validate_xcui_flutter_config \
+      "${test_root}/Generated.xcconfig" \
+      lib/xcui_main.dart REFOR0dVSV9YQ1VJVEVTVF9CVUlMRD10cnVl
+  )" == 'other,REFOR0dVSV9YQ1VJVEVTVF9CVUlMRD10cnVl' ]] || {
+    echo 'XCUITest Flutter config parser rejected a valid fixture.' >&2
+    exit 1
+  }
+  if validate_xcui_flutter_config \
+    "${test_root}/Generated.xcconfig" \
+    lib/main.dart REFOR0dVSV9YQ1VJVEVTVF9CVUlMRD10cnVl >/dev/null 2>&1; then
+    echo 'XCUITest Flutter config parser accepted the production entrypoint.' >&2
+    exit 1
+  fi
+
+  echo 'xcresult, XCUITest log and Flutter config parser self-test passed'
 )
 
 if [[ "${1:-}" == '--self-test' ]]; then
@@ -156,11 +208,13 @@ canonical_evidence_dir="$(cd -- "${evidence_dir}" && pwd -P)"
 readonly canonical_evidence_dir
 readonly result_bundle="${canonical_evidence_dir}/${suite_name}.xcresult"
 readonly log_path="${canonical_evidence_dir}/${suite_name}.log"
+readonly boot_log_path="${canonical_evidence_dir}/${suite_name}.boot.log"
 readonly summary_path="${canonical_evidence_dir}/${suite_name}.summary.txt"
 readonly metadata_path="${canonical_evidence_dir}/${suite_name}.environment.txt"
 readonly xcresult_summary_path="${canonical_evidence_dir}/${suite_name}.xcresult-summary.json"
 for managed_path in \
-  "${result_bundle}" "${log_path}" "${summary_path}" "${metadata_path}" \
+  "${result_bundle}" "${log_path}" "${boot_log_path}" \
+  "${summary_path}" "${metadata_path}" \
   "${xcresult_summary_path}"; do
   case "${managed_path}" in
     "${canonical_evidence_dir}"/*) ;;
@@ -172,7 +226,7 @@ for managed_path in \
 done
 rm -rf -- "${result_bundle}"
 rm -f -- \
-  "${log_path}" "${summary_path}" "${metadata_path}" \
+  "${log_path}" "${boot_log_path}" "${summary_path}" "${metadata_path}" \
   "${xcresult_summary_path}"
 
 runtime_identifier="$(
@@ -214,25 +268,81 @@ if [[ -z "${device_type_identifier}" ]]; then
 fi
 
 simulator_udid=""
-cleanup_simulator() {
+simulator_name=""
+simulator_boot_attempt=0
+flutter_config_backup_dir=""
+generated_xcconfig_existed=false
+flutter_export_environment_existed=false
+readonly generated_xcconfig_path="ios/Flutter/Generated.xcconfig"
+readonly flutter_export_environment_path="ios/Flutter/flutter_export_environment.sh"
+destroy_simulator() {
   if [[ -n "${simulator_udid}" ]]; then
     xcrun simctl shutdown "${simulator_udid}" >/dev/null 2>&1 || true
     xcrun simctl delete "${simulator_udid}" >/dev/null 2>&1 || true
+    simulator_udid=""
   fi
+}
+restore_flutter_config() {
+  if [[ -z "${flutter_config_backup_dir}" ]]; then
+    return
+  fi
+  if [[ "${generated_xcconfig_existed}" == true ]]; then
+    cp "${flutter_config_backup_dir}/Generated.xcconfig" \
+      "${generated_xcconfig_path}"
+  else
+    rm -f -- "${generated_xcconfig_path}"
+  fi
+  if [[ "${flutter_export_environment_existed}" == true ]]; then
+    cp "${flutter_config_backup_dir}/flutter_export_environment.sh" \
+      "${flutter_export_environment_path}"
+  else
+    rm -f -- "${flutter_export_environment_path}"
+  fi
+  rm -rf -- "${flutter_config_backup_dir}"
+  flutter_config_backup_dir=""
+}
+cleanup_simulator() {
+  destroy_simulator
+  restore_flutter_config
 }
 trap cleanup_simulator EXIT INT TERM
 
-readonly simulator_name="Danggui-${suite_name}-$$-${RANDOM}"
-simulator_udid="$(
-  xcrun simctl create \
-    "${simulator_name}" "${device_type_identifier}" "${runtime_identifier}"
-)"
-[[ "${simulator_udid}" =~ ^[0-9A-Fa-f-]{36}$ ]] || {
-  echo "simctl returned an invalid Simulator identifier." >&2
+: > "${boot_log_path}"
+boot_succeeded=false
+for simulator_boot_attempt in 1 2; do
+  simulator_name="Danggui-${suite_name}-$$-${RANDOM}-${simulator_boot_attempt}"
+  printf 'boot_attempt=%s simulator=%s\n' \
+    "${simulator_boot_attempt}" "${simulator_name}" >> "${boot_log_path}"
+  if simulator_udid="$(
+    xcrun simctl create \
+      "${simulator_name}" "${device_type_identifier}" "${runtime_identifier}" \
+      2>> "${boot_log_path}"
+  )"; then
+    if [[ ! "${simulator_udid}" =~ ^[0-9A-Fa-f-]{36}$ ]]; then
+      printf 'simctl returned an invalid Simulator identifier: %s\n' \
+        "${simulator_udid}" >> "${boot_log_path}"
+      simulator_udid=""
+    elif xcrun simctl boot "${simulator_udid}" >> "${boot_log_path}" 2>&1 &&
+      xcrun simctl bootstatus "${simulator_udid}" -b >> "${boot_log_path}" 2>&1; then
+      boot_succeeded=true
+      break
+    else
+      boot_status=$?
+      printf 'Simulator boot attempt %s failed with status %s.\n' \
+        "${simulator_boot_attempt}" "${boot_status}" >> "${boot_log_path}"
+    fi
+  else
+    create_status=$?
+    printf 'Simulator creation attempt %s failed with status %s.\n' \
+      "${simulator_boot_attempt}" "${create_status}" >> "${boot_log_path}"
+  fi
+  destroy_simulator
+done
+if [[ "${boot_succeeded}" != true ]]; then
+  echo 'Unable to boot a disposable Simulator after two fresh-device attempts.' >&2
+  cat "${boot_log_path}" >&2
   exit 1
-}
-xcrun simctl boot "${simulator_udid}"
-xcrun simctl bootstatus "${simulator_udid}" -b
+fi
 
 {
   printf 'suite=%s\n' "${suite_name}"
@@ -240,6 +350,7 @@ xcrun simctl bootstatus "${simulator_udid}" -b
   printf 'runtime_build=%s\n' "${runtime_build}"
   printf 'simulator_name=%s\n' "${simulator_name}"
   printf 'simulator_udid=%s\n' "${simulator_udid}"
+  printf 'simulator_boot_attempt=%s\n' "${simulator_boot_attempt}"
   printf 'device_type_identifier=%s\n' "${device_type_identifier}"
   printf 'runner_image=%s\n' "${ImageOS:-unknown}"
   printf 'runner_image_version=%s\n' "${ImageVersion:-unknown}"
@@ -249,12 +360,42 @@ xcrun simctl bootstatus "${simulator_udid}" -b
   flutter --version
 } > "${metadata_path}"
 
-# This compile-time opt-in keeps the destructive contract harness unreachable
-# in an ordinary Debug launch. The test itself runs in a disposable Simulator.
+# The production lib/main.dart does not import the destructive harness. Generate
+# an explicit Debug-Simulator Flutter configuration for its dedicated entrypoint
+# and then pass the generated values through raw xcodebuild as a second guard.
+readonly xcui_flutter_target="lib/xcui_main.dart"
 xcui_dart_define="$(
   printf '%s' 'DANGGUI_XCUITEST_BUILD=true' | base64 | tr -d '\r\n'
 )"
 readonly xcui_dart_define
+flutter_config_backup_dir="$(mktemp -d)"
+if [[ -f "${generated_xcconfig_path}" ]]; then
+  generated_xcconfig_existed=true
+  cp "${generated_xcconfig_path}" \
+    "${flutter_config_backup_dir}/Generated.xcconfig"
+fi
+if [[ -f "${flutter_export_environment_path}" ]]; then
+  flutter_export_environment_existed=true
+  cp "${flutter_export_environment_path}" \
+    "${flutter_config_backup_dir}/flutter_export_environment.sh"
+fi
+flutter build ios \
+  --simulator \
+  --debug \
+  --config-only \
+  --no-codesign \
+  --target="${xcui_flutter_target}" \
+  --dart-define='DANGGUI_XCUITEST_BUILD=true'
+xcui_dart_defines="$(
+  validate_xcui_flutter_config \
+    "${generated_xcconfig_path}" \
+    "${xcui_flutter_target}" \
+    "${xcui_dart_define}"
+)" || {
+  echo 'Flutter did not generate the required XCUITest target and Dart define.' >&2
+  exit 1
+}
+readonly xcui_dart_defines
 {
   cat "${metadata_path}"
   xcodebuild test \
@@ -265,7 +406,8 @@ readonly xcui_dart_define
     -parallel-testing-enabled NO \
     -only-testing:RunnerTests \
     -only-testing:RunnerUITests \
-    DART_DEFINES="${xcui_dart_define}" \
+    FLUTTER_TARGET="${xcui_flutter_target}" \
+    DART_DEFINES="${xcui_dart_defines}" \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO
 } 2>&1 | tee "${log_path}"

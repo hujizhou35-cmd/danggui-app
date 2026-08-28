@@ -362,6 +362,30 @@ final class ReminderNotificationActionIdentity {
     this.deviceGeneration,
   });
 
+  factory ReminderNotificationActionIdentity.forReminder({
+    required String taskId,
+    required String reminderId,
+    required int scheduleRevision,
+    String? deviceGeneration,
+  }) {
+    final normalizedGeneration = deviceGeneration?.trim().toLowerCase();
+    final generation =
+        normalizedGeneration == null || normalizedGeneration.isEmpty
+        ? null
+        : normalizedGeneration;
+    return ReminderNotificationActionIdentity(
+      taskId: taskId,
+      reminderId: reminderId,
+      scheduleRevision: scheduleRevision,
+      sessionId: _ordinaryNotificationSession(
+        reminderId,
+        scheduleRevision,
+        deviceGeneration: generation,
+      ),
+      deviceGeneration: generation,
+    );
+  }
+
   static const int legacyPayloadVersion = 2;
   static const int payloadVersion = 3;
 
@@ -2013,15 +2037,10 @@ final class NotificationCoordinator {
         vibrationEnabled: row.read<bool>('vibration_enabled'),
         defaultSnoozeMinutes: row.read<int>('default_snooze_minutes'),
         exactScheduling: _exactSchedulingAvailable,
-        payload: ReminderNotificationActionIdentity(
+        payload: ReminderNotificationActionIdentity.forReminder(
           taskId: taskId,
           reminderId: reminderId,
           scheduleRevision: revision,
-          sessionId: _ordinaryNotificationSession(
-            reminderId,
-            revision,
-            deviceGeneration: deviceGeneration,
-          ),
           deviceGeneration: deviceGeneration,
         ).encode(),
         localeTag: presentation.localeTag,

@@ -820,7 +820,12 @@ jq -e \
     .scope.nativeNotificationGateway == true and
     .scope.systemNotificationPreviouslyObserved == true and
     .scope.systemUiActionClickClaimed == false and
+    .scope.nativeActionReceiverClickClaimed == false and
     [.actions[].minutes] == [10, 30, 60] and
+    ([.actions[].payloadVersion] | all(. == 2 or . == 3)) and
+    ([.actions[].identityReminderMatches] | all) and
+    ([.actions[].identityRevisionMatches] | all) and
+    ([.actions[].identitySessionPresent] | all) and
     ([.actions[].assertions[]] | all)
   ' "${snooze_callback_json}" >/dev/null
 snooze_scheduled_micros="$(

@@ -1206,6 +1206,10 @@ final class _Audit {
       'runner_arch=',
       'runtime_build=',
       'system_delivery=device-unverified',
+      '--config-only',
+      'lib/xcui_main.dart',
+      r'FLUTTER_TARGET="${xcui_flutter_target}"',
+      'DANGGUI_XCUITEST_BUILD=true',
     ]) {
       _expectContains(
         simulatorScriptPath,
@@ -1221,6 +1225,28 @@ final class _Audit {
       '$simulatorScriptPath must create/delete only its disposable device and '
           'remain compatible with macOS Bash 3',
     );
+    const productionMainPath = 'lib/main.dart';
+    final productionMain = _requiredText(productionMainPath) ?? '';
+    const xcuiMainPath = 'lib/xcui_main.dart';
+    final xcuiMain = _requiredText(xcuiMainPath) ?? '';
+    _expect(
+      !productionMain.contains('xcui_scenario_harness.dart') &&
+          !productionMain.contains('DANGGUI_XCUITEST_SCENARIO'),
+      'production Dart entrypoint excludes the XCUITest harness',
+      '$productionMainPath must not import or select the destructive test harness',
+    );
+    for (final xcuiGate in <String>[
+      'DANGGUI_XCUITEST_BUILD',
+      'kDebugMode && harnessBuild',
+      'DANGGUI_XCUITEST_SCENARIO',
+    ]) {
+      _expectContains(
+        xcuiMainPath,
+        xcuiMain,
+        xcuiGate,
+        'dedicated XCUITest entrypoint must retain compile-time and Debug gates',
+      );
+    }
 
     const deepAuditPath = '.github/workflows/ios-deep-audit.yml';
     final deepAudit = _requiredText(deepAuditPath) ?? '';

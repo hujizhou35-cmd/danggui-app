@@ -103,6 +103,7 @@ enum DangguiDataProtection {
   static func apply(
     to rootURL: URL,
     fileManager: FileManager = .default,
+    setProtection: ((URL, [FileAttributeKey: Any]) throws -> Void)? = nil,
     setBackupExclusion: (URL) throws -> Void = { url in
       var rootValues = URLResourceValues()
       rootValues.isExcludedFromBackup = true
@@ -115,6 +116,9 @@ enum DangguiDataProtection {
       ).isExcludedFromBackup
     }
   ) throws {
+    let applyProtection = setProtection ?? { url, attributes in
+      try fileManager.setAttributes(attributes, ofItemAtPath: url.path)
+    }
     do {
       try fileManager.createDirectory(
         at: rootURL,
@@ -125,10 +129,7 @@ enum DangguiDataProtection {
       throw DangguiDataProtectionError.createDirectory
     }
     do {
-      try fileManager.setAttributes(
-        protectedAttributes,
-        ofItemAtPath: rootURL.path
-      )
+      try applyProtection(rootURL, protectedAttributes)
     } catch {
       throw DangguiDataProtectionError.setProtection
     }
@@ -173,10 +174,7 @@ enum DangguiDataProtection {
         continue
       }
       do {
-        try fileManager.setAttributes(
-          protectedAttributes,
-          ofItemAtPath: childURL.path
-        )
+        try applyProtection(childURL, protectedAttributes)
       } catch {
         throw DangguiDataProtectionError.setProtection
       }

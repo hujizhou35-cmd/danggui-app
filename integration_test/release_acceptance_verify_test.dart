@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:danggui/main.dart' as app;
 import 'package:danggui/src/application/app_store.dart';
 import 'package:danggui/src/data/database.dart';
+import 'package:danggui/src/data/device_alarm_generation_store.dart';
 import 'package:danggui/src/features/tasks/tasks_page.dart';
 import 'package:danggui/src/services/notifications/notification_coordinator.dart';
 import 'package:drift/drift.dart';
@@ -174,17 +175,33 @@ void main() {
     await waitForReleaseAcceptanceHostSignal();
 
     // The host has now observed the real scheduled notification and captured
-    // the shade. Exercise the exact action ids delivered by the native plugin
-    // callback without using brittle coordinate-based SystemUI taps. This
-    // still uses the production database, coordinator and native gateway, so a
-    // successful return includes durable mutation and platform rescheduling.
+    // the shade. Exercise the production coordinator with the same canonical
+    // revision/session identity used by ordinary notification actions. This
+    // deliberately does not claim a SystemUI action-button or native
+    // AlarmActionReceiver click; those platform boundaries have separate
+    // native tests. A successful return still proves durable mutation, outbox
+    // processing and rescheduling through the production notification gateway.
     final snoozeActions = <Map<String, Object?>>[];
     var previous = await _readSnoozeState(database, taskId);
     for (final minutes in <int>[10, 30, 60]) {
       final callStarted = DateTime.now().toUtc();
+      final persistedGeneration = await DeviceAlarmGenerationStore(database)
+          .readCurrent();
+      final actionPayload = ReminderNotificationActionIdentity.forReminder(
+        taskId: taskId,
+        reminderId: previous['reminderId']! as String,
+        scheduleRevision: previous['scheduleRevision']! as int,
+        deviceGeneration: persistedGeneration.startsWith('legacy:')
+            ? null
+            : persistedGeneration,
+      ).encode();
+      final actionIdentity = ReminderNotificationActionIdentity.tryDecode(
+        actionPayload,
+      );
+      expect(actionIdentity, isNotNull);
       final handled = await coordinator.handleNotificationAction(
         'danggui.snooze.$minutes',
-        'task:$taskId',
+        actionPayload,
       );
       final callCompleted = DateTime.now().toUtc();
       final current = await _waitForSnoozeState(
@@ -236,7 +253,15 @@ void main() {
       snoozeActions.add(<String, Object?>{
         'minutes': minutes,
         'actionId': 'danggui.snooze.$minutes',
-        'payload': 'task:$taskId',
+        'payloadVersion': actionIdentity!.deviceGeneration == null
+            ? ReminderNotificationActionIdentity.legacyPayloadVersion
+            : ReminderNotificationActionIdentity.payloadVersion,
+        'generationBound': actionIdentity.deviceGeneration != null,
+        'identityReminderMatches':
+            actionIdentity.reminderId == previous['reminderId'],
+        'identityRevisionMatches':
+            actionIdentity.scheduleRevision == previous['scheduleRevision'],
+        'identitySessionPresent': actionIdentity.sessionId.isNotEmpty,
         'callStartedAtUtc': callStarted.toIso8601String(),
         'callCompletedAtUtc': callCompleted.toIso8601String(),
         ...current,
@@ -256,6 +281,7 @@ void main() {
           'nativeNotificationGateway': true,
           'systemNotificationPreviouslyObserved': true,
           'systemUiActionClickClaimed': false,
+          'nativeActionReceiverClickClaimed': false,
         },
         'actions': snoozeActions,
       },
@@ -306,7 +332,8 @@ Future<Map<String, Object?>> _readSnoozeState(
   final reminder = await database
       .customSelect(
         'SELECT r.scheduled_at_utc, r.snoozed_until_utc, r.snooze_count, '
-        'r.schedule_revision, r.status, nr.platform_notification_id, '
+        'r.id AS reminder_id, r.schedule_revision, r.status, '
+        'nr.platform_notification_id, '
         'nr.schedule_revision AS registration_revision '
         'FROM reminders r LEFT JOIN notification_registrations nr '
         'ON nr.reminder_id = r.id AND nr.platform = ? '
@@ -324,6 +351,7 @@ Future<Map<String, Object?>> _readSnoozeState(
       )
       .getSingle();
   return <String, Object?>{
+    'reminderId': reminder.read<String>('reminder_id'),
     'scheduledAtUtcMicros': reminder.read<int>('scheduled_at_utc'),
     'snoozedUntilUtcMicros': reminder.readNullable<int>('snoozed_until_utc'),
     'snoozeCount': reminder.read<int>('snooze_count'),

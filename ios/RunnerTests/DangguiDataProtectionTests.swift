@@ -22,15 +22,28 @@ final class DangguiDataProtectionTests: XCTestCase {
     )
     try Data("fixture".utf8).write(to: file)
 
-    try DangguiDataProtection.apply(to: root)
+    var protectedPaths: [String: FileProtectionType] = [:]
+    try DangguiDataProtection.apply(
+      to: root,
+      setProtection: { url, attributes in
+        protectedPaths[url.standardizedFileURL.path] = try XCTUnwrap(
+          attributes[.protectionKey] as? FileProtectionType
+        )
+      }
+    )
 
     let rootValues = try root.resourceValues(forKeys: [.isExcludedFromBackupKey])
     XCTAssertEqual(rootValues.isExcludedFromBackup, true)
-    let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
-    XCTAssertEqual(
-      attributes[.protectionKey] as? FileProtectionType,
-      .completeUntilFirstUserAuthentication
+    let expectedProtectedPaths = Set(
+      [root, nested, file].map { $0.standardizedFileURL.path }
     )
+    XCTAssertEqual(Set(protectedPaths.keys), expectedProtectedPaths)
+    for path in expectedProtectedPaths {
+      XCTAssertEqual(
+        protectedPaths[path],
+        .completeUntilFirstUserAuthentication
+      )
+    }
   }
 
   func testPolicyFailsClosedWhenBackupExclusionCannotBeVerified() throws {
