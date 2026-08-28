@@ -1,10 +1,13 @@
 {
   "@@locale": "ja",
   "appName": "当归",
+  "brandSeal": "当帰の印章",
   "privacyTagline": "端末内だけ · アップロードなし · AI 不使用",
   "loading": "読み込み中…",
   "bootstrapError": "初期化できませんでした",
   "retry": "再試行",
+  "reload": "再読み込み",
+  "editorVersionConflict": "この内容は別の操作で更新されました。編集を続ける前に再読み込みしてください。",
   "tasksTab": "事項",
   "pastTab": "過往",
   "notesTab": "ノート",

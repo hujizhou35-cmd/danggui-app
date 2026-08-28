@@ -61,11 +61,11 @@
 |---|---|---|---|
 | G01 | F01 生命周期 | `SceneDelegate` 为空；Dart 只在 `resumed` 对账 | 注入 scene/lifecycle provider；冷启动通知动作、scene 重连、significant time change XCUITest。若时间变化不触发对账则升级缺陷 |
 | G02 | F04 能力 | `getCapabilities` 只看 authorization + timeSensitive，未读 alert/sound | 组合测试 `authorizationStatus/alertSetting/soundSetting/timeSensitiveSetting`；若 UI 声称可响而 sound disabled，升级缺陷 |
-| G03 | F10 备份原子性 | WAL truncate + staging +校验已有；缺 durability/fault matrix | 所有 write/hash/zip/fsync/rename 前后故障，磁盘满；确认失败不发布附件、不删安全副本 |
+| G03 | F10 备份原子性 | v1.1.5 关闭 live 连接后使用新的 SQLite 连接和 `VACUUM INTO` 生成安全快照；候选、安全副本、journal 与 swap 后 live 均完整验证并显式 flush；真实 busy WAL 与 rename 前后故障测试已覆盖。Dart 无父目录 fsync API | 当前结论仅为 `process-crash-consistent`；磁盘满及真实断电仍需平台/VFS 故障注入，断电语义保持 `power-loss-unverified` |
 | G04 | F11 Keychain | 使用 `first_unlock_this_device`、不可同步 | 首次解锁前、锁屏后台、missing/duplicate/OSStatus 错误；实体机前保持 device-unverified |
-| G05 | F12 恢复输入 | whitelist/hash/schema/quick-check 已有 | ZIP traversal/symlink/bomb、full integrity、swap crash、未来 schema、双 merge；任何输入覆盖良好 DB 即升级缺陷 |
-| G06 | F16 DB 损坏恢复 | 启动 quick_check 失败会重试；基线没有自动选最后良好副本 | 损坏 main/WAL/SHM、只读/磁盘满；验证不继续破坏性写入。自动恢复策略需用户数据优先且可审计 |
-| G07 | F17 outbox | Dart stale revision/dedupe 测试强 | 平台调用成功但 ack 前 crash、native event ack 前 crash、容量 deferred 重启、乱序/重复事件 |
+| G05 | F12 恢复输入 | 读取包体前 stat 限长并流式复核实际长度；ZIP 在解压前限制条目、精确名称、声明大小、symlink/type、压缩方法和 central/local 一致性；hash、完整 integrity/FK、精确生成 schema 签名和准备后语义/计数均覆盖，含恶意 AFTER DELETE trigger、缺列及 `quick_check=ok` 索引损坏夹具；create/replace/merge 共用实例级互斥 | 未来 schema 拒绝已有合同；磁盘满和 archive 库未知解析缺陷仍需持续 fuzz/故障注入。任何输入覆盖良好 DB 即升级缺陷 |
+| G06 | F16 DB 损坏恢复 | 普通无 journal 启动也在仓储写入前执行一次完整 integrity/FK；journal 路径的 live/candidate/safety 和恢复后 canonical live 同样完整验证。journal 前候选失败逐项清理，无 journal 启动只按精确 app-owned 名称清孤儿；损坏候选不会覆盖良好 live | 损坏 WAL/SHM、只读/磁盘满仍需平台/VFS 注入。移动损坏 live 与 sidecar 到唯一取证前缀不是单事务；二次进程崩溃可能造成取证 sidecar 分散，这是不影响有效副本选择的已知低风险 |
+| G07 | F17 outbox | Dart stale revision/dedupe 测试强；replace 候选在交换前写入新的 `alarmGeneration`，merge 保持当前代际，v1.1.4 回退 `legacy:<dataset_id>`，portable backup 剥离设备标记，journal 前后崩溃恢复测试证明旧/新 live 各自保持对应代际；三端 schedule/Stop/Snooze/Missed/快照/取消均核对当前代际，ACK 失败不阻断同轮新 revision 排期 | 平台调用成功但 app ack 前 crash、容量 deferred 重启、乱序/重复事件仍需持续门禁。Android 为支持 replace 回滚有意保留跨代 LKG records/events；在增加共享层 finalize 握手前，频繁 replace 会增加私有 SharedPreferences，占用增长不得误报为提醒成功或通过提前 GC 牺牲回滚可靠性 |
 | G08 | F18 迁移 | schemaVersion 仍为 1，因此尚无升级链 | v1.1.5 任何 schema 改动前加入 v1.1.3/v1.1.4 真实 DB 夹具、未来版本拒绝和逐阶段 crash |
 | G09 | F19 channel | Swift 参数解析有别名和稳定错误 | malformed 类型/epoch overflow/unknown enum/fuzz，FlutterResult exactly-once，actor 并发与 iOS 18/26 双 runtime |
 | G10 | F21 日志 | journal 限 200 且设计不存正文 | 扫描 `NSLog`、Dart logger、异常字符串和证据包；确认路径、正文、口令/密钥不进入日志 |
@@ -73,7 +73,8 @@
 ## P1/P2 证据缺口
 
 - 编辑器：真实中文/日文 IME composing、光标/选择、长文自动保存与进程终止未覆盖；Joplin X13 表明只测短文本不足。
-- 搜索：没有四语规范化、索引损坏/重建和删除恢复模型测试。
+- 搜索：replace/merge 已不信任备份投影，并从权威 task/note/past 数据原子重建，覆盖缺失、陈旧与
+  重复 merge；四语规范化与删除恢复的更大模型矩阵仍待扩展。
 - 过往/anchors：缺 Unicode grapheme 边界和随机 split/merge 状态机。
 - 导出：缺磁盘满、分享取消、超长安全文件名、同名碰撞和旧版本字节夹具。
 - 导航：目标已删除、权限撤销、旧 payload、冷启动/后台 scene 的降级行为没有 XCUITest。
@@ -91,6 +92,7 @@
 - 静音开关、各专注模式、音量为零、蓝牙/耳机路由；
 - 锁屏隔夜、低电量模式、存储压力、系统强杀；
 - 首次解锁前/后文件与 Keychain 行为；
+- 数据库/恢复 journal rename 后、父目录元数据尚未落盘时的突然断电；
 - 系统重启后的排期、AlarmKit 容量与通知动作；
 - iOS 15–17 运行时（只有 deployment-target/availability 合同不等于运行时验证）。
 

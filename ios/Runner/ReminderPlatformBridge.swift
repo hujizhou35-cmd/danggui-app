@@ -51,6 +51,8 @@ final class ReminderPlatformBridge {
     switch call.method {
     case "getCapabilities":
       getCapabilities(result: result)
+    case "getLocalTimeZoneIdentifier":
+      result(TimeZone.autoupdatingCurrent.identifier)
     case "requestNotificationPermission":
       requestNotificationPermission(result: result)
     case "requestAlarmAuthorization":
@@ -65,8 +67,12 @@ final class ReminderPlatformBridge {
       result(false)
     case "scheduleAlarm":
       scheduleAlarm(arguments: call.arguments, result: result)
+    case "activateDeviceGeneration":
+      activateDeviceGeneration(arguments: call.arguments, result: result)
     case "cancelAlarm":
       cancelAlarm(arguments: call.arguments, result: result)
+    case "retireNativeAlarmRoute":
+      retireNativeAlarmRoute(arguments: call.arguments, result: result)
     case "stopAlarm":
       stopAlarm(arguments: call.arguments, result: result)
     case "snoozeAlarm":
@@ -105,20 +111,23 @@ final class ReminderPlatformBridge {
         timeSensitiveEnabled = false
       }
 
-      let alarmAuthorization = self.alarmAuthorizationState()
-      let alarmKitSupported = self.isAlarmKitSupported
-      let alarmGrade = alarmKitSupported && alarmAuthorization == "authorized"
-      let deliveryCapability: String
-      if alarmGrade {
-        deliveryCapability = "alarm-grade"
-      } else if notificationsEnabled && timeSensitiveEnabled {
-        deliveryCapability = "time-sensitive-best-effort"
-      } else if notificationsEnabled {
-        deliveryCapability = "ordinary"
-      } else {
-        deliveryCapability = "unavailable"
-      }
       DispatchQueue.main.async {
+        // AlarmManager authorization is UI/platform state. Read it on the
+        // main queue even though UNUserNotificationCenter answers on an
+        // arbitrary queue, then complete FlutterResult exactly once here.
+        let alarmAuthorization = self.alarmAuthorizationState()
+        let alarmKitSupported = self.isAlarmKitSupported
+        let alarmGrade = alarmKitSupported && alarmAuthorization == "authorized"
+        let deliveryCapability: String
+        if alarmGrade {
+          deliveryCapability = "alarm-grade"
+        } else if notificationsEnabled && timeSensitiveEnabled {
+          deliveryCapability = "time-sensitive-best-effort"
+        } else if notificationsEnabled {
+          deliveryCapability = "ordinary"
+        } else {
+          deliveryCapability = "unavailable"
+        }
         result([
           "supported": alarmKitSupported,
           "platform": "ios",
@@ -275,6 +284,44 @@ final class ReminderPlatformBridge {
 
   // MARK: Alarm operations
 
+  /// Establishes the database generation whose reminders may interact with
+  /// native delivery state. A missing/null generation is the v1.1.4 legacy
+  /// generation; a non-null value must be a canonicalizable UUID.
+  private func activateDeviceGeneration(
+    arguments: Any?,
+    result: @escaping FlutterResult
+  ) {
+    let values = arguments as? [String: Any]
+    let generation: String?
+    do {
+      generation = try Self.optionalDeviceGeneration(values)
+    } catch {
+      result(alarmError("invalid_device_generation", error))
+      return
+    }
+#if canImport(AlarmKit)
+    if #available(iOS 26.0, *) {
+      Task { @MainActor in
+        do {
+          try await DangguiAlarmOperationActor.shared.activateDeviceGeneration(
+            generation
+          )
+          result(nil)
+        } catch {
+          result(self.alarmError("alarm_generation_activation_failed", error))
+        }
+      }
+      return
+    }
+#endif
+    do {
+      try DangguiAlarmStore.activateDeviceGeneration(generation)
+      result(nil)
+    } catch {
+      result(alarmError("alarm_generation_activation_failed", error))
+    }
+  }
+
   private func scheduleAlarm(arguments: Any?, result: @escaping FlutterResult) {
     do {
       let record = try DangguiAlarmRecord(arguments: arguments)
@@ -302,11 +349,23 @@ final class ReminderPlatformBridge {
       result(missingReminderIDError())
       return
     }
+    let expectedDeviceGeneration: String?
+    do {
+      expectedDeviceGeneration = try Self.optionalDeviceGeneration(
+        arguments as? [String: Any]
+      )
+    } catch {
+      result(alarmError("invalid_alarm_identity", error))
+      return
+    }
 #if canImport(AlarmKit)
     if #available(iOS 26.0, *) {
       Task { @MainActor in
         do {
-          try await DangguiAlarmOperationActor.shared.cancel(reminderID: reminderID)
+          try await DangguiAlarmOperationActor.shared.cancel(
+            reminderID: reminderID,
+            expectedDeviceGeneration: expectedDeviceGeneration
+          )
           result(nil)
         } catch {
           result(self.alarmError("alarm_cancel_failed", error))
@@ -315,8 +374,79 @@ final class ReminderPlatformBridge {
       return
     }
 #endif
-    try? DangguiAlarmStore.remove(reminderID: reminderID)
-    try? DangguiAlarmStore.removeTransactions(reminderID: reminderID)
+    do {
+      guard try DangguiAlarmStore.activeGenerationMatches(
+        expectedDeviceGeneration
+      ) else {
+        result(nil)
+        return
+      }
+      _ = try DangguiAlarmStore.remove(
+        reminderID: reminderID,
+        deviceGeneration: expectedDeviceGeneration
+      )
+      try DangguiAlarmStore.removeTransactions(
+        reminderID: reminderID,
+        deviceGeneration: expectedDeviceGeneration
+      )
+    } catch {
+      result(alarmError("alarm_cancel_failed", error))
+      return
+    }
+    result(nil)
+  }
+
+  /// Removes only the AlarmKit representation for one immutable reminder
+  /// revision. Unlike `cancelAlarm`, this is a delivery-route transition, not a
+  /// business cancellation: once cleanup is complete the same revision may be
+  /// installed again if AlarmKit authorization later returns.
+  private func retireNativeAlarmRoute(
+    arguments: Any?,
+    result: @escaping FlutterResult
+  ) {
+    guard let reminderID = reminderID(from: arguments) else {
+      result(missingReminderIDError())
+      return
+    }
+    let values = arguments as? [String: Any]
+    let expectedRevision = Self.integer(values, keys: ["scheduleRevision", "revision"])
+    let expectedSession = Self.string(
+      values,
+      keys: ["session", "sessionId", "platformId", "platformAlarmId"]
+    )
+    let expectedDeviceGeneration: String?
+    do {
+      expectedDeviceGeneration = try Self.optionalDeviceGeneration(values)
+    } catch {
+      result(alarmError("invalid_alarm_identity", error))
+      return
+    }
+    guard let expectedRevision, expectedRevision > 0,
+          let expectedSession, !expectedSession.isEmpty else {
+      result(invalidAlarmIdentityError())
+      return
+    }
+#if canImport(AlarmKit)
+    if #available(iOS 26.0, *) {
+      Task { @MainActor in
+        do {
+          try await DangguiAlarmOperationActor.shared.retireNativeRoute(
+            reminderID: reminderID,
+            expectedRevision: expectedRevision,
+            expectedSession: expectedSession,
+            expectedDeviceGeneration: expectedDeviceGeneration
+          )
+          result(nil)
+        } catch {
+          result(self.alarmError("alarm_route_retire_failed", error))
+        }
+      }
+      return
+    }
+#endif
+    // Earlier systems have no AlarmKit daemon registration. This must be a
+    // no-op rather than an unscoped mirror deletion: a delayed fallback call
+    // must never erase a newer revision restored from durable state.
     result(nil)
   }
 
@@ -331,6 +461,11 @@ final class ReminderPlatformBridge {
       values,
       keys: ["session", "sessionId", "platformId", "platformAlarmId"]
     )
+    guard let expectedRevision, expectedRevision > 0,
+          let expectedSession, !expectedSession.isEmpty else {
+      result(invalidAlarmIdentityError())
+      return
+    }
 #if canImport(AlarmKit)
     if #available(iOS 26.0, *) {
       Task { @MainActor in
@@ -366,6 +501,11 @@ final class ReminderPlatformBridge {
       values,
       keys: ["session", "sessionId", "platformId", "platformAlarmId"]
     )
+    guard let expectedRevision, expectedRevision > 0,
+          let expectedSession, !expectedSession.isEmpty else {
+      result(invalidAlarmIdentityError())
+      return
+    }
 #if canImport(AlarmKit)
     if #available(iOS 26.0, *) {
       Task { @MainActor in
@@ -428,12 +568,20 @@ final class ReminderPlatformBridge {
       // represented in the durable event journal before it is returned.
       Task { @MainActor in
         _ = try? await DangguiAlarmOperationActor.shared.reconcileAndList()
-        result(DangguiAlarmStore.events().map(\.flutterMap))
+        do {
+          result(try DangguiAlarmStore.activeEventsDurably().map(\.flutterMap))
+        } catch {
+          result(self.alarmError("alarm_event_drain_failed", error))
+        }
       }
       return
     }
 #endif
-    result(DangguiAlarmStore.events().map(\.flutterMap))
+    do {
+      result(try DangguiAlarmStore.activeEventsDurably().map(\.flutterMap))
+    } catch {
+      result(alarmError("alarm_event_drain_failed", error))
+    }
   }
 
   private func acknowledgeAlarmEvents(
@@ -442,8 +590,12 @@ final class ReminderPlatformBridge {
   ) {
     let values = arguments as? [String: Any]
     let eventIDs = Set((values?["eventIds"] as? [String]) ?? [])
-    DangguiAlarmStore.acknowledgeEvents(eventIDs)
-    result(nil)
+    do {
+      try DangguiAlarmStore.acknowledgeActiveEventsDurably(eventIDs)
+      result(nil)
+    } catch {
+      result(alarmError("alarm_event_ack_failed", error))
+    }
   }
 
   private func scheduleTestAlarm(arguments: Any?, result: @escaping FlutterResult) {
@@ -453,7 +605,7 @@ final class ReminderPlatformBridge {
       3_600,
       max(15, Self.integer(values, keys: ["delaySeconds"]) ?? 15)
     )
-    let request: [String: Any] = [
+    var request: [String: Any] = [
       "reminderId": "danggui-test-\(UUID().uuidString)",
       "taskId": "danggui-test",
       "scheduleRevision": 1,
@@ -463,6 +615,14 @@ final class ReminderPlatformBridge {
       "vibrationEnabled": Self.boolean(values, keys: ["vibrationEnabled"]) ?? true,
       "defaultSnoozeMinutes": 10,
     ]
+    do {
+      if let generation = try DangguiAlarmStore.activeDeviceGeneration() {
+        request["deviceGeneration"] = generation
+      }
+    } catch {
+      result(alarmError("alarm_generation_read_failed", error))
+      return
+    }
     scheduleAlarm(arguments: request, result: result)
   }
 
@@ -475,6 +635,14 @@ final class ReminderPlatformBridge {
     FlutterError(
       code: "invalid_alarm_request",
       message: "A non-empty reminderId is required.",
+      details: nil
+    )
+  }
+
+  private func invalidAlarmIdentityError() -> FlutterError {
+    FlutterError(
+      code: "invalid_alarm_identity",
+      message: "A positive revision and non-empty alarm session are required.",
       details: nil
     )
   }
@@ -536,6 +704,34 @@ final class ReminderPlatformBridge {
     return nil
   }
 
+  /// Missing/null represents the legacy database generation. Any supplied
+  /// value is deliberately strict: coercing numbers or empty strings into a
+  /// generation would let a delayed route mutation escape its database epoch.
+  static func optionalDeviceGeneration(
+    _ values: [String: Any]?
+  ) throws -> String? {
+    guard let values else { return nil }
+    let suppliedValues: [Any] = ["deviceGeneration", "generation"]
+      .compactMap { values[$0] }
+    guard !suppliedValues.isEmpty else { return nil }
+    let normalizedValues = try suppliedValues.map { supplied -> String? in
+      if supplied is NSNull { return nil }
+      guard let rawGeneration = supplied as? String,
+            let normalized = DangguiAlarmGeneration.normalized(rawGeneration)
+      else {
+        throw DangguiAlarmBridgeError.invalidDeviceGeneration
+      }
+      return normalized
+    }
+    let first = normalizedValues[0]
+    guard normalizedValues.dropFirst().allSatisfy({
+      DangguiAlarmGeneration.matches(first, $0)
+    }) else {
+      throw DangguiAlarmBridgeError.invalidDeviceGeneration
+    }
+    return first
+  }
+
   fileprivate static func integer(
     _ values: [String: Any]?,
     keys: [String]
@@ -590,8 +786,16 @@ enum DangguiAlarmIdentifier {
   /// Produces a stable UUID-shaped identifier for one immutable alarm revision.
   /// A revision-specific ID lets an edit be installed and verified before its
   /// predecessor is retired, removing the previous cancel-first loss window.
-  static func platformID(for reminderID: String, revision: Int) -> String {
-    let bytes = Array("\(reminderID)\u{1f}\(revision)".utf8)
+  static func platformID(
+    for reminderID: String,
+    revision: Int,
+    deviceGeneration: String? = nil
+  ) -> String {
+    var identity = "\(reminderID)\u{1f}\(revision)"
+    if let deviceGeneration {
+      identity += "\u{1f}\(deviceGeneration.lowercased())"
+    }
+    let bytes = Array(identity.utf8)
     let first = fnv1a(bytes, seed: 0xcbf29ce484222325)
     let second = fnv1a(bytes.reversed(), seed: 0x84222325cbf29ce4)
     var characters = Array(String(format: "%016llx%016llx", first, second))
@@ -628,6 +832,9 @@ enum DangguiAlarmIdentifier {
 struct DangguiAlarmRecord: Codable, Hashable, Sendable {
   var reminderID: String
   var platformAlarmID: String
+  /// A database-replacement generation. Missing means the v1.1.4 legacy
+  /// generation and preserves its deterministic platform identifier.
+  var deviceGeneration: String?
   var taskID: String
   var scheduleRevision: Int
   var triggerAtEpochMs: Int64
@@ -664,14 +871,19 @@ struct DangguiAlarmRecord: Codable, Hashable, Sendable {
       throw DangguiAlarmBridgeError.invalidTriggerDate
     }
 
-    scheduleRevision = ReminderPlatformBridge.integer(
+    guard let scheduleRevision = ReminderPlatformBridge.integer(
       values,
       keys: ["scheduleRevision", "revision"]
-    ) ?? 0
+    ), scheduleRevision > 0 else {
+      throw DangguiAlarmBridgeError.invalidScheduleRevision
+    }
+    self.scheduleRevision = scheduleRevision
     self.reminderID = reminderID
+    deviceGeneration = try ReminderPlatformBridge.optionalDeviceGeneration(values)
     platformAlarmID = DangguiAlarmIdentifier.platformID(
       for: reminderID,
-      revision: scheduleRevision
+      revision: scheduleRevision,
+      deviceGeneration: deviceGeneration
     )
     taskID = ReminderPlatformBridge.string(values, keys: ["taskId"]) ?? ""
     self.triggerAtEpochMs = triggerAtEpochMs
@@ -715,7 +927,7 @@ struct DangguiAlarmRecord: Codable, Hashable, Sendable {
   }
 
   var snapshotMap: [String: Any] {
-    [
+    var value: [String: Any] = [
       "reminderId": reminderID,
       "platformId": platformAlarmID,
       "platformAlarmId": platformAlarmID,
@@ -724,6 +936,10 @@ struct DangguiAlarmRecord: Codable, Hashable, Sendable {
       "triggerAtEpochMs": triggerAtEpochMs,
       "state": lastState,
     ]
+    if let deviceGeneration {
+      value["deviceGeneration"] = deviceGeneration
+    }
+    return value
   }
 
   var legacyFlutterMap: [String: Any] {
@@ -765,10 +981,21 @@ struct DangguiAlarmEvent: Codable, Hashable, Sendable {
   var occurredAtEpochMs: Int64
   var snoozeMinutes: Int?
   var platformAlarmID: String?
+  var deviceGeneration: String?
   var state: String?
   var errorCode: String?
   var delayedByMs: Int64?
   var successorTriggerAtEpochMs: Int64?
+
+  var mutatesBusinessState: Bool {
+    guard let eventType = DangguiAlarmEventType(rawValue: type) else { return false }
+    switch eventType {
+    case .delivered, .missed, .stopped, .snoozed:
+      return true
+    case .registered, .systemAlert, .audio, .vibration, .error:
+      return false
+    }
+  }
 
   init(
     type: DangguiAlarmEventType,
@@ -778,9 +1005,12 @@ struct DangguiAlarmEvent: Codable, Hashable, Sendable {
     errorCode: String? = nil,
     delayedByMs: Int64? = nil,
     occurredAtEpochMs: Int64? = nil,
-    successorTriggerAtEpochMs: Int64? = nil
+    successorTriggerAtEpochMs: Int64? = nil,
+    usesStableID: Bool = false
   ) {
-    eventID = UUID().uuidString
+    eventID = usesStableID
+      ? Self.stableID(type: type, record: record)
+      : UUID().uuidString
     self.type = type.rawValue
     reminderID = record.reminderID
     taskID = record.taskID
@@ -789,10 +1019,18 @@ struct DangguiAlarmEvent: Codable, Hashable, Sendable {
       ?? Int64(Date().timeIntervalSince1970 * 1_000)
     self.snoozeMinutes = snoozeMinutes
     platformAlarmID = record.platformAlarmID
+    deviceGeneration = record.deviceGeneration
     self.state = state
     self.errorCode = errorCode
     self.delayedByMs = delayedByMs
     self.successorTriggerAtEpochMs = successorTriggerAtEpochMs
+  }
+
+  static func stableID(
+    type: DangguiAlarmEventType,
+    record: DangguiAlarmRecord
+  ) -> String {
+    "danggui.alarm.\(type.rawValue).\(record.platformAlarmID.lowercased()).r\(record.scheduleRevision)"
   }
 
   var flutterMap: [String: Any] {
@@ -811,6 +1049,9 @@ struct DangguiAlarmEvent: Codable, Hashable, Sendable {
       value["platformId"] = platformAlarmID
       value["sessionId"] = platformAlarmID
       value["session"] = platformAlarmID
+    }
+    if let deviceGeneration {
+      value["deviceGeneration"] = deviceGeneration
     }
     if let state {
       value["state"] = state
@@ -858,13 +1099,18 @@ struct DangguiAlarmTransaction: Codable, Hashable, Sendable {
   var stopPreviousWhenConfirmed: Bool?
   /// A stable-ID event written durably before the transaction is removed.
   var completionEvent: DangguiAlarmEvent?
+  /// Missing-mirror repair remains transaction-owned through its terminal
+  /// decision, preventing repeated foreground reconciliation from scheduling
+  /// audible duplicates. Optional for v1.1.4 transactions.
+  var ownsMissingRecovery: Bool?
 
   init(
     replacement: DangguiAlarmRecord,
     previousPlatformAlarmID: String?,
     previousRecord: DangguiAlarmRecord? = nil,
     stopPreviousWhenConfirmed: Bool = false,
-    completionEvent: DangguiAlarmEvent? = nil
+    completionEvent: DangguiAlarmEvent? = nil,
+    ownsMissingRecovery: Bool = false
   ) {
     transactionID = UUID().uuidString
     reminderID = replacement.reminderID
@@ -875,6 +1121,7 @@ struct DangguiAlarmTransaction: Codable, Hashable, Sendable {
     updatedAtEpochMs = Int64(Date().timeIntervalSince1970 * 1_000)
     self.stopPreviousWhenConfirmed = stopPreviousWhenConfirmed
     self.completionEvent = completionEvent
+    self.ownsMissingRecovery = ownsMissingRecovery
   }
 
   mutating func advance(to next: DangguiAlarmTransactionPhase) throws {
@@ -904,26 +1151,53 @@ enum DangguiAlarmCancellationPhase: String, Codable, CaseIterable, Sendable {
   }
 }
 
+enum DangguiAlarmCancellationDaemonAction: String, Codable, Sendable {
+  case cancel
+  case stop
+}
+
 struct DangguiAlarmCancellation: Codable, Hashable, Sendable {
   var cancellationID: String
   var reminderID: String
+  /// Scope for the revision high-water mark. Missing is the legacy database
+  /// generation, not a wildcard over future restored databases.
+  var deviceGeneration: String?
   var cancelledThroughRevision: Int
   var platformAlarmIDs: [String]
   var phase: DangguiAlarmCancellationPhase
   var updatedAtEpochMs: Int64
+  /// Optional so v1.1.4 cancellation tombstones decode as ordinary cancels.
+  var daemonAction: DangguiAlarmCancellationDaemonAction?
+  /// Only the user-selected alarm is stopped; related predecessors/successors
+  /// are cancelled after the same tombstone has made them recoverable.
+  var stopPlatformAlarmID: String?
+  /// A stable terminal event persisted before the mirror is retired.
+  var completionEvent: DangguiAlarmEvent?
+  /// Optional terminal ledger classification. v1.1.4 tombstones decode nil.
+  var terminalState: String?
 
   init(
     reminderID: String,
+    deviceGeneration: String? = nil,
     cancelledThroughRevision: Int,
     platformAlarmIDs: Set<String>,
-    nowEpochMs: Int64
+    nowEpochMs: Int64,
+    daemonAction: DangguiAlarmCancellationDaemonAction = .cancel,
+    stopPlatformAlarmID: String? = nil,
+    completionEvent: DangguiAlarmEvent? = nil,
+    terminalState: String = "cancelled"
   ) {
     cancellationID = UUID().uuidString
     self.reminderID = reminderID
+    self.deviceGeneration = deviceGeneration
     self.cancelledThroughRevision = cancelledThroughRevision
     self.platformAlarmIDs = platformAlarmIDs.map { $0.lowercased() }.sorted()
     phase = .pending
     updatedAtEpochMs = nowEpochMs
+    self.daemonAction = daemonAction
+    self.stopPlatformAlarmID = stopPlatformAlarmID?.lowercased()
+    self.completionEvent = completionEvent
+    self.terminalState = terminalState
   }
 
   mutating func advance(
@@ -945,6 +1219,181 @@ enum DangguiAlarmScheduleDecision: Equatable {
   case revisionConflict
 }
 
+enum DangguiAlarmGeneration {
+  static func normalized(_ value: String) -> String? {
+    guard let parsed = UUID(uuidString: value) else { return nil }
+    let normalized = parsed.uuidString.lowercased()
+    let characters = Array(normalized)
+    guard characters.count == 36,
+          "12345678".contains(characters[14]),
+          "89ab".contains(characters[19]) else {
+      return nil
+    }
+    return normalized
+  }
+
+  static func isValid(_ value: String?) -> Bool {
+    guard let value else { return true }
+    guard let normalized = normalized(value) else { return false }
+    // Persisted authoritative images are canonical lowercase UUIDs. Method
+    // channel input is normalized before storage, so accepting a different
+    // spelling here would only broaden the corruption/forgery surface.
+    return normalized == value
+  }
+
+  static func matches(_ lhs: String?, _ rhs: String?) -> Bool {
+    switch (lhs, rhs) {
+    case (nil, nil):
+      return true
+    case let (lhs?, rhs?):
+      return lhs.caseInsensitiveCompare(rhs) == .orderedSame
+    default:
+      return false
+    }
+  }
+
+  static func scopedReminderKey(
+    reminderID: String,
+    deviceGeneration: String?
+  ) -> String {
+    "\(reminderID)\u{1f}\(deviceGeneration?.lowercased() ?? "<legacy>")"
+  }
+}
+
+struct DangguiAlarmActiveGenerationState: Codable, Equatable, Sendable {
+  let deviceGeneration: String?
+  let updatedAtEpochMs: Int64
+}
+
+/// Computes only native route identifiers. Generation activation is never a
+/// business cancellation and therefore deliberately creates no high-water
+/// tombstone or terminal event.
+enum DangguiAlarmGenerationActivationPolicy {
+  static func inactivePlatformAlarmIDs(
+    records: [DangguiAlarmRecord],
+    transactions: [DangguiAlarmTransaction],
+    cancellations: [DangguiAlarmCancellation],
+    activeDeviceGeneration: String?
+  ) -> Set<String> {
+    var inactiveIDs = Set<String>()
+    var activeIDs = Set<String>()
+    for record in records where !DangguiAlarmGeneration.matches(
+      record.deviceGeneration,
+      activeDeviceGeneration
+    ) {
+      inactiveIDs.insert(record.platformAlarmID.lowercased())
+    }
+    activeIDs.formUnion(
+      records.lazy.filter {
+        DangguiAlarmGeneration.matches(
+          $0.deviceGeneration,
+          activeDeviceGeneration
+        )
+      }.map { $0.platformAlarmID.lowercased() }
+    )
+    for transaction in transactions {
+      if !DangguiAlarmGeneration.matches(
+        transaction.replacement.deviceGeneration,
+        activeDeviceGeneration
+      ) {
+        inactiveIDs.insert(transaction.replacement.platformAlarmID.lowercased())
+        if transaction.previousRecord == nil,
+           let previousPlatformAlarmID = transaction.previousPlatformAlarmID {
+          // Semantic validation only permits an image-less predecessor for a
+          // same-generation legacy transaction.
+          inactiveIDs.insert(previousPlatformAlarmID.lowercased())
+        }
+      }
+      if let previousRecord = transaction.previousRecord,
+         !DangguiAlarmGeneration.matches(
+           previousRecord.deviceGeneration,
+           activeDeviceGeneration
+         ) {
+        inactiveIDs.insert(previousRecord.platformAlarmID.lowercased())
+      }
+      if DangguiAlarmGeneration.matches(
+        transaction.replacement.deviceGeneration,
+        activeDeviceGeneration
+      ) {
+        activeIDs.insert(transaction.replacement.platformAlarmID.lowercased())
+        if transaction.previousRecord == nil,
+           let previousPlatformAlarmID = transaction.previousPlatformAlarmID {
+          activeIDs.insert(previousPlatformAlarmID.lowercased())
+        }
+      }
+      if let previousRecord = transaction.previousRecord,
+         DangguiAlarmGeneration.matches(
+           previousRecord.deviceGeneration,
+           activeDeviceGeneration
+         ) {
+        activeIDs.insert(previousRecord.platformAlarmID.lowercased())
+      }
+    }
+    for cancellation in cancellations where !DangguiAlarmGeneration.matches(
+      cancellation.deviceGeneration,
+      activeDeviceGeneration
+    ) {
+      inactiveIDs.formUnion(cancellation.platformAlarmIDs.map { $0.lowercased() })
+    }
+    // Historical business tombstones may intentionally capture predecessor
+    // IDs from more than one generation. A route proven active by the current
+    // mirror/transaction always wins over an older tombstone's coarse list.
+    return inactiveIDs.subtracting(activeIDs)
+  }
+}
+
+/// AlarmManager only exposes alarms owned by this application. Once the
+/// authoritative stores are healthy, any daemon ID not owned by an active
+/// record, replacement transaction, predecessor, or cancellation is an
+/// orphan that could otherwise alert after a database replacement.
+enum DangguiAlarmSystemSnapshotPolicy {
+  static func orphanPlatformAlarmIDs(
+    remotePlatformAlarmIDs: Set<String>,
+    records: [DangguiAlarmRecord],
+    transactions: [DangguiAlarmTransaction],
+    cancellations: [DangguiAlarmCancellation]
+  ) -> Set<String> {
+    var ownedIDs = Set(records.map { $0.platformAlarmID.lowercased() })
+    for transaction in transactions {
+      ownedIDs.insert(transaction.replacement.platformAlarmID.lowercased())
+      if let predecessor = transaction.previousPlatformAlarmID {
+        ownedIDs.insert(predecessor.lowercased())
+      }
+      if let predecessor = transaction.previousRecord {
+        ownedIDs.insert(predecessor.platformAlarmID.lowercased())
+      }
+    }
+    for cancellation in cancellations {
+      ownedIDs.formUnion(cancellation.platformAlarmIDs.map { $0.lowercased() })
+    }
+    return Set(remotePlatformAlarmIDs.map { $0.lowercased() })
+      .subtracting(ownedIDs)
+  }
+}
+
+/// Immutable identity carried by every stop/snooze action. The platform alarm
+/// ID is a deterministic session token for one database generation and
+/// reminder revision, so delayed actions cannot mutate a later edit or a
+/// replacement-restored database.
+struct DangguiAlarmActionIdentity: Equatable, Sendable {
+  let reminderID: String
+  let scheduleRevision: Int
+  let platformAlarmID: String
+
+  var isInternallyConsistent: Bool {
+    !reminderID.isEmpty
+      && scheduleRevision > 0
+      && UUID(uuidString: platformAlarmID) != nil
+  }
+
+  func matches(_ record: DangguiAlarmRecord) -> Bool {
+    isInternallyConsistent
+      && record.reminderID == reminderID
+      && record.scheduleRevision == scheduleRevision
+      && record.platformAlarmID.caseInsensitiveCompare(platformAlarmID) == .orderedSame
+  }
+}
+
 /// Pure compare-and-swap rules shared by method-channel and AppIntent paths.
 enum DangguiAlarmMutationPolicy {
   static func scheduleDecision(
@@ -953,19 +1402,49 @@ enum DangguiAlarmMutationPolicy {
     transactions: [DangguiAlarmTransaction],
     cancellation: DangguiAlarmCancellation?
   ) -> DangguiAlarmScheduleDecision {
-    let related = transactions.filter { $0.reminderID == requested.reminderID }
-    let knownRecords = ([current].compactMap { $0 } + related.map(\.replacement))
+    let related = transactions.filter {
+      $0.reminderID == requested.reminderID
+        && DangguiAlarmGeneration.matches(
+          $0.replacement.deviceGeneration,
+          requested.deviceGeneration
+        )
+    }
+    let scopedCurrent = current.flatMap {
+      DangguiAlarmGeneration.matches(
+        $0.deviceGeneration,
+        requested.deviceGeneration
+      ) ? $0 : nil
+    }
+    let knownRecords = ([scopedCurrent].compactMap { $0 }
+      + related.map(\.replacement))
       .filter { $0.reminderID == requested.reminderID }
     let highestRecordRevision = knownRecords.map(\.scheduleRevision).max()
     let highestKnownRevision = [
       highestRecordRevision,
-      cancellation?.cancelledThroughRevision,
+      cancellation.flatMap {
+        DangguiAlarmGeneration.matches(
+          $0.deviceGeneration,
+          requested.deviceGeneration
+        ) ? $0.cancelledThroughRevision : nil
+      },
     ].compactMap { $0 }.max()
 
     guard let highestKnownRevision else { return .install }
-    if let cancellation {
+    if let cancellation,
+       DangguiAlarmGeneration.matches(
+         cancellation.deviceGeneration,
+         requested.deviceGeneration
+       ) {
+      let permitsSameRevisionRouteReinstall =
+        DangguiAlarmCancellationPolicy.permitsSameRevisionRouteReinstall(
+          cancellation: cancellation,
+          revision: requested.scheduleRevision,
+          deviceGeneration: requested.deviceGeneration
+        )
       if cancellation.phase != .completed
-        || requested.scheduleRevision <= cancellation.cancelledThroughRevision {
+        || requested.scheduleRevision < cancellation.cancelledThroughRevision
+        || (requested.scheduleRevision == cancellation.cancelledThroughRevision
+          && !permitsSameRevisionRouteReinstall) {
         return .staleRevision
       }
     }
@@ -979,6 +1458,13 @@ enum DangguiAlarmMutationPolicy {
       $0.scheduleRevision == requested.scheduleRevision
     }
     guard !sameRevision.isEmpty else {
+      if DangguiAlarmCancellationPolicy.permitsSameRevisionRouteReinstall(
+        cancellation: cancellation,
+        revision: requested.scheduleRevision,
+        deviceGeneration: requested.deviceGeneration
+      ) {
+        return .install
+      }
       // Equality with a cancellation high-water mark must not resurrect it.
       return .staleRevision
     }
@@ -997,9 +1483,21 @@ enum DangguiAlarmMutationPolicy {
     cancellation: DangguiAlarmCancellation? = nil
   ) -> Bool {
     guard let current, current.reminderID == reminderID else { return false }
-    if let cancellation {
+    if let cancellation,
+       DangguiAlarmGeneration.matches(
+         cancellation.deviceGeneration,
+         current.deviceGeneration
+       ) {
+      let permitsSameRevisionRouteReinstall =
+        DangguiAlarmCancellationPolicy.permitsSameRevisionRouteReinstall(
+          cancellation: cancellation,
+          revision: current.scheduleRevision,
+          deviceGeneration: current.deviceGeneration
+        )
       if cancellation.phase != .completed
-        || current.scheduleRevision <= cancellation.cancelledThroughRevision {
+        || current.scheduleRevision < cancellation.cancelledThroughRevision
+        || (current.scheduleRevision == cancellation.cancelledThroughRevision
+          && !permitsSameRevisionRouteReinstall) {
         return false
       }
     }
@@ -1017,6 +1515,8 @@ enum DangguiAlarmMutationPolicy {
 }
 
 enum DangguiAlarmCancellationPolicy {
+  static let routeRetiredTerminalState = "route-retired"
+
   static func makeTombstone(
     reminderID: String,
     current: DangguiAlarmRecord?,
@@ -1025,24 +1525,255 @@ enum DangguiAlarmCancellationPolicy {
     nowEpochMs: Int64
   ) -> DangguiAlarmCancellation {
     let related = transactions.filter { $0.reminderID == reminderID }
-    var ids = Set(existing?.platformAlarmIDs ?? [])
-    var revisions = [existing?.cancelledThroughRevision, current?.scheduleRevision]
+    let deviceGeneration: String?
+    if let current {
+      deviceGeneration = current.deviceGeneration
+    } else if let latestTransaction = related.max(by: {
+      $0.updatedAtEpochMs < $1.updatedAtEpochMs
+    }) {
+      deviceGeneration = latestTransaction.replacement.deviceGeneration
+    } else {
+      deviceGeneration = existing?.deviceGeneration
+    }
+    let scopedExisting = existing.flatMap {
+      DangguiAlarmGeneration.matches($0.deviceGeneration, deviceGeneration)
+        ? $0 : nil
+    }
+    // The revision fence is generation-scoped, while the captured daemon IDs
+    // intentionally include every known predecessor so an explicit business
+    // cancellation also cleans legacy native remnants.
+    var ids = Set(scopedExisting?.platformAlarmIDs ?? [])
+    var revisions = [scopedExisting?.cancelledThroughRevision, current?.scheduleRevision]
       .compactMap { $0 }
     if let current { ids.insert(current.platformAlarmID.lowercased()) }
     for transaction in related {
       ids.insert(transaction.replacement.platformAlarmID.lowercased())
-      revisions.append(transaction.replacement.scheduleRevision)
+      if DangguiAlarmGeneration.matches(
+        transaction.replacement.deviceGeneration,
+        deviceGeneration
+      ) {
+        revisions.append(transaction.replacement.scheduleRevision)
+      }
       if let previous = transaction.previousPlatformAlarmID {
         ids.insert(previous.lowercased())
       }
       if let previousRecord = transaction.previousRecord {
-        revisions.append(previousRecord.scheduleRevision)
+        if DangguiAlarmGeneration.matches(
+          previousRecord.deviceGeneration,
+          deviceGeneration
+        ) {
+          revisions.append(previousRecord.scheduleRevision)
+        }
         ids.insert(previousRecord.platformAlarmID.lowercased())
       }
     }
     return DangguiAlarmCancellation(
       reminderID: reminderID,
+      deviceGeneration: deviceGeneration,
       cancelledThroughRevision: revisions.max() ?? 0,
+      platformAlarmIDs: ids,
+      nowEpochMs: nowEpochMs
+    )
+  }
+
+  static func makeStopTombstone(
+    record: DangguiAlarmRecord,
+    transactions: [DangguiAlarmTransaction],
+    existing: DangguiAlarmCancellation?,
+    nowEpochMs: Int64
+  ) -> DangguiAlarmCancellation {
+    var tombstone = makeTombstone(
+      reminderID: record.reminderID,
+      current: record,
+      transactions: transactions,
+      existing: existing,
+      nowEpochMs: nowEpochMs
+    )
+    tombstone.daemonAction = .stop
+    tombstone.stopPlatformAlarmID = record.platformAlarmID.lowercased()
+    tombstone.terminalState = "stopped"
+    tombstone.completionEvent = DangguiAlarmEvent(
+      type: .stopped,
+      record: record,
+      occurredAtEpochMs: nowEpochMs,
+      usesStableID: true
+    )
+    return tombstone
+  }
+
+  static func makeRouteRetirementTombstone(
+    record: DangguiAlarmRecord,
+    currentMirror: DangguiAlarmRecord? = nil,
+    transactions: [DangguiAlarmTransaction],
+    existing: DangguiAlarmCancellation?,
+    nowEpochMs: Int64
+  ) -> DangguiAlarmCancellation {
+    var tombstone = makeRevisionScopedTerminalTombstone(
+      record: record,
+      currentMirror: currentMirror,
+      transactions: transactions,
+      existing: existing,
+      nowEpochMs: nowEpochMs
+    )
+    tombstone.daemonAction = .cancel
+    tombstone.stopPlatformAlarmID = nil
+    tombstone.completionEvent = nil
+    tombstone.terminalState = routeRetiredTerminalState
+    return tombstone
+  }
+
+  static func permitsSameRevisionRouteReinstall(
+    cancellation: DangguiAlarmCancellation?,
+    revision: Int,
+    deviceGeneration: String?
+  ) -> Bool {
+    guard let cancellation else { return false }
+    return cancellation.phase == .completed
+      && cancellation.terminalState == routeRetiredTerminalState
+      && cancellation.cancelledThroughRevision == revision
+      && DangguiAlarmGeneration.matches(
+        cancellation.deviceGeneration,
+        deviceGeneration
+      )
+  }
+
+  /// Once a pending replacement transaction durably owns the exact route,
+  /// the completed route-only tombstone can be released before AlarmKit is
+  /// touched. This ordering closes the crash window where recovery would
+  /// otherwise cancel the newly installed deterministic ID before the
+  /// transaction had a chance to remove the old route marker.
+  static func transactionOwnsSameRevisionRouteReinstall(
+    transaction: DangguiAlarmTransaction,
+    cancellation: DangguiAlarmCancellation?
+  ) -> Bool {
+    let replacement = transaction.replacement
+    guard transaction.reminderID == replacement.reminderID,
+          permitsSameRevisionRouteReinstall(
+            cancellation: cancellation,
+            revision: replacement.scheduleRevision,
+            deviceGeneration: replacement.deviceGeneration
+          ),
+          let cancellation else {
+      return false
+    }
+    return cancellation.reminderID == transaction.reminderID
+      && cancellation.platformAlarmIDs.contains {
+        $0.caseInsensitiveCompare(replacement.platformAlarmID) == .orderedSame
+      }
+  }
+
+  static func makeMissedTombstone(
+    record: DangguiAlarmRecord,
+    currentMirror: DangguiAlarmRecord? = nil,
+    transactions: [DangguiAlarmTransaction],
+    existing: DangguiAlarmCancellation?,
+    nowEpochMs: Int64
+  ) -> DangguiAlarmCancellation {
+    if let existing,
+       DangguiAlarmGeneration.matches(
+         existing.deviceGeneration,
+         record.deviceGeneration
+       ),
+       existing.cancelledThroughRevision > record.scheduleRevision {
+      return existing
+    }
+    var tombstone = makeRevisionScopedTerminalTombstone(
+      record: record,
+      currentMirror: currentMirror,
+      transactions: transactions,
+      existing: existing,
+      nowEpochMs: nowEpochMs
+    )
+    var missed = record
+    missed.lastState = DangguiAlarmFailureMapper.state(for: .expired)
+    tombstone.terminalState = "missed"
+    tombstone.completionEvent = DangguiAlarmEvent(
+      type: .missed,
+      record: missed,
+      state: missed.lastState,
+      delayedByMs: max(0, nowEpochMs - missed.triggerAtEpochMs),
+      occurredAtEpochMs: nowEpochMs,
+      usesStableID: true
+    )
+    return tombstone
+  }
+
+  static func makeObservedRetirementTombstone(
+    record: DangguiAlarmRecord,
+    currentMirror: DangguiAlarmRecord? = nil,
+    transactions: [DangguiAlarmTransaction],
+    existing: DangguiAlarmCancellation?,
+    nowEpochMs: Int64
+  ) -> DangguiAlarmCancellation {
+    if let existing,
+       DangguiAlarmGeneration.matches(
+         existing.deviceGeneration,
+         record.deviceGeneration
+       ),
+       existing.cancelledThroughRevision > record.scheduleRevision {
+      return existing
+    }
+    var tombstone = makeRevisionScopedTerminalTombstone(
+      record: record,
+      currentMirror: currentMirror,
+      transactions: transactions,
+      existing: existing,
+      nowEpochMs: nowEpochMs
+    )
+    tombstone.terminalState = "delivered-retired"
+    tombstone.completionEvent = nil
+    return tombstone
+  }
+
+  private static func makeRevisionScopedTerminalTombstone(
+    record: DangguiAlarmRecord,
+    currentMirror: DangguiAlarmRecord?,
+    transactions: [DangguiAlarmTransaction],
+    existing: DangguiAlarmCancellation?,
+    nowEpochMs: Int64
+  ) -> DangguiAlarmCancellation {
+    let related = transactions.filter {
+      $0.reminderID == record.reminderID
+        && DangguiAlarmGeneration.matches(
+          $0.replacement.deviceGeneration,
+          record.deviceGeneration
+        )
+        && $0.replacement.scheduleRevision <= record.scheduleRevision
+    }
+    let scopedExisting = existing.flatMap {
+      DangguiAlarmGeneration.matches(
+        $0.deviceGeneration,
+        record.deviceGeneration
+      ) ? $0 : nil
+    }
+    var ids = Set(scopedExisting?.platformAlarmIDs ?? [])
+    ids.insert(record.platformAlarmID.lowercased())
+    if let currentMirror,
+       currentMirror.reminderID == record.reminderID,
+       DangguiAlarmGeneration.matches(
+         currentMirror.deviceGeneration,
+         record.deviceGeneration
+       ),
+       currentMirror.scheduleRevision <= record.scheduleRevision {
+      ids.insert(currentMirror.platformAlarmID.lowercased())
+    }
+    for transaction in related {
+      ids.insert(transaction.replacement.platformAlarmID.lowercased())
+      if let previous = transaction.previousPlatformAlarmID {
+        ids.insert(previous.lowercased())
+      }
+      if let previousRecord = transaction.previousRecord,
+         previousRecord.scheduleRevision <= record.scheduleRevision {
+        ids.insert(previousRecord.platformAlarmID.lowercased())
+      }
+    }
+    return DangguiAlarmCancellation(
+      reminderID: record.reminderID,
+      deviceGeneration: record.deviceGeneration,
+      cancelledThroughRevision: max(
+        record.scheduleRevision,
+        scopedExisting?.cancelledThroughRevision ?? 0
+      ),
       platformAlarmIDs: ids,
       nowEpochMs: nowEpochMs
     )
@@ -1064,10 +1795,23 @@ enum DangguiAlarmCancellationPolicy {
   ) -> Bool {
     let related = cancellations.filter {
       $0.reminderID == record.reminderID
+        && DangguiAlarmGeneration.matches(
+          $0.deviceGeneration,
+          record.deviceGeneration
+        )
     }
     guard !related.isEmpty else { return true }
     if related.contains(where: { $0.phase != .completed }) { return false }
     let highWater = related.map(\.cancelledThroughRevision).max() ?? 0
+    if let sameRevisionRouteRetirement = related.first(where: {
+      permitsSameRevisionRouteReinstall(
+        cancellation: $0,
+        revision: record.scheduleRevision,
+        deviceGeneration: record.deviceGeneration
+      )
+    }), sameRevisionRouteRetirement.cancelledThroughRevision == highWater {
+      return record.scheduleRevision >= highWater
+    }
     return record.scheduleRevision > highWater
   }
 
@@ -1075,11 +1819,25 @@ enum DangguiAlarmCancellationPolicy {
     record: DangguiAlarmRecord,
     cancellations: [DangguiAlarmCancellation]
   ) -> Bool {
-    let completedHighWater = cancellations
-      .filter { $0.reminderID == record.reminderID && $0.phase == .completed }
-      .map(\.cancelledThroughRevision)
-      .max()
-    guard let completedHighWater else { return false }
+    let completed = cancellations.filter {
+      $0.reminderID == record.reminderID
+        && DangguiAlarmGeneration.matches(
+          $0.deviceGeneration,
+          record.deviceGeneration
+        )
+        && $0.phase == .completed
+    }
+    guard let completedHighWater = completed.map(\.cancelledThroughRevision).max()
+    else { return false }
+    if completed.contains(where: {
+      permitsSameRevisionRouteReinstall(
+        cancellation: $0,
+        revision: record.scheduleRevision,
+        deviceGeneration: record.deviceGeneration
+      )
+    }), record.scheduleRevision == completedHighWater {
+      return false
+    }
     return record.scheduleRevision <= completedHighWater
   }
 }
@@ -1090,6 +1848,21 @@ struct DangguiAlarmSnoozePlan: Equatable {
 }
 
 enum DangguiAlarmSnoozePolicy {
+  static func hasUnresolvedTransaction(
+    reminderID: String,
+    deviceGeneration: String? = nil,
+    transactions: [DangguiAlarmTransaction]
+  ) -> Bool {
+    transactions.contains {
+      $0.reminderID == reminderID
+        && DangguiAlarmGeneration.matches(
+          $0.replacement.deviceGeneration,
+          deviceGeneration
+        )
+        && !($0.ownsMissingRecovery == true && $0.phase == .retired)
+    }
+  }
+
   static func makePlan(
     record: DangguiAlarmRecord,
     minutes: Int,
@@ -1100,7 +1873,8 @@ enum DangguiAlarmSnoozePolicy {
     replacement.scheduleRevision += 1
     replacement.platformAlarmID = DangguiAlarmIdentifier.platformID(
       for: replacement.reminderID,
-      revision: replacement.scheduleRevision
+      revision: replacement.scheduleRevision,
+      deviceGeneration: replacement.deviceGeneration
     )
     replacement.triggerAtEpochMs = successorTriggerAtEpochMs
     replacement.lastState = "pending"
@@ -1110,7 +1884,8 @@ enum DangguiAlarmSnoozePolicy {
       record: record,
       snoozeMinutes: minutes,
       occurredAtEpochMs: occurredAtEpochMs,
-      successorTriggerAtEpochMs: successorTriggerAtEpochMs
+      successorTriggerAtEpochMs: successorTriggerAtEpochMs,
+      usesStableID: true
     )
     return DangguiAlarmSnoozePlan(replacement: replacement, completionEvent: event)
   }
@@ -1120,6 +1895,13 @@ enum DangguiAlarmSnoozePolicy {
   ) -> Bool {
     transaction.stopPreviousWhenConfirmed == true && transaction.phase == .confirmed
   }
+}
+
+enum DangguiMissingAlarmDecision: Equatable {
+  case recoverScheduled
+  case recoverLate
+  case retireObserved
+  case missed
 }
 
 enum DangguiAlarmRecoveryPolicy {
@@ -1133,6 +1915,66 @@ enum DangguiAlarmRecoveryPolicy {
     let requested = Date(timeIntervalSince1970: TimeInterval(triggerAtEpochMs) / 1_000)
     return max(requested, now.addingTimeInterval(1))
   }
+
+  static func missingAlarmDecision(
+    triggerAtEpochMs: Int64,
+    nowEpochMs: Int64,
+    observedDelivered: Bool = false
+  ) -> DangguiMissingAlarmDecision {
+    if observedDelivered { return .retireObserved }
+    if triggerAtEpochMs > nowEpochMs { return .recoverScheduled }
+    return isExpired(triggerAtEpochMs: triggerAtEpochMs, nowEpochMs: nowEpochMs)
+      ? .missed
+      : .recoverLate
+  }
+
+  static func shouldRetryMissingTransaction(
+    ownsMissingRecovery: Bool,
+    triggerAtEpochMs: Int64,
+    nowEpochMs: Int64
+  ) -> Bool {
+    !ownsMissingRecovery || triggerAtEpochMs > nowEpochMs
+  }
+
+  static func shouldPersistRecoveryFailure(
+    transactionID: String,
+    transactions: [DangguiAlarmTransaction]
+  ) -> Bool {
+    transactions.contains { $0.transactionID == transactionID }
+  }
+}
+
+enum DangguiAlarmDeliveryRecorder {
+  static func recordDeliveredIfNeeded(
+    _ record: inout DangguiAlarmRecord,
+    delayedByMs: Int64? = nil
+  ) throws {
+    guard !record.firedEventRecorded else { return }
+    // `delivered` changes durable Dart state, so it must never use the
+    // best-effort diagnostic append path. Its stable ID makes the business
+    // write safe to retry; the separate systemAlert diagnostic cannot block
+    // the durable fired marker.
+    try DangguiAlarmStore.appendEventDurably(
+      DangguiAlarmEvent(
+        type: .delivered,
+        record: record,
+        state: "ringing",
+        delayedByMs: delayedByMs,
+        usesStableID: true
+      )
+    )
+    DangguiAlarmStore.appendEvent(
+      DangguiAlarmEvent(
+        type: .systemAlert,
+        record: record,
+        state: "ringing",
+        delayedByMs: delayedByMs,
+        usesStableID: true
+      )
+    )
+    record.firedEventRecorded = true
+    try DangguiAlarmStore.upsert(record)
+  }
 }
 
 enum DangguiAlarmBridgeError: LocalizedError {
@@ -1140,10 +1982,15 @@ enum DangguiAlarmBridgeError: LocalizedError {
   case missingReminderID
   case missingTriggerDate
   case invalidTriggerDate
+  case invalidScheduleRevision
+  case invalidDeviceGeneration
+  case inactiveDeviceGeneration
   case alarmNotFound
   case invalidPlatformAlarmID
   case invalidTransactionTransition
   case invalidCancellationTransition
+  case authoritativeStoreCorrupt
+  case businessEventCapacityExceeded
 
   var errorDescription: String? {
     switch self {
@@ -1155,6 +2002,12 @@ enum DangguiAlarmBridgeError: LocalizedError {
       return "A triggerAtEpochMs value is required."
     case .invalidTriggerDate:
       return "The alarm trigger must be a positive epoch timestamp."
+    case .invalidScheduleRevision:
+      return "A positive alarm schedule revision is required."
+    case .invalidDeviceGeneration:
+      return "deviceGeneration must be a UUID when present."
+    case .inactiveDeviceGeneration:
+      return "The alarm belongs to a database generation that is not active."
     case .alarmNotFound:
       return "The requested alarm is not scheduled."
     case .invalidPlatformAlarmID:
@@ -1163,6 +2016,10 @@ enum DangguiAlarmBridgeError: LocalizedError {
       return "The persisted alarm transaction has an invalid state transition."
     case .invalidCancellationTransition:
       return "The persisted alarm cancellation has an invalid state transition."
+    case .authoritativeStoreCorrupt:
+      return "Persisted alarm state is corrupt and has no complete last-known-good image."
+    case .businessEventCapacityExceeded:
+      return "Unacknowledged alarm actions must be synchronized before more can be recorded."
     }
   }
 }
@@ -1180,6 +2037,7 @@ enum DangguiAlarmOperationError: LocalizedError {
   case verificationFailed
   case staleRevision
   case revisionConflict
+  case operationInProgress
 
   var errorDescription: String? {
     switch self {
@@ -1193,6 +2051,8 @@ enum DangguiAlarmOperationError: LocalizedError {
       return "The requested alarm revision is older than durable native state."
     case .revisionConflict:
       return "The requested alarm revision conflicts with different immutable content."
+    case .operationInProgress:
+      return "A durable alarm replacement is still unresolved; retry after recovery completes."
     }
   }
 }
@@ -1216,6 +2076,30 @@ enum DangguiAlarmFailureMapper {
     fallbackCode: String
   ) -> (code: String, message: String, details: Any?) {
     let message = error.localizedDescription
+    if let bridgeError = error as? DangguiAlarmBridgeError {
+      switch bridgeError {
+      case .authoritativeStoreCorrupt:
+        return (
+          "authoritative_store_corrupt",
+          message,
+          ["state": "repair-pending"]
+        )
+      case .businessEventCapacityExceeded:
+        return (
+          "business_event_backpressure",
+          message,
+          ["state": "sync-required"]
+        )
+      case .inactiveDeviceGeneration:
+        return (
+          "inactive_device_generation",
+          message,
+          ["state": "stale-generation"]
+        )
+      default:
+        return (fallbackCode, message, nil)
+      }
+    }
     guard let operationError = error as? DangguiAlarmOperationError else {
       return (fallbackCode, message, nil)
     }
@@ -1242,6 +2126,8 @@ enum DangguiAlarmFailureMapper {
       return ("stale_revision", message, ["state": "stale-revision"])
     case .revisionConflict:
       return ("revision_conflict", message, ["state": "revision-conflict"])
+    case .operationInProgress:
+      return ("operation_in_progress", message, ["state": "repair-pending"])
     }
   }
 }
@@ -1254,16 +2140,94 @@ private struct DangguiLossyValue<Value: Decodable>: Decodable {
   }
 }
 
+private struct DangguiLossyArray<Value> {
+  let values: [Value]
+  let isComplete: Bool
+}
+
 enum DangguiAlarmStore {
   private static let lock = NSLock()
   private static let legacyRecordsKey = "danggui.nativeAlarms.records.v1"
   private static let legacyEventsKey = "danggui.nativeAlarms.events.v1"
   private static let recordsFilename = "native-alarms-v2.json"
-  private static let eventsFilename = "alarm-events-v2.json"
+  /// v1.1.4 stored business actions and lossy diagnostics together here.
+  /// It remains a strict, read-only migration source once v1.1.5 creates the
+  /// separated stores below.
+  private static let legacyMixedEventsFilename = "alarm-events-v2.json"
+  private static let businessEventsFilename = "alarm-business-events-v1.json"
+  private static let diagnosticEventsFilename = "alarm-diagnostics-v1.json"
   private static let transactionsFilename = "alarm-transactions-v1.json"
   private static let cancellationsFilename = "alarm-cancellations-v1.json"
-  private static let maximumEvents = 200
+  private static let activeGenerationFilename = "alarm-active-generation-v1.json"
+  private static let maximumDiagnosticEvents = 200
+  /// This is a back-pressure threshold, never an eviction threshold. Stable
+  /// IDs deduplicate retries, and a full unacknowledged business queue causes
+  /// the owning tombstone/transaction to remain retryable instead of silently
+  /// dropping a Stop, Snooze, Missed, or Delivered transition.
+  private static let maximumBusinessEvents = 4_096
   private static var baseDirectoryOverride: URL?
+
+  static func assertAuthoritativeStoresHealthy() throws {
+    try withLock { try assertAuthoritativeStoresHealthyUnlocked() }
+  }
+
+  /// Missing state is the v1.1.4 legacy generation. Once a replacement
+  /// generation is activated, the one-element authoritative image makes that
+  /// decision durable before any obsolete daemon route is retired.
+  static func activeDeviceGeneration() throws -> String? {
+    try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
+      return loadActiveGenerationUnlocked()
+    }
+  }
+
+  static func activeGenerationMatches(_ deviceGeneration: String?) throws -> Bool {
+    try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
+      return DangguiAlarmGeneration.matches(
+        loadActiveGenerationUnlocked(),
+        deviceGeneration
+      )
+    }
+  }
+
+  static func activateDeviceGeneration(_ deviceGeneration: String?) throws {
+    try withLock {
+      guard DangguiAlarmGeneration.isValid(deviceGeneration) else {
+        throw DangguiAlarmBridgeError.invalidDeviceGeneration
+      }
+      try assertAuthoritativeStoresHealthyUnlocked()
+      if DangguiAlarmGeneration.matches(
+        loadActiveGenerationUnlocked(),
+        deviceGeneration
+      ), authoritativeFileImageExistsUnlocked(
+        filename: activeGenerationFilename
+      ) {
+        return
+      }
+      let state = DangguiAlarmActiveGenerationState(
+        deviceGeneration: deviceGeneration,
+        updatedAtEpochMs: Int64(Date().timeIntervalSince1970 * 1_000)
+      )
+      try saveArrayUnlocked(
+        [state],
+        filename: activeGenerationFilename,
+        authoritative: false
+      )
+    }
+  }
+
+  static func inactiveRoutePlatformAlarmIDs() throws -> Set<String> {
+    try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
+      return DangguiAlarmGenerationActivationPolicy.inactivePlatformAlarmIDs(
+        records: loadRecordsUnlocked(),
+        transactions: loadTransactionsUnlocked(),
+        cancellations: loadCancellationsUnlocked(),
+        activeDeviceGeneration: loadActiveGenerationUnlocked()
+      )
+    }
+  }
 
   static func records() -> [DangguiAlarmRecord] {
     withLock { loadRecordsUnlocked() }
@@ -1283,8 +2247,98 @@ enum DangguiAlarmStore {
     }
   }
 
+  static func authoritativeActionRecord(
+    reminderID: String,
+    scheduleRevision: Int,
+    platformAlarmID: String
+  ) -> DangguiAlarmRecord? {
+    withLock {
+      guard (try? assertAuthoritativeStoresHealthyUnlocked()) != nil else {
+        return nil
+      }
+      let current = loadRecordsUnlocked().first { $0.reminderID == reminderID }
+      let transactions = loadTransactionsUnlocked().filter {
+        $0.reminderID == reminderID
+      }
+      let candidates = ([current].compactMap { $0 } + transactions.map(\.replacement))
+      guard let candidate = candidates.first(where: {
+              $0.scheduleRevision == scheduleRevision
+                && $0.platformAlarmID.caseInsensitiveCompare(platformAlarmID) == .orderedSame
+            }) else {
+        return nil
+      }
+      guard DangguiAlarmGeneration.matches(
+        candidate.deviceGeneration,
+        loadActiveGenerationUnlocked()
+      ) else {
+        return nil
+      }
+      let generationCandidates = candidates.filter {
+        DangguiAlarmGeneration.matches(
+          $0.deviceGeneration,
+          candidate.deviceGeneration
+        )
+      }
+      guard let highestRevision = generationCandidates.map(\.scheduleRevision).max(),
+            highestRevision == scheduleRevision,
+            current.map({ currentRecord in
+              DangguiAlarmGeneration.matches(
+                currentRecord.deviceGeneration,
+                candidate.deviceGeneration
+              ) || transactions.contains(where: { transaction in
+                transaction.replacement.platformAlarmID.caseInsensitiveCompare(
+                  candidate.platformAlarmID
+                ) == .orderedSame
+                  && transaction.previousPlatformAlarmID?.caseInsensitiveCompare(
+                    currentRecord.platformAlarmID
+                  ) == .orderedSame
+              })
+            }) ?? true else {
+        return nil
+      }
+      let isSupersededByCrossGenerationHandoff = transactions.contains {
+        !DangguiAlarmGeneration.matches(
+          $0.replacement.deviceGeneration,
+          candidate.deviceGeneration
+        )
+          && $0.previousPlatformAlarmID?.caseInsensitiveCompare(
+            candidate.platformAlarmID
+          ) == .orderedSame
+      }
+      guard !isSupersededByCrossGenerationHandoff else { return nil }
+      guard DangguiAlarmActionIdentity(
+        reminderID: reminderID,
+        scheduleRevision: scheduleRevision,
+        platformAlarmID: platformAlarmID
+      ).matches(candidate) else {
+        return nil
+      }
+      if let cancellation = loadCancellationsUnlocked().first(where: {
+        $0.reminderID == reminderID
+          && DangguiAlarmGeneration.matches(
+            $0.deviceGeneration,
+            candidate.deviceGeneration
+          )
+      }) {
+        let permitsSameRevisionRouteReinstall =
+          DangguiAlarmCancellationPolicy.permitsSameRevisionRouteReinstall(
+            cancellation: cancellation,
+            revision: scheduleRevision,
+            deviceGeneration: candidate.deviceGeneration
+          )
+        guard cancellation.phase == .completed,
+              scheduleRevision > cancellation.cancelledThroughRevision
+                || permitsSameRevisionRouteReinstall else {
+          return nil
+        }
+      }
+      return candidate
+    }
+  }
+
   static func upsert(_ record: DangguiAlarmRecord) throws {
     try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
       var records = loadRecordsUnlocked()
       records.removeAll { $0.reminderID == record.reminderID }
       records.append(record)
@@ -1295,8 +2349,32 @@ enum DangguiAlarmStore {
   @discardableResult
   static func remove(reminderID: String) throws -> DangguiAlarmRecord? {
     try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
       var records = loadRecordsUnlocked()
       guard let index = records.firstIndex(where: { $0.reminderID == reminderID }) else {
+        return nil
+      }
+      let removed = records.remove(at: index)
+      try saveRecordsUnlocked(records)
+      return removed
+    }
+  }
+
+  @discardableResult
+  static func remove(
+    reminderID: String,
+    deviceGeneration: String?
+  ) throws -> DangguiAlarmRecord? {
+    try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
+      var records = loadRecordsUnlocked()
+      guard let index = records.firstIndex(where: {
+        $0.reminderID == reminderID
+          && DangguiAlarmGeneration.matches(
+            $0.deviceGeneration,
+            deviceGeneration
+          )
+      }) else {
         return nil
       }
       let removed = records.remove(at: index)
@@ -1311,6 +2389,7 @@ enum DangguiAlarmStore {
 
   static func upsertTransaction(_ transaction: DangguiAlarmTransaction) throws {
     try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
       var transactions = loadTransactionsUnlocked()
       transactions.removeAll { $0.transactionID == transaction.transactionID }
       transactions.append(transaction)
@@ -1318,8 +2397,29 @@ enum DangguiAlarmStore {
     }
   }
 
+  static func replaceTransactionsAtomically(
+    reminderID: String,
+    removingTransactionIDs: Set<String>,
+    adding transaction: DangguiAlarmTransaction
+  ) throws {
+    try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
+      var transactions = loadTransactionsUnlocked()
+      transactions.removeAll {
+        $0.reminderID == reminderID
+          && removingTransactionIDs.contains($0.transactionID)
+      }
+      transactions.removeAll { $0.transactionID == transaction.transactionID }
+      transactions.append(transaction)
+      // One atomic authoritative file replacement means a crash observes
+      // either every predecessor owner or the complete successor transaction.
+      try saveTransactionsUnlocked(transactions)
+    }
+  }
+
   static func removeTransaction(transactionID: String) throws {
     try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
       let remaining = loadTransactionsUnlocked().filter {
         $0.transactionID != transactionID
       }
@@ -1329,10 +2429,53 @@ enum DangguiAlarmStore {
 
   static func removeTransactions(reminderID: String) throws {
     try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
       let remaining = loadTransactionsUnlocked().filter {
         $0.reminderID != reminderID
       }
       try saveTransactionsUnlocked(remaining)
+    }
+  }
+
+  static func removeTransactions(
+    reminderID: String,
+    deviceGeneration: String?
+  ) throws {
+    try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
+      let remaining = loadTransactionsUnlocked().filter {
+        $0.reminderID != reminderID
+          || !DangguiAlarmGeneration.matches(
+            $0.replacement.deviceGeneration,
+            deviceGeneration
+          )
+      }
+      try saveTransactionsUnlocked(remaining)
+    }
+  }
+
+  static func removeRecordsAndTransactions(
+    reminderID: String,
+    platformAlarmIDs: Set<String>
+  ) throws {
+    try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
+      let normalizedIDs = Set(platformAlarmIDs.map { $0.lowercased() })
+      var records = loadRecordsUnlocked()
+      records.removeAll {
+        $0.reminderID == reminderID
+          && normalizedIDs.contains($0.platformAlarmID.lowercased())
+      }
+      var transactions = loadTransactionsUnlocked()
+      transactions.removeAll {
+        $0.reminderID == reminderID
+          && normalizedIDs.contains($0.replacement.platformAlarmID.lowercased())
+      }
+      // Both files remain individually atomic. The durable cancellation
+      // tombstone is written first and remains authoritative across a crash
+      // between these two derived-state updates.
+      try saveRecordsUnlocked(records)
+      try saveTransactionsUnlocked(transactions)
     }
   }
 
@@ -1342,16 +2485,57 @@ enum DangguiAlarmStore {
 
   static func cancellation(reminderID: String) -> DangguiAlarmCancellation? {
     withLock {
-      loadCancellationsUnlocked().first { $0.reminderID == reminderID }
+      loadCancellationsUnlocked()
+        .filter { $0.reminderID == reminderID }
+        .max { $0.updatedAtEpochMs < $1.updatedAtEpochMs }
+    }
+  }
+
+  static func cancellation(
+    reminderID: String,
+    deviceGeneration: String?
+  ) -> DangguiAlarmCancellation? {
+    withLock {
+      loadCancellationsUnlocked().first {
+        $0.reminderID == reminderID
+          && DangguiAlarmGeneration.matches(
+            $0.deviceGeneration,
+            deviceGeneration
+          )
+      }
     }
   }
 
   static func upsertCancellation(_ cancellation: DangguiAlarmCancellation) throws {
     try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
       var cancellations = loadCancellationsUnlocked()
-      cancellations.removeAll { $0.reminderID == cancellation.reminderID }
+      cancellations.removeAll {
+        $0.reminderID == cancellation.reminderID
+          && DangguiAlarmGeneration.matches(
+            $0.deviceGeneration,
+            cancellation.deviceGeneration
+          )
+      }
       cancellations.append(cancellation)
       try saveCancellationsUnlocked(cancellations)
+    }
+  }
+
+  static func removeCancellation(
+    reminderID: String,
+    deviceGeneration: String? = nil
+  ) throws {
+    try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
+      let remaining = loadCancellationsUnlocked().filter {
+        $0.reminderID != reminderID
+          || !DangguiAlarmGeneration.matches(
+            $0.deviceGeneration,
+            deviceGeneration
+          )
+      }
+      try saveCancellationsUnlocked(remaining)
     }
   }
 
@@ -1359,37 +2543,130 @@ enum DangguiAlarmStore {
     do {
       try appendEventDurably(event)
     } catch {
-      NSLog("Danggui could not persist an alarm diagnostic event: %@", error.localizedDescription)
+      NSLog("Danggui could not persist an alarm diagnostic event.")
     }
   }
 
   static func appendEventDurably(_ event: DangguiAlarmEvent) throws {
     try withLock {
-      var events = loadEventsUnlocked()
-      // Transaction recovery may retry after the event write but before the
-      // transaction removal. Stable event IDs make that retry idempotent.
-      events.removeAll { $0.eventID == event.eventID }
-      events.append(event)
-      if events.count > maximumEvents {
-        events.removeFirst(events.count - maximumEvents)
+      try ensureEventStoresMigratedUnlocked()
+      if event.mutatesBusinessState {
+        // This outbox is authoritative: corruption in its primary image blocks
+        // every mutation even when a complete backup can still be shown for
+        // diagnosis. No terminal transition may be inferred away.
+        try assertAuthoritativeStoresHealthyUnlocked()
+        var events = loadBusinessEventsUnlocked()
+        let alreadyExists = events.contains { $0.eventID == event.eventID }
+        let generationEventCount = events.lazy.filter {
+          DangguiAlarmGeneration.matches(
+            $0.deviceGeneration,
+            event.deviceGeneration
+          )
+        }.count
+        if !alreadyExists, generationEventCount >= maximumBusinessEvents {
+          throw DangguiAlarmBridgeError.businessEventCapacityExceeded
+        }
+        events.removeAll { $0.eventID == event.eventID }
+        events.append(event)
+        try saveBusinessEventsUnlocked(events)
+      } else {
+        var diagnostics = loadDiagnosticEventsUnlocked()
+        diagnostics.removeAll { $0.eventID == event.eventID }
+        diagnostics.append(event)
+        try saveDiagnosticEventsUnlocked(diagnostics)
       }
-      try saveEventsUnlocked(events)
     }
   }
 
   static func events() -> [DangguiAlarmEvent] {
-    withLock { loadEventsUnlocked() }
+    withLock {
+      do {
+        try ensureEventStoresMigratedUnlocked()
+      } catch {
+        // A strict LKG may still be exposed for diagnosis and delivery retry,
+        // but the corrupt primary remains untouched and all writes fail closed.
+      }
+      return loadBusinessEventsUnlocked() + loadDiagnosticEventsUnlocked()
+    }
+  }
+
+  static func activeEvents() -> [DangguiAlarmEvent] {
+    (try? activeEventsDurably()) ?? []
+  }
+
+  static func activeEventsDurably() throws -> [DangguiAlarmEvent] {
+    try withLock {
+      try assertAuthoritativeStoresHealthyUnlocked()
+      try ensureEventStoresMigratedUnlocked()
+      let activeGeneration = loadActiveGenerationUnlocked()
+      return (loadBusinessEventsUnlocked() + loadDiagnosticEventsUnlocked())
+        .filter {
+          DangguiAlarmGeneration.matches(
+            $0.deviceGeneration,
+            activeGeneration
+          )
+        }
+    }
   }
 
   static func acknowledgeEvents(_ eventIDs: Set<String>) {
     guard !eventIDs.isEmpty else { return }
     withLock {
       do {
-        let remaining = loadEventsUnlocked().filter { !eventIDs.contains($0.eventID) }
-        try saveEventsUnlocked(remaining)
+        try ensureEventStoresMigratedUnlocked()
+        try assertAuthoritativeStoresHealthyUnlocked()
+        let remainingBusiness = loadBusinessEventsUnlocked().filter {
+          !eventIDs.contains($0.eventID)
+        }
+        let remainingDiagnostics = loadDiagnosticEventsUnlocked().filter {
+          !eventIDs.contains($0.eventID)
+        }
+        try saveBusinessEventsUnlocked(remainingBusiness)
+        try saveDiagnosticEventsUnlocked(remainingDiagnostics)
       } catch {
-        NSLog("Danggui could not acknowledge alarm events: %@", error.localizedDescription)
+        NSLog("Danggui could not acknowledge alarm events.")
       }
+    }
+  }
+
+  static func acknowledgeActiveEvents(_ eventIDs: Set<String>) {
+    do {
+      try acknowledgeActiveEventsDurably(eventIDs)
+    } catch {
+      NSLog("Danggui could not acknowledge active alarm events.")
+    }
+  }
+
+  static func acknowledgeActiveEventsDurably(
+    _ eventIDs: Set<String>
+  ) throws {
+    guard !eventIDs.isEmpty else { return }
+    try withLock {
+      try ensureEventStoresMigratedUnlocked()
+      try assertAuthoritativeStoresHealthyUnlocked()
+      let activeGeneration = loadActiveGenerationUnlocked()
+      let activeEventIDs = Set(
+        (loadBusinessEventsUnlocked() + loadDiagnosticEventsUnlocked())
+          .filter {
+            DangguiAlarmGeneration.matches(
+              $0.deviceGeneration,
+              activeGeneration
+            )
+          }
+          .map(\.eventID)
+      )
+      let acknowledgedIDs = eventIDs.intersection(activeEventIDs)
+      guard !acknowledgedIDs.isEmpty else { return }
+      try saveBusinessEventsUnlocked(
+        loadBusinessEventsUnlocked().filter {
+          !acknowledgedIDs.contains($0.eventID)
+        }
+      )
+      try saveDiagnosticEventsUnlocked(
+        loadDiagnosticEventsUnlocked().filter {
+          !acknowledgedIDs.contains($0.eventID)
+        }
+      )
     }
   }
 
@@ -1419,16 +2696,61 @@ enum DangguiAlarmStore {
     }
   }
 
+  static func replaceBusinessEventsDataForTesting(_ data: Data) throws {
+    try withLock {
+      let url = try fileURLUnlocked(filename: businessEventsFilename)
+      try data.write(to: url, options: .atomic)
+    }
+  }
+
+  static func replaceLegacyMixedEventsDataForTesting(_ data: Data) throws {
+    try withLock {
+      let url = try fileURLUnlocked(filename: legacyMixedEventsFilename)
+      try data.write(to: url, options: .atomic)
+    }
+  }
+
+  static func replaceActiveGenerationDataForTesting(_ data: Data) throws {
+    try withLock {
+      let url = try fileURLUnlocked(filename: activeGenerationFilename)
+      try data.write(to: url, options: .atomic)
+    }
+  }
+
   private static func withLock<T>(_ body: () throws -> T) rethrows -> T {
     lock.lock()
     defer { lock.unlock() }
     return try body()
   }
 
+  private static func loadActiveGenerationUnlocked() -> String? {
+    guard authoritativeFileImageExistsUnlocked(
+      filename: activeGenerationFilename
+    ) else {
+      return nil
+    }
+    return loadArrayUnlocked(
+      DangguiAlarmActiveGenerationState.self,
+      filename: activeGenerationFilename,
+      allowLossy: false,
+      semanticValidator: activeGenerationStatesAreSemanticallyValid
+    )?.first?.deviceGeneration
+  }
+
+  private static func activeGenerationStatesAreSemanticallyValid(
+    _ states: [DangguiAlarmActiveGenerationState]
+  ) -> Bool {
+    states.count == 1
+      && states[0].updatedAtEpochMs > 0
+      && DangguiAlarmGeneration.isValid(states[0].deviceGeneration)
+  }
+
   private static func loadRecordsUnlocked() -> [DangguiAlarmRecord] {
     if let records = loadArrayUnlocked(
       DangguiAlarmRecord.self,
-      filename: recordsFilename
+      filename: recordsFilename,
+      allowLossy: false,
+      semanticValidator: recordsAreSemanticallyValid
     ) {
       return records
     }
@@ -1438,112 +2760,788 @@ enum DangguiAlarmStore {
     guard let migrated = decodeLossyArray(DangguiAlarmRecord.self, from: legacy) else {
       return []
     }
+    guard migrated.isComplete, recordsAreSemanticallyValid(migrated.values)
+    else { return [] }
     do {
-      try saveRecordsUnlocked(migrated)
+      try saveRecordsUnlocked(migrated.values)
       UserDefaults.standard.removeObject(forKey: legacyRecordsKey)
     } catch {
-      NSLog("Danggui could not migrate the legacy alarm mirror: %@", error.localizedDescription)
+      NSLog("Danggui could not migrate the legacy alarm mirror.")
     }
-    return migrated
+    return migrated.values
   }
 
   private static func saveRecordsUnlocked(_ records: [DangguiAlarmRecord]) throws {
-    try saveArrayUnlocked(records, filename: recordsFilename)
+    guard recordsAreSemanticallyValid(records) else {
+      throw DangguiAlarmBridgeError.authoritativeStoreCorrupt
+    }
+    try saveArrayUnlocked(records, filename: recordsFilename, authoritative: true)
   }
 
-  private static func loadEventsUnlocked() -> [DangguiAlarmEvent] {
+  private static func loadBusinessEventsUnlocked() -> [DangguiAlarmEvent] {
+    if authoritativeFileImageExistsUnlocked(filename: businessEventsFilename) {
+      return loadArrayUnlocked(
+        DangguiAlarmEvent.self,
+        filename: businessEventsFilename,
+        allowLossy: false,
+        semanticValidator: businessEventsAreSemanticallyValid
+      ) ?? []
+    }
+    return strictLegacyMixedEventsForReadingUnlocked()
+      .filter(\.mutatesBusinessState)
+  }
+
+  private static func saveBusinessEventsUnlocked(
+    _ events: [DangguiAlarmEvent]
+  ) throws {
+    guard businessEventsAreSemanticallyValid(events) else {
+      throw DangguiAlarmBridgeError.authoritativeStoreCorrupt
+    }
+    // Callers have already passed the complete authoritative health gate.
+    // Avoid recursively invoking it while the first migration image is being
+    // established; saveArray still provides atomic primary/LKG replacement.
+    try saveArrayUnlocked(
+      events,
+      filename: businessEventsFilename,
+      authoritative: false
+    )
+  }
+
+  private static func loadDiagnosticEventsUnlocked() -> [DangguiAlarmEvent] {
+    if authoritativeFileImageExistsUnlocked(filename: businessEventsFilename) {
+      let diagnostics = loadArrayUnlocked(
+        DangguiAlarmEvent.self,
+        filename: diagnosticEventsFilename,
+        allowLossy: true
+      ) ?? []
+      return normalizedDiagnosticEvents(diagnostics)
+    }
+    return normalizedDiagnosticEvents(
+      strictLegacyMixedEventsForReadingUnlocked().filter {
+        !$0.mutatesBusinessState
+      }
+    )
+  }
+
+  private static func saveDiagnosticEventsUnlocked(
+    _ events: [DangguiAlarmEvent]
+  ) throws {
+    try saveArrayUnlocked(
+      normalizedDiagnosticEvents(events),
+      filename: diagnosticEventsFilename,
+      authoritative: false
+    )
+  }
+
+  private static func normalizedDiagnosticEvents(
+    _ events: [DangguiAlarmEvent]
+  ) -> [DangguiAlarmEvent] {
+    // Keep the newest image for a stable retry ID while preserving the journal
+    // order of distinct events.
+    var lastIndexByID: [String: Int] = [:]
+    for (index, event) in events.enumerated() {
+      lastIndexByID[event.eventID] = index
+    }
+    let deduplicated = events.enumerated().compactMap { index, event in
+      lastIndexByID[event.eventID] == index ? event : nil
+    }
+    return Array(
+      deduplicated.lazy
+        .filter { !$0.mutatesBusinessState }
+        .suffix(maximumDiagnosticEvents)
+    )
+  }
+
+  private static func ensureEventStoresMigratedUnlocked() throws {
+    if authoritativeFileImageExistsUnlocked(filename: businessEventsFilename) {
+      guard authoritativeFileIsHealthyUnlocked(
+        DangguiAlarmEvent.self,
+        filename: businessEventsFilename,
+        semanticValidator: businessEventsAreSemanticallyValid
+      ) else {
+        throw DangguiAlarmBridgeError.authoritativeStoreCorrupt
+      }
+      return
+    }
+
+    let manager = FileManager.default
+    let mixedURL = try fileURLUnlocked(filename: legacyMixedEventsFilename)
+    let mixedBackupURL = backupURL(for: mixedURL)
+    let hasMixedImage = manager.fileExists(atPath: mixedURL.path)
+      || manager.fileExists(atPath: mixedBackupURL.path)
+    let legacyData = UserDefaults.standard.data(forKey: legacyEventsKey)
+
+    let sourceEvents: [DangguiAlarmEvent]
+    if hasMixedImage {
+      // A backup without a primary, or any incomplete primary, is evidence of
+      // an interrupted terminal write. It may be read as an LKG below but must
+      // never be promoted into the new authoritative outbox.
+      guard manager.fileExists(atPath: mixedURL.path),
+            let data = try? Data(contentsOf: mixedURL),
+            let decoded = decodeLossyArray(DangguiAlarmEvent.self, from: data),
+            decoded.isComplete,
+            mixedEventsAreSemanticallyValid(decoded.values) else {
+        throw DangguiAlarmBridgeError.authoritativeStoreCorrupt
+      }
+      sourceEvents = decoded.values
+    } else if let legacyData {
+      guard let decoded = decodeLossyArray(
+        DangguiAlarmEvent.self,
+        from: legacyData
+      ), decoded.isComplete,
+         mixedEventsAreSemanticallyValid(decoded.values) else {
+        throw DangguiAlarmBridgeError.authoritativeStoreCorrupt
+      }
+      sourceEvents = decoded.values
+    } else {
+      sourceEvents = []
+    }
+
+    try saveBusinessEventsUnlocked(
+      sourceEvents.filter(\.mutatesBusinessState)
+    )
+    try saveDiagnosticEventsUnlocked(
+      sourceEvents.filter { !$0.mutatesBusinessState }
+    )
+    if legacyData != nil {
+      UserDefaults.standard.removeObject(forKey: legacyEventsKey)
+    }
+  }
+
+  private static func strictLegacyMixedEventsForReadingUnlocked()
+    -> [DangguiAlarmEvent] {
     if let events = loadArrayUnlocked(
       DangguiAlarmEvent.self,
-      filename: eventsFilename
+      filename: legacyMixedEventsFilename,
+      allowLossy: false,
+      semanticValidator: mixedEventsAreSemanticallyValid
     ) {
-      return Array(events.suffix(maximumEvents))
+      return events
     }
-    guard let legacy = UserDefaults.standard.data(forKey: legacyEventsKey) else {
+    guard let legacy = UserDefaults.standard.data(forKey: legacyEventsKey),
+          let decoded = decodeLossyArray(DangguiAlarmEvent.self, from: legacy),
+          decoded.isComplete,
+          mixedEventsAreSemanticallyValid(decoded.values) else {
       return []
     }
-    guard let legacyEvents = decodeLossyArray(DangguiAlarmEvent.self, from: legacy) else {
-      return []
-    }
-    let migrated = Array(legacyEvents.suffix(maximumEvents))
-    do {
-      try saveEventsUnlocked(migrated)
-      UserDefaults.standard.removeObject(forKey: legacyEventsKey)
-    } catch {
-      NSLog("Danggui could not migrate the legacy alarm events: %@", error.localizedDescription)
-    }
-    return migrated
-  }
-
-  private static func saveEventsUnlocked(_ events: [DangguiAlarmEvent]) throws {
-    try saveArrayUnlocked(Array(events.suffix(maximumEvents)), filename: eventsFilename)
+    return decoded.values
   }
 
   private static func loadTransactionsUnlocked() -> [DangguiAlarmTransaction] {
     loadArrayUnlocked(
       DangguiAlarmTransaction.self,
-      filename: transactionsFilename
+      filename: transactionsFilename,
+      allowLossy: false,
+      semanticValidator: transactionsAreSemanticallyValid
     ) ?? []
   }
 
   private static func saveTransactionsUnlocked(
     _ transactions: [DangguiAlarmTransaction]
   ) throws {
-    try saveArrayUnlocked(transactions, filename: transactionsFilename)
+    guard transactionsAreSemanticallyValid(transactions) else {
+      throw DangguiAlarmBridgeError.authoritativeStoreCorrupt
+    }
+    try saveArrayUnlocked(
+      transactions,
+      filename: transactionsFilename,
+      authoritative: true
+    )
   }
 
   private static func loadCancellationsUnlocked() -> [DangguiAlarmCancellation] {
     loadArrayUnlocked(
       DangguiAlarmCancellation.self,
-      filename: cancellationsFilename
+      filename: cancellationsFilename,
+      allowLossy: false,
+      semanticValidator: cancellationsAreSemanticallyValid
     ) ?? []
   }
 
   private static func saveCancellationsUnlocked(
     _ cancellations: [DangguiAlarmCancellation]
   ) throws {
-    try saveArrayUnlocked(cancellations, filename: cancellationsFilename)
+    guard cancellationsAreSemanticallyValid(cancellations) else {
+      throw DangguiAlarmBridgeError.authoritativeStoreCorrupt
+    }
+    try saveArrayUnlocked(
+      cancellations,
+      filename: cancellationsFilename,
+      authoritative: true
+    )
   }
 
   private static func saveArrayUnlocked<Value: Codable>(
     _ values: [Value],
-    filename: String
+    filename: String,
+    authoritative: Bool
   ) throws {
+    if authoritative {
+      try assertAuthoritativeStoresHealthyUnlocked()
+    }
     let data = try JSONEncoder().encode(values)
     let url = try fileURLUnlocked(filename: filename)
     if let existing = try? Data(contentsOf: url),
-       decodeLossyArray(Value.self, from: existing) != nil {
+       let decoded = decodeLossyArray(Value.self, from: existing),
+       decoded.isComplete {
       try? existing.write(to: backupURL(for: url), options: .atomic)
     }
     try data.write(to: url, options: .atomic)
   }
 
+  private static func mixedEventsAreSemanticallyValid(
+    _ events: [DangguiAlarmEvent]
+  ) -> Bool {
+    var eventIDs = Set<String>()
+    for event in events {
+      guard eventHasValidEnvelope(event),
+            eventIDs.insert(event.eventID).inserted else { return false }
+      if event.mutatesBusinessState,
+         !businessEventIsSemanticallyValid(event) {
+        return false
+      }
+    }
+    return true
+  }
+
+  private static func businessEventsAreSemanticallyValid(
+    _ events: [DangguiAlarmEvent]
+  ) -> Bool {
+    var eventIDs = Set<String>()
+    for event in events {
+      guard businessEventIsSemanticallyValid(event),
+            eventIDs.insert(event.eventID).inserted else { return false }
+    }
+    return true
+  }
+
+  private static func businessEventIsSemanticallyValid(
+    _ event: DangguiAlarmEvent
+  ) -> Bool {
+    guard event.mutatesBusinessState,
+          eventHasValidEnvelope(event),
+          let platformAlarmID = event.platformAlarmID else {
+      return false
+    }
+    let deterministicPlatformID = platformAlarmID.caseInsensitiveCompare(
+      DangguiAlarmIdentifier.platformID(
+        for: event.reminderID,
+        revision: event.scheduleRevision,
+        deviceGeneration: event.deviceGeneration
+      )
+    ) == .orderedSame
+    let stableEventID = "danggui.alarm.\(event.type)."
+      + "\(platformAlarmID.lowercased()).r\(event.scheduleRevision)"
+    // v1.1.4 business events used random UUID event IDs. v1.1.5 uses the
+    // deterministic form for retry idempotency, but strict migration must keep
+    // the older valid outbox entries rather than rejecting them.
+    let hasCompatibleEventID = event.eventID == stableEventID
+      || UUID(uuidString: event.eventID) != nil
+    return deterministicPlatformID && hasCompatibleEventID
+  }
+
+  private static func eventHasValidEnvelope(
+    _ event: DangguiAlarmEvent
+  ) -> Bool {
+    guard !event.eventID.isEmpty,
+          !event.reminderID.isEmpty,
+          DangguiAlarmGeneration.isValid(event.deviceGeneration),
+          event.scheduleRevision > 0,
+          event.occurredAtEpochMs > 0,
+          DangguiAlarmEventType(rawValue: event.type) != nil else {
+      return false
+    }
+    if let platformAlarmID = event.platformAlarmID {
+      guard platformAlarmID.caseInsensitiveCompare(
+        DangguiAlarmIdentifier.platformID(
+          for: event.reminderID,
+          revision: event.scheduleRevision,
+          deviceGeneration: event.deviceGeneration
+        )
+      ) == .orderedSame else { return false }
+      if event.eventID.hasPrefix("danggui.alarm.") {
+        let stableEventID = "danggui.alarm.\(event.type)."
+          + "\(platformAlarmID.lowercased()).r\(event.scheduleRevision)"
+        guard event.eventID == stableEventID else { return false }
+      }
+    }
+    return true
+  }
+
+  private static func recordsAreSemanticallyValid(
+    _ records: [DangguiAlarmRecord]
+  ) -> Bool {
+    var reminderIDs = Set<String>()
+    var platformIDs = Set<String>()
+    for record in records {
+      guard recordIsSemanticallyValid(record),
+            reminderIDs.insert(record.reminderID).inserted,
+            platformIDs.insert(record.platformAlarmID.lowercased()).inserted
+      else { return false }
+    }
+    return true
+  }
+
+  private static func recordIsSemanticallyValid(
+    _ record: DangguiAlarmRecord
+  ) -> Bool {
+    !record.reminderID.isEmpty
+      && DangguiAlarmGeneration.isValid(record.deviceGeneration)
+      && record.scheduleRevision > 0
+      && record.triggerAtEpochMs > 0
+      && (1...1_440).contains(record.defaultSnoozeMinutes)
+      && UUID(uuidString: record.platformAlarmID) != nil
+      && record.platformAlarmID.caseInsensitiveCompare(
+        DangguiAlarmIdentifier.platformID(
+          for: record.reminderID,
+          revision: record.scheduleRevision,
+          deviceGeneration: record.deviceGeneration
+        )
+      ) == .orderedSame
+  }
+
+  private static func transactionsAreSemanticallyValid(
+    _ transactions: [DangguiAlarmTransaction]
+  ) -> Bool {
+    var transactionIDs = Set<String>()
+    for transaction in transactions {
+      guard !transaction.transactionID.isEmpty,
+            UUID(uuidString: transaction.transactionID) != nil,
+            transactionIDs.insert(transaction.transactionID).inserted,
+            !transaction.reminderID.isEmpty,
+            transaction.reminderID == transaction.replacement.reminderID,
+            transaction.updatedAtEpochMs > 0,
+            recordIsSemanticallyValid(transaction.replacement)
+      else { return false }
+      if let previousPlatformAlarmID = transaction.previousPlatformAlarmID,
+         UUID(uuidString: previousPlatformAlarmID) == nil {
+        return false
+      }
+      if let previousPlatformAlarmID = transaction.previousPlatformAlarmID,
+         transaction.previousRecord == nil {
+        // v1.1.4 may omit the full predecessor image, but its predecessor ID
+        // must still be a deterministic earlier revision in the same legacy
+        // generation. New cross-generation handoffs always persist the record.
+        let previousRevision = transaction.replacement.scheduleRevision - 1
+        let earlierRevisionMatches = previousRevision > 0
+          && previousPlatformAlarmID.caseInsensitiveCompare(
+            DangguiAlarmIdentifier.platformID(
+              for: transaction.reminderID,
+              revision: previousRevision,
+              deviceGeneration: transaction.replacement.deviceGeneration
+            )
+          ) == .orderedSame
+        guard earlierRevisionMatches else { return false }
+      }
+      if let previousRecord = transaction.previousRecord {
+        guard recordIsSemanticallyValid(previousRecord),
+              previousRecord.reminderID == transaction.reminderID,
+              (!DangguiAlarmGeneration.matches(
+                previousRecord.deviceGeneration,
+                transaction.replacement.deviceGeneration
+              ) || previousRecord.scheduleRevision
+                < transaction.replacement.scheduleRevision),
+              let previousPlatformAlarmID = transaction.previousPlatformAlarmID,
+              previousRecord.platformAlarmID.caseInsensitiveCompare(
+                previousPlatformAlarmID
+              ) == .orderedSame else {
+          return false
+        }
+      }
+      if transaction.stopPreviousWhenConfirmed == true,
+         (transaction.previousPlatformAlarmID == nil
+          || transaction.previousRecord == nil
+          || !DangguiAlarmGeneration.matches(
+            transaction.previousRecord?.deviceGeneration,
+            transaction.replacement.deviceGeneration
+          )
+          || transaction.completionEvent?.type
+            != DangguiAlarmEventType.snoozed.rawValue) {
+          return false
+      }
+      if let completionEvent = transaction.completionEvent {
+        guard completionEvent.type == DangguiAlarmEventType.snoozed.rawValue,
+              transaction.stopPreviousWhenConfirmed == true,
+              let previousRecord = transaction.previousRecord,
+              DangguiAlarmGeneration.matches(
+                completionEvent.deviceGeneration,
+                previousRecord.deviceGeneration
+              ),
+              DangguiAlarmGeneration.matches(
+                previousRecord.deviceGeneration,
+                transaction.replacement.deviceGeneration
+              ),
+              transaction.replacement.scheduleRevision
+                == previousRecord.scheduleRevision + 1,
+              completionEvent.scheduleRevision == previousRecord.scheduleRevision,
+              completionEvent.successorTriggerAtEpochMs
+                == transaction.replacement.triggerAtEpochMs,
+              [10, 30, 60].contains(completionEvent.snoozeMinutes ?? -1),
+              eventIsSemanticallyValid(
+                completionEvent,
+                reminderID: transaction.reminderID,
+                maximumRevision: transaction.replacement.scheduleRevision,
+                deviceGeneration: transaction.replacement.deviceGeneration
+              ) else { return false }
+      }
+      if transaction.ownsMissingRecovery == true,
+         (transaction.previousPlatformAlarmID != nil
+          || transaction.previousRecord != nil
+          || transaction.stopPreviousWhenConfirmed == true
+          || transaction.completionEvent != nil) {
+        return false
+      }
+      if (transaction.phase == .pending
+          || transaction.phase == .replacementScheduled),
+         transaction.replacement.lastState == "scheduled" {
+        // A scheduled mirror is only written while advancing to confirmed.
+        // Accepting it in an earlier phase lets a forged JSON image claim a
+        // route was verified when the daemon transaction still says it was not.
+        return false
+      }
+      if transaction.phase == .confirmed || transaction.phase == .retired {
+        guard transaction.replacement.lastState == "scheduled" else {
+          return false
+        }
+      }
+    }
+    return true
+  }
+
+  private static func cancellationsAreSemanticallyValid(
+    _ cancellations: [DangguiAlarmCancellation]
+  ) -> Bool {
+    let allowedTerminalStates: Set<String?> = [
+      nil,
+      "cancelled",
+      "stopped",
+      "missed",
+      "delivered-retired",
+      DangguiAlarmCancellationPolicy.routeRetiredTerminalState,
+    ]
+    var cancellationIDs = Set<String>()
+    var reminderGenerations = Set<String>()
+    for cancellation in cancellations {
+      let platformIDs = cancellation.platformAlarmIDs.map { $0.lowercased() }
+      let generationKey = cancellation.deviceGeneration?.lowercased() ?? "<legacy>"
+      guard !cancellation.cancellationID.isEmpty,
+            UUID(uuidString: cancellation.cancellationID) != nil,
+            cancellationIDs.insert(cancellation.cancellationID).inserted,
+            !cancellation.reminderID.isEmpty,
+            DangguiAlarmGeneration.isValid(cancellation.deviceGeneration),
+            reminderGenerations.insert(
+              "\(cancellation.reminderID)\u{1f}\(generationKey)"
+            ).inserted,
+            cancellation.cancelledThroughRevision >= 0,
+            cancellation.updatedAtEpochMs > 0,
+            Set(platformIDs).count == platformIDs.count,
+            platformIDs.allSatisfy({ UUID(uuidString: $0) != nil }),
+            allowedTerminalStates.contains(cancellation.terminalState)
+      else { return false }
+      if cancellation.cancelledThroughRevision == 0 {
+        guard platformIDs.isEmpty else { return false }
+      } else {
+        // Every tombstone is anchored by the deterministic ID at its scoped
+        // revision high-water mark. Extra predecessor IDs remain compatible
+        // with v1.1.4, but a random UUID can no longer forge the only owner of
+        // a supposedly cancelled revision.
+        let highWaterPlatformID = DangguiAlarmIdentifier.platformID(
+          for: cancellation.reminderID,
+          revision: cancellation.cancelledThroughRevision,
+          deviceGeneration: cancellation.deviceGeneration
+        ).lowercased()
+        guard platformIDs.contains(highWaterPlatformID) else { return false }
+      }
+      if cancellation.daemonAction == .stop {
+        guard let stopPlatformAlarmID = cancellation.stopPlatformAlarmID,
+              platformIDs.contains(stopPlatformAlarmID.lowercased()) else {
+          return false
+        }
+      } else if cancellation.stopPlatformAlarmID != nil {
+        return false
+      }
+      if let completionEvent = cancellation.completionEvent {
+        guard eventIsSemanticallyValid(
+          completionEvent,
+          reminderID: cancellation.reminderID,
+          maximumRevision: cancellation.cancelledThroughRevision,
+          deviceGeneration: cancellation.deviceGeneration
+        ), platformIDs.contains(completionEvent.platformAlarmID?.lowercased() ?? "")
+        else { return false }
+      }
+      switch cancellation.terminalState {
+      case "stopped":
+        if cancellation.daemonAction != .stop
+          || cancellation.completionEvent?.type
+            != DangguiAlarmEventType.stopped.rawValue
+          || cancellation.completionEvent?.scheduleRevision
+            != cancellation.cancelledThroughRevision {
+          return false
+        }
+      case "missed":
+        if cancellation.daemonAction == .stop
+          || cancellation.completionEvent?.type
+            != DangguiAlarmEventType.missed.rawValue
+          || cancellation.completionEvent?.scheduleRevision
+            != cancellation.cancelledThroughRevision {
+          return false
+        }
+      case DangguiAlarmCancellationPolicy.routeRetiredTerminalState,
+           "delivered-retired",
+           "cancelled":
+        if cancellation.daemonAction == .stop
+          || cancellation.stopPlatformAlarmID != nil
+          || cancellation.completionEvent != nil {
+          return false
+        }
+      default:
+        if cancellation.daemonAction != nil
+          || cancellation.stopPlatformAlarmID != nil
+          || cancellation.completionEvent != nil {
+          return false
+        }
+      }
+    }
+    return true
+  }
+
+  private static func eventIsSemanticallyValid(
+    _ event: DangguiAlarmEvent,
+    reminderID: String,
+    maximumRevision: Int,
+    deviceGeneration: String?
+  ) -> Bool {
+    guard businessEventIsSemanticallyValid(event),
+          event.reminderID == reminderID,
+          DangguiAlarmGeneration.matches(
+            event.deviceGeneration,
+            deviceGeneration
+          ),
+          event.scheduleRevision <= maximumRevision,
+          let platformAlarmID = event.platformAlarmID else {
+      return false
+    }
+    return platformAlarmID.caseInsensitiveCompare(
+      DangguiAlarmIdentifier.platformID(
+        for: reminderID,
+        revision: event.scheduleRevision,
+        deviceGeneration: deviceGeneration
+      )
+    ) == .orderedSame
+  }
+
+  private static func authoritativeStoresAreCrossConsistentUnlocked() -> Bool {
+    let records = loadArrayUnlocked(
+      DangguiAlarmRecord.self,
+      filename: recordsFilename,
+      allowLossy: false,
+      semanticValidator: recordsAreSemanticallyValid
+    ) ?? []
+    let transactions = loadArrayUnlocked(
+      DangguiAlarmTransaction.self,
+      filename: transactionsFilename,
+      allowLossy: false,
+      semanticValidator: transactionsAreSemanticallyValid
+    ) ?? []
+    let cancellations = loadArrayUnlocked(
+      DangguiAlarmCancellation.self,
+      filename: cancellationsFilename,
+      allowLossy: false,
+      semanticValidator: cancellationsAreSemanticallyValid
+    ) ?? []
+    var identityByPlatformID: [String: String] = [:]
+    let recordImages = records
+      + transactions.map(\.replacement)
+      + transactions.compactMap(\.previousRecord)
+    for record in recordImages {
+      let platformID = record.platformAlarmID.lowercased()
+      let generation = record.deviceGeneration?.lowercased() ?? "<legacy>"
+      let identity = "\(record.reminderID)\u{1f}\(record.scheduleRevision)\u{1f}\(generation)"
+      if let existing = identityByPlatformID[platformID], existing != identity {
+        return false
+      }
+      identityByPlatformID[platformID] = identity
+    }
+    for cancellation in cancellations {
+      let cancellationGeneration = cancellation.deviceGeneration?.lowercased()
+        ?? "<legacy>"
+      for platformID in cancellation.platformAlarmIDs.map({ $0.lowercased() }) {
+        guard let knownIdentity = identityByPlatformID[platformID] else {
+          // Completed v1.1.4 tombstones may be the only remaining image of an
+          // older deterministic route, so unknown historical IDs are allowed.
+          continue
+        }
+        let components = knownIdentity.split(
+          separator: "\u{1f}",
+          omittingEmptySubsequences: false
+        )
+        guard components.count == 3,
+              String(components[0]) == cancellation.reminderID else {
+          return false
+        }
+        if String(components[2]) == cancellationGeneration,
+           let revision = Int(components[1]),
+           revision > cancellation.cancelledThroughRevision {
+          return false
+        }
+      }
+      guard let event = cancellation.completionEvent,
+            let platformID = event.platformAlarmID?.lowercased() else { continue }
+      let generation = event.deviceGeneration?.lowercased() ?? "<legacy>"
+      let identity = "\(event.reminderID)\u{1f}\(event.scheduleRevision)\u{1f}\(generation)"
+      if let existing = identityByPlatformID[platformID], existing != identity {
+        return false
+      }
+      identityByPlatformID[platformID] = identity
+    }
+    return true
+  }
+
   private static func loadArrayUnlocked<Value: Decodable>(
     _ type: Value.Type,
-    filename: String
+    filename: String,
+    allowLossy: Bool,
+    semanticValidator: (([Value]) -> Bool)? = nil
   ) -> [Value]? {
     guard let url = try? fileURLUnlocked(filename: filename) else { return nil }
+    var salvagedPrimary: [Value]?
     if let data = try? Data(contentsOf: url),
        let decoded = decodeLossyArray(type, from: data) {
-      return decoded
+      if decoded.isComplete,
+         semanticValidator?(decoded.values) ?? true {
+        return decoded.values
+      }
+      salvagedPrimary = decoded.values
     }
+    var salvagedBackup: [Value]?
     if let backupData = try? Data(contentsOf: backupURL(for: url)),
        let decodedBackup = decodeLossyArray(type, from: backupData) {
-      return decodedBackup
+      if decodedBackup.isComplete,
+         semanticValidator?(decodedBackup.values) ?? true {
+        return decodedBackup.values
+      }
+      salvagedBackup = decodedBackup.values
     }
-    return nil
+    // Prefer a complete last-known-good image over a partially decoded
+    // primary. Partial salvage is reserved for the lossy diagnostic journal;
+    // authoritative records, transactions, cancellations, and business-event
+    // outbox entries return nil and the health gate prevents replacement.
+    return allowLossy ? (salvagedPrimary ?? salvagedBackup) : nil
+  }
+
+  private static func assertAuthoritativeStoresHealthyUnlocked() throws {
+    let activeGenerationIsHealthy = !authoritativeFileImageExistsUnlocked(
+      filename: activeGenerationFilename
+    ) || authoritativeFileIsHealthyUnlocked(
+      DangguiAlarmActiveGenerationState.self,
+      filename: activeGenerationFilename,
+      semanticValidator: activeGenerationStatesAreSemanticallyValid
+    )
+    guard activeGenerationIsHealthy,
+      authoritativeFileIsHealthyUnlocked(
+      DangguiAlarmRecord.self,
+      filename: recordsFilename,
+      semanticValidator: recordsAreSemanticallyValid
+    ), authoritativeFileIsHealthyUnlocked(
+      DangguiAlarmTransaction.self,
+      filename: transactionsFilename,
+      semanticValidator: transactionsAreSemanticallyValid
+    ), authoritativeFileIsHealthyUnlocked(
+      DangguiAlarmCancellation.self,
+      filename: cancellationsFilename,
+      semanticValidator: cancellationsAreSemanticallyValid
+    ), businessEventOutboxIsHealthyUnlocked() else {
+      throw DangguiAlarmBridgeError.authoritativeStoreCorrupt
+    }
+    if !authoritativeFileImageExistsUnlocked(filename: recordsFilename),
+       let legacy = UserDefaults.standard.data(forKey: legacyRecordsKey) {
+      guard let decoded = decodeLossyArray(DangguiAlarmRecord.self, from: legacy),
+            decoded.isComplete,
+            recordsAreSemanticallyValid(decoded.values) else {
+        throw DangguiAlarmBridgeError.authoritativeStoreCorrupt
+      }
+    }
+    guard authoritativeStoresAreCrossConsistentUnlocked() else {
+      throw DangguiAlarmBridgeError.authoritativeStoreCorrupt
+    }
+  }
+
+  private static func businessEventOutboxIsHealthyUnlocked() -> Bool {
+    if authoritativeFileImageExistsUnlocked(filename: businessEventsFilename) {
+      return authoritativeFileIsHealthyUnlocked(
+        DangguiAlarmEvent.self,
+        filename: businessEventsFilename,
+        semanticValidator: businessEventsAreSemanticallyValid
+      )
+    }
+
+    if authoritativeFileImageExistsUnlocked(
+      filename: legacyMixedEventsFilename
+    ) {
+      return authoritativeFileIsHealthyUnlocked(
+        DangguiAlarmEvent.self,
+        filename: legacyMixedEventsFilename,
+        semanticValidator: mixedEventsAreSemanticallyValid
+      )
+    }
+
+    guard let legacy = UserDefaults.standard.data(forKey: legacyEventsKey)
+    else { return true }
+    guard let decoded = decodeLossyArray(
+      DangguiAlarmEvent.self,
+      from: legacy
+    ) else { return false }
+    return decoded.isComplete && mixedEventsAreSemanticallyValid(decoded.values)
+  }
+
+  private static func authoritativeFileImageExistsUnlocked(
+    filename: String
+  ) -> Bool {
+    guard let url = try? fileURLUnlocked(filename: filename) else { return false }
+    let manager = FileManager.default
+    return manager.fileExists(atPath: url.path)
+      || manager.fileExists(atPath: backupURL(for: url).path)
+  }
+
+  private static func authoritativeFileIsHealthyUnlocked<Value: Decodable>(
+    _ type: Value.Type,
+    filename: String,
+    semanticValidator: ([Value]) -> Bool
+  ) -> Bool {
+    guard let url = try? fileURLUnlocked(filename: filename) else { return false }
+    let manager = FileManager.default
+    let backup = backupURL(for: url)
+    if !manager.fileExists(atPath: url.path) {
+      // A backup without its primary is recovery evidence, not authoritative
+      // current state. Only an explicit recovery flow may promote it.
+      return !manager.fileExists(atPath: backup.path)
+    }
+    if let data = try? Data(contentsOf: url),
+       let decoded = decodeLossyArray(type, from: data),
+       decoded.isComplete,
+       semanticValidator(decoded.values) {
+      return true
+    }
+    // Never continue writes from a backup when a primary exists but is
+    // malformed or partial: it may omit the newest terminal tombstone.
+    return false
   }
 
   private static func decodeLossyArray<Value: Decodable>(
     _ type: Value.Type,
     from data: Data
-  ) -> [Value]? {
+  ) -> DangguiLossyArray<Value>? {
     guard let values = try? JSONDecoder().decode(
       [DangguiLossyValue<Value>].self,
       from: data
     ) else {
       return nil
     }
-    return values.compactMap(\.value)
+    let decoded = values.compactMap(\.value)
+    return DangguiLossyArray(
+      values: decoded,
+      isComplete: decoded.count == values.count
+    )
   }
 
   private static func backupURL(for url: URL) -> URL {
@@ -1583,6 +3581,7 @@ struct DangguiAlarmMetadata: AlarmMetadata {
   let reminderID: String
   let taskID: String
   let scheduleRevision: Int
+  let deviceGeneration: String?
 }
 
 @available(iOS 26.0, *)
@@ -1593,15 +3592,39 @@ struct DangguiStopAlarmIntent: LiveActivityIntent {
   @Parameter(title: "Alarm ID")
   var platformAlarmID: String
 
-  init(platformAlarmID: String) {
+  @Parameter(title: "Reminder ID")
+  var reminderID: String?
+
+  @Parameter(title: "Schedule revision")
+  var scheduleRevision: Int?
+
+  init(
+    platformAlarmID: String,
+    reminderID: String? = nil,
+    scheduleRevision: Int? = nil
+  ) {
     self.platformAlarmID = platformAlarmID
+    self.reminderID = reminderID
+    self.scheduleRevision = scheduleRevision
   }
 
   init() {
     platformAlarmID = ""
+    reminderID = nil
+    scheduleRevision = nil
   }
 
   func perform() async throws -> some IntentResult {
+    if let reminderID, let scheduleRevision {
+      try await DangguiAlarmOperationActor.shared.stop(
+        reminderID: reminderID,
+        expectedRevision: scheduleRevision,
+        expectedSession: platformAlarmID
+      )
+      return .result()
+    }
+    // Compatibility for already-registered v1.1.4 AlarmKit intents, which
+    // encoded only the platform ID. A missing mirror remains a safe no-op.
     guard let record = DangguiAlarmStore.record(platformAlarmID: platformAlarmID) else {
       return .result()
     }
@@ -1622,15 +3645,44 @@ struct DangguiSnoozeAlarmIntent: LiveActivityIntent {
   @Parameter(title: "Alarm ID")
   var platformAlarmID: String
 
-  init(platformAlarmID: String) {
+  @Parameter(title: "Reminder ID")
+  var reminderID: String?
+
+  @Parameter(title: "Schedule revision")
+  var scheduleRevision: Int?
+
+  init(
+    platformAlarmID: String,
+    reminderID: String? = nil,
+    scheduleRevision: Int? = nil
+  ) {
     self.platformAlarmID = platformAlarmID
+    self.reminderID = reminderID
+    self.scheduleRevision = scheduleRevision
   }
 
   init() {
     platformAlarmID = ""
+    reminderID = nil
+    scheduleRevision = nil
   }
 
   func perform() async throws -> some IntentResult {
+    if let reminderID, let scheduleRevision {
+      let record = DangguiAlarmStore.authoritativeActionRecord(
+        reminderID: reminderID,
+        scheduleRevision: scheduleRevision,
+        platformAlarmID: platformAlarmID
+      )
+      try await DangguiAlarmOperationActor.shared.snooze(
+        reminderID: reminderID,
+        minutes: record?.defaultSnoozeMinutes,
+        expectedRevision: scheduleRevision,
+        expectedSession: platformAlarmID
+      )
+      return .result()
+    }
+    // Compatibility for already-registered v1.1.4 AlarmKit intents.
     guard let record = DangguiAlarmStore.record(platformAlarmID: platformAlarmID) else {
       return .result()
     }
@@ -1650,6 +3702,92 @@ actor DangguiAlarmOperationActor {
   private var operationInProgress = false
   private var operationWaiters: [CheckedContinuation<Void, Never>] = []
 
+  func activateDeviceGeneration(_ deviceGeneration: String?) async throws {
+    try await withExclusiveOperation {
+      let previousGeneration = try DangguiAlarmStore.activeDeviceGeneration()
+      let generationChanged = !DangguiAlarmGeneration.matches(
+        previousGeneration,
+        deviceGeneration
+      )
+      try DangguiAlarmStore.activateDeviceGeneration(deviceGeneration)
+      // The activation image is durable before daemon mutation. A crash at
+      // any later point is recovered by the same cleanup at initialization.
+      do {
+        try await retireInactiveGenerationRoutesUnlocked()
+        try await recoverPersistedTransactionsUnlocked(
+          retireInactiveRoutesFirst: false
+        )
+      } catch {
+        if generationChanged {
+          // The database swap has not happened until this call succeeds.
+          // Restore the old generation fence and best-effort repair any old
+          // route already retired during the failed handoff.
+          try? DangguiAlarmStore.activateDeviceGeneration(previousGeneration)
+          try? await retireInactiveGenerationRoutesUnlocked()
+          try? await recoverPersistedTransactionsUnlocked(
+            retireInactiveRoutesFirst: false
+          )
+          if let alarms = try? await DangguiAlarmKitControllerV2.alarms() {
+            await reconcileUnlocked(alarms, recoverFirst: false)
+          }
+        }
+        throw error
+      }
+    }
+  }
+
+  private func assertActiveGeneration(_ deviceGeneration: String?) throws {
+    guard DangguiAlarmGeneration.matches(
+      deviceGeneration,
+      try DangguiAlarmStore.activeDeviceGeneration()
+    ) else {
+      throw DangguiAlarmBridgeError.inactiveDeviceGeneration
+    }
+  }
+
+  private func activeRecords() throws -> [DangguiAlarmRecord] {
+    let generation = try DangguiAlarmStore.activeDeviceGeneration()
+    return DangguiAlarmStore.records().filter {
+      DangguiAlarmGeneration.matches($0.deviceGeneration, generation)
+    }
+  }
+
+  private func activeRecord(reminderID: String) throws -> DangguiAlarmRecord? {
+    let records = try activeRecords()
+    return records.first { $0.reminderID == reminderID }
+  }
+
+  private func activeTransactions() throws -> [DangguiAlarmTransaction] {
+    let generation = try DangguiAlarmStore.activeDeviceGeneration()
+    return DangguiAlarmStore.transactions().filter {
+      DangguiAlarmGeneration.matches(
+        $0.replacement.deviceGeneration,
+        generation
+      )
+    }
+  }
+
+  private func activeCancellations() throws -> [DangguiAlarmCancellation] {
+    let generation = try DangguiAlarmStore.activeDeviceGeneration()
+    return DangguiAlarmStore.cancellations().filter {
+      DangguiAlarmGeneration.matches($0.deviceGeneration, generation)
+    }
+  }
+
+  private func retireInactiveGenerationRoutesUnlocked() async throws {
+    let inactiveIDs = try DangguiAlarmStore.inactiveRoutePlatformAlarmIDs()
+    guard !inactiveIDs.isEmpty else { return }
+    var activeIDs = try await DangguiAlarmKitControllerV2.activeIDs()
+    for platformAlarmID in inactiveIDs where activeIDs.contains(
+      platformAlarmID.lowercased()
+    ) {
+      try await DangguiAlarmKitControllerV2.cancel(
+        platformAlarmID: platformAlarmID
+      )
+      activeIDs.remove(platformAlarmID.lowercased())
+    }
+  }
+
   func schedule(_ requestedRecord: DangguiAlarmRecord) async throws {
     try await withExclusiveOperation {
       try await scheduleUnlocked(requestedRecord)
@@ -1657,7 +3795,9 @@ actor DangguiAlarmOperationActor {
   }
 
   private func scheduleUnlocked(_ requestedRecord: DangguiAlarmRecord) async throws {
-    await recoverPersistedTransactionsUnlocked()
+    try DangguiAlarmStore.assertAuthoritativeStoresHealthy()
+    try assertActiveGeneration(requestedRecord.deviceGeneration)
+    try await recoverPersistedTransactionsUnlocked()
     let relatedTransactions = DangguiAlarmStore.transactions().filter {
       $0.reminderID == requestedRecord.reminderID
     }
@@ -1666,7 +3806,10 @@ actor DangguiAlarmOperationActor {
       requested: requestedRecord,
       current: current,
       transactions: relatedTransactions,
-      cancellation: DangguiAlarmStore.cancellation(reminderID: requestedRecord.reminderID)
+      cancellation: DangguiAlarmStore.cancellation(
+        reminderID: requestedRecord.reminderID,
+        deviceGeneration: requestedRecord.deviceGeneration
+      )
     )
     switch decision {
     case .staleRevision:
@@ -1682,13 +3825,16 @@ actor DangguiAlarmOperationActor {
       triggerAtEpochMs: requestedRecord.triggerAtEpochMs,
       nowEpochMs: nowEpochMs
     ) else {
-      persistMissed(requestedRecord, nowEpochMs: nowEpochMs)
+      try await persistMissed(requestedRecord, nowEpochMs: nowEpochMs)
       throw DangguiAlarmOperationError.expired
     }
 
     if decision == .idempotent,
        let sameRevision = relatedTransactions.first(where: {
       $0.replacement.scheduleRevision == requestedRecord.scheduleRevision
+        && $0.replacement.platformAlarmID.caseInsensitiveCompare(
+          requestedRecord.platformAlarmID
+        ) == .orderedSame
     }) {
       // Recovery deliberately swallows deferred-capacity failures so one bad
       // transaction cannot block others. A direct retry must surface that
@@ -1700,12 +3846,16 @@ actor DangguiAlarmOperationActor {
     var activeIDs = try await DangguiAlarmKitControllerV2.activeIDs()
     if decision == .idempotent,
        current?.scheduleRevision == requestedRecord.scheduleRevision,
+       current?.platformAlarmID.caseInsensitiveCompare(
+         requestedRecord.platformAlarmID
+       ) == .orderedSame,
        activeIDs.contains(requestedRecord.platformAlarmID.lowercased()) {
       return
     }
 
     var previousPlatformAlarmID = current?.platformAlarmID
     var previousRecord = current
+    let supersedingTransactionIDs = Set(relatedTransactions.map(\.transactionID))
     if !relatedTransactions.isEmpty {
       let reliablePredecessors = relatedTransactions
         .compactMap(\.previousPlatformAlarmID)
@@ -1734,34 +3884,143 @@ actor DangguiAlarmOperationActor {
           try await DangguiAlarmKitControllerV2.cancel(platformAlarmID: replacementID)
           activeIDs.remove(replacementID)
         }
-        try DangguiAlarmStore.removeTransaction(transactionID: transaction.transactionID)
       }
     }
 
     try await beginReplacement(
       requestedRecord,
       previousPlatformAlarmID: previousPlatformAlarmID,
-      previousRecord: previousRecord
+      previousRecord: previousRecord,
+      supersedingTransactionIDs: supersedingTransactionIDs
     )
   }
 
-  func cancel(reminderID: String) async throws {
+  func cancel(
+    reminderID: String,
+    expectedDeviceGeneration: String?
+  ) async throws {
     try await withExclusiveOperation {
-      try await cancelUnlocked(reminderID: reminderID)
+      try await cancelUnlocked(
+        reminderID: reminderID,
+        expectedDeviceGeneration: expectedDeviceGeneration
+      )
     }
   }
 
-  private func cancelUnlocked(reminderID: String) async throws {
+  private func cancelUnlocked(
+    reminderID: String,
+    expectedDeviceGeneration: String?
+  ) async throws {
+    try DangguiAlarmStore.assertAuthoritativeStoresHealthy()
+    guard try DangguiAlarmStore.activeGenerationMatches(
+      expectedDeviceGeneration
+    ) else {
+      // A delayed cancel from a replaced database is idempotent, but must not
+      // acquire cancellation ownership for the current same-ID reminder.
+      return
+    }
+    try await retireInactiveGenerationRoutesUnlocked()
+    let targetGeneration = expectedDeviceGeneration
+    let current = try activeRecord(reminderID: reminderID)
+    let relatedTransactions = (try activeTransactions()).filter {
+      $0.reminderID == reminderID
+    }
+    if let unfinished = DangguiAlarmStore.cancellation(
+      reminderID: reminderID,
+      deviceGeneration: targetGeneration
+    ), unfinished.phase != .completed {
+      // Never overwrite an unfinished Stop/Missed/Snooze-adjacent terminal
+      // ledger with a later business cancel. Its durable event must settle
+      // first; a daemon failure leaves it retryable and blocks this mutation.
+      try await continueCancellation(unfinished)
+    }
     let cancellation = DangguiAlarmCancellationPolicy.makeTombstone(
       reminderID: reminderID,
-      current: DangguiAlarmStore.record(reminderID: reminderID),
-      transactions: DangguiAlarmStore.transactions(),
-      existing: DangguiAlarmStore.cancellation(reminderID: reminderID),
+      current: current,
+      transactions: relatedTransactions,
+      existing: DangguiAlarmStore.cancellation(
+        reminderID: reminderID,
+        deviceGeneration: targetGeneration
+      ),
       nowEpochMs: Self.nowEpochMs
     )
     // This write must succeed before the first irreversible daemon mutation.
     try DangguiAlarmStore.upsertCancellation(cancellation)
     try await continueCancellation(cancellation)
+  }
+
+  func retireNativeRoute(
+    reminderID: String,
+    expectedRevision: Int,
+    expectedSession: String,
+    expectedDeviceGeneration: String?
+  ) async throws {
+    try await withExclusiveOperation {
+      try await retireNativeRouteUnlocked(
+        reminderID: reminderID,
+        expectedRevision: expectedRevision,
+        expectedSession: expectedSession,
+        expectedDeviceGeneration: expectedDeviceGeneration
+      )
+    }
+  }
+
+  private func retireNativeRouteUnlocked(
+    reminderID: String,
+    expectedRevision: Int,
+    expectedSession: String,
+    expectedDeviceGeneration: String?
+  ) async throws {
+    try DangguiAlarmStore.assertAuthoritativeStoresHealthy()
+    guard DangguiAlarmGeneration.matches(
+      expectedDeviceGeneration,
+      try DangguiAlarmStore.activeDeviceGeneration()
+    ) else {
+      // A delayed fallback completion from the losing database generation is
+      // an idempotent no-op, never a failure that can abort current reconcile.
+      return
+    }
+    try await recoverPersistedTransactionsUnlocked()
+    let identity = DangguiAlarmActionIdentity(
+      reminderID: reminderID,
+      scheduleRevision: expectedRevision,
+      platformAlarmID: expectedSession
+    )
+    guard identity.isInternallyConsistent else { return }
+
+    guard let record = targetRecord(
+      reminderID: reminderID,
+      expectedRevision: expectedRevision,
+      expectedSession: expectedSession
+    ) else {
+      return
+    }
+    guard DangguiAlarmGeneration.matches(
+      record.deviceGeneration,
+      expectedDeviceGeneration
+    ) else {
+      return
+    }
+    let existing = DangguiAlarmStore.cancellation(
+      reminderID: reminderID,
+      deviceGeneration: record.deviceGeneration
+    )
+    if let existing,
+       existing.cancelledThroughRevision >= expectedRevision {
+      if existing.phase != .completed {
+        try await continueCancellation(existing)
+      }
+      return
+    }
+    let tombstone = DangguiAlarmCancellationPolicy.makeRouteRetirementTombstone(
+      record: record,
+      currentMirror: DangguiAlarmStore.record(reminderID: reminderID),
+      transactions: DangguiAlarmStore.transactions(),
+      existing: existing,
+      nowEpochMs: Self.nowEpochMs
+    )
+    try DangguiAlarmStore.upsertCancellation(tombstone)
+    try await continueCancellation(tombstone)
   }
 
   func stop(
@@ -1783,28 +4042,47 @@ actor DangguiAlarmOperationActor {
     expectedRevision: Int?,
     expectedSession: String?
   ) async throws {
-    guard var record = targetRecord(
+    try DangguiAlarmStore.assertAuthoritativeStoresHealthy()
+    try await recoverPersistedTransactionsUnlocked()
+    guard let expectedRevision, let expectedSession else { return }
+    let identity = DangguiAlarmActionIdentity(
+      reminderID: reminderID,
+      scheduleRevision: expectedRevision,
+      platformAlarmID: expectedSession
+    )
+    guard identity.isInternallyConsistent else { return }
+
+    guard let record = targetRecord(
       reminderID: reminderID,
       expectedRevision: expectedRevision,
       expectedSession: expectedSession
-    ) else { return }
-
-    let activeIDs = try await DangguiAlarmKitControllerV2.activeIDs()
-    if activeIDs.contains(record.platformAlarmID.lowercased()) {
-      do {
-        try await DangguiAlarmKitControllerV2.stop(platformAlarmID: record.platformAlarmID)
-      } catch {
-        try await DangguiAlarmKitControllerV2.cancel(platformAlarmID: record.platformAlarmID)
-      }
+    ) else {
+      // Without an authoritative mirror we cannot durably bind the action to
+      // business state. Fail closed rather than mutating AlarmKit first.
+      return
     }
-    recordDeliveredIfNeeded(&record)
-    DangguiAlarmStore.appendEvent(DangguiAlarmEvent(type: .stopped, record: record))
-    try await cancelOtherActiveAlarms(
+    let existing = DangguiAlarmStore.cancellation(
       reminderID: reminderID,
-      excludingPlatformAlarmID: record.platformAlarmID
+      deviceGeneration: record.deviceGeneration
     )
-    _ = try DangguiAlarmStore.remove(reminderID: reminderID)
-    try DangguiAlarmStore.removeTransactions(reminderID: reminderID)
+    if let existing,
+       existing.cancelledThroughRevision >= expectedRevision {
+      if existing.phase != .completed {
+        try await continueCancellation(existing)
+      }
+      return
+    }
+
+    let tombstone = DangguiAlarmCancellationPolicy.makeStopTombstone(
+      record: record,
+      transactions: DangguiAlarmStore.transactions(),
+      existing: existing,
+      nowEpochMs: Self.nowEpochMs
+    )
+    // The tombstone, terminal event identity, and revision high-water mark are
+    // durable before stop/cancel touches the system daemon.
+    try DangguiAlarmStore.upsertCancellation(tombstone)
+    try await continueCancellation(tombstone)
   }
 
   func snooze(
@@ -1829,12 +4107,26 @@ actor DangguiAlarmOperationActor {
     expectedRevision: Int?,
     expectedSession: String?
   ) async throws {
+    try DangguiAlarmStore.assertAuthoritativeStoresHealthy()
+    try await recoverPersistedTransactionsUnlocked()
     guard var record = targetRecord(
       reminderID: reminderID,
       expectedRevision: expectedRevision,
       expectedSession: expectedSession
     ) else {
-      throw DangguiAlarmBridgeError.alarmNotFound
+      // Delayed/repeated system actions are intentionally idempotent. A stale
+      // snooze must not create a successor for a newer reminder revision.
+      return
+    }
+    guard !DangguiAlarmSnoozePolicy.hasUnresolvedTransaction(
+      reminderID: reminderID,
+      deviceGeneration: record.deviceGeneration,
+      transactions: DangguiAlarmStore.transactions()
+    ) else {
+      // An unresolved replacement in this database generation may still own
+      // an alerting predecessor. A stale transaction from a replaced database
+      // must not block the current generation's user action.
+      throw DangguiAlarmOperationError.operationInProgress
     }
 
     let allowedMinutes = [10, 30, 60]
@@ -1845,15 +4137,21 @@ actor DangguiAlarmOperationActor {
           ? record.defaultSnoozeMinutes
           : 10)
     let occurredAtEpochMs = Self.nowEpochMs
-    recordDeliveredIfNeeded(&record)
+    try DangguiAlarmDeliveryRecorder.recordDeliveredIfNeeded(&record)
     let plan = DangguiAlarmSnoozePolicy.makePlan(
       record: record,
       minutes: snoozeMinutes,
       occurredAtEpochMs: occurredAtEpochMs
     )
-    try await discardSupersededTransactions(
-      reminderID: reminderID,
-      preservingPlatformAlarmID: record.platformAlarmID
+    let settledRecoveryIDs = Set(
+      DangguiAlarmStore.transactions().filter {
+        $0.reminderID == reminderID
+          && $0.ownsMissingRecovery == true
+          && $0.phase == .retired
+          && $0.replacement.platformAlarmID.caseInsensitiveCompare(
+            record.platformAlarmID
+          ) == .orderedSame
+      }.map(\.transactionID)
     )
     // beginReplacement writes the pending successor first. Its confirmed
     // phase is the only place allowed to stop the alerting predecessor.
@@ -1862,7 +4160,8 @@ actor DangguiAlarmOperationActor {
       previousPlatformAlarmID: record.platformAlarmID,
       previousRecord: record,
       stopPreviousWhenConfirmed: true,
-      completionEvent: plan.completionEvent
+      completionEvent: plan.completionEvent,
+      supersedingTransactionIDs: settledRecoveryIDs
     )
   }
 
@@ -1873,11 +4172,12 @@ actor DangguiAlarmOperationActor {
   }
 
   private func reconcileAndListUnlocked() async throws -> [DangguiAlarmRecord] {
-    await recoverPersistedTransactionsUnlocked()
+    try DangguiAlarmStore.assertAuthoritativeStoresHealthy()
+    try await recoverPersistedTransactionsUnlocked()
     let alarms = try await DangguiAlarmKitControllerV2.alarms()
     await reconcileUnlocked(alarms, recoverFirst: false)
-    let cancellations = DangguiAlarmStore.cancellations()
-    return DangguiAlarmStore.records().filter {
+    let cancellations = try activeCancellations()
+    return (try activeRecords()).filter {
       DangguiAlarmCancellationPolicy.allowsRepair(
         record: $0,
         cancellations: cancellations
@@ -1895,19 +4195,32 @@ actor DangguiAlarmOperationActor {
 
   func recoverPersistedTransactions() async {
     await withExclusiveOperation {
-      await recoverPersistedTransactionsUnlocked()
+      try? await recoverPersistedTransactionsUnlocked()
     }
   }
 
-  private func recoverPersistedTransactionsUnlocked() async {
-    await recoverPersistedCancellationsUnlocked()
-    let cancellations = DangguiAlarmStore.cancellations()
-    for transaction in DangguiAlarmStore.transactions() {
-      guard DangguiAlarmStore.transactions().contains(where: {
+  private func recoverPersistedTransactionsUnlocked(
+    retireInactiveRoutesFirst: Bool = true
+  ) async throws {
+    try DangguiAlarmStore.assertAuthoritativeStoresHealthy()
+    if retireInactiveRoutesFirst {
+      try await retireInactiveGenerationRoutesUnlocked()
+    }
+    let activeGeneration = try DangguiAlarmStore.activeDeviceGeneration()
+    try await recoverPersistedCancellationsUnlocked(
+      activeDeviceGeneration: activeGeneration
+    )
+    let cancellations = try activeCancellations()
+    for transaction in (try activeTransactions()) {
+      guard (try activeTransactions()).contains(where: {
         $0.transactionID == transaction.transactionID
       }) else { continue }
       let relatedCancellations = cancellations.filter {
         $0.reminderID == transaction.reminderID
+          && DangguiAlarmGeneration.matches(
+            $0.deviceGeneration,
+            transaction.replacement.deviceGeneration
+          )
       }
       if relatedCancellations.contains(where: { $0.phase != .completed }) {
         continue
@@ -1916,15 +4229,22 @@ actor DangguiAlarmOperationActor {
         .map(\.cancelledThroughRevision)
         .max()
       if let cancelledThroughRevision,
-         transaction.replacement.scheduleRevision <= cancelledThroughRevision {
+         transaction.replacement.scheduleRevision <= cancelledThroughRevision,
+         !relatedCancellations.contains(where: {
+           DangguiAlarmCancellationPolicy.permitsSameRevisionRouteReinstall(
+             cancellation: $0,
+             revision: transaction.replacement.scheduleRevision,
+             deviceGeneration: transaction.replacement.deviceGeneration
+           )
+         }) {
         await discardNonAuthoritativeTransaction(transaction)
         continue
       }
-      let current = DangguiAlarmStore.record(reminderID: transaction.reminderID)
+      let current = try activeRecord(reminderID: transaction.reminderID)
       let decision = DangguiAlarmMutationPolicy.scheduleDecision(
         requested: transaction.replacement,
         current: current,
-        transactions: DangguiAlarmStore.transactions(),
+        transactions: try activeTransactions(),
         cancellation: relatedCancellations.first
       )
       if decision == .staleRevision {
@@ -1932,8 +4252,12 @@ actor DangguiAlarmOperationActor {
         continue
       }
       if decision == .revisionConflict {
-        for conflict in DangguiAlarmStore.transactions().filter({
+        for conflict in (try activeTransactions()).filter({
           $0.reminderID == transaction.reminderID
+            && DangguiAlarmGeneration.matches(
+              $0.replacement.deviceGeneration,
+              transaction.replacement.deviceGeneration
+            )
             && $0.replacement.scheduleRevision
               == transaction.replacement.scheduleRevision
         }) {
@@ -1946,7 +4270,17 @@ actor DangguiAlarmOperationActor {
       } catch DangguiAlarmOperationError.capacityDeferred {
         // Keep the pending transaction. A later AlarmKit update, launch, or
         // list operation retries it when the system has capacity again.
+      } catch DangguiAlarmOperationError.expired {
+        // persistMissed already installed the authoritative terminal tombstone.
+        // Never recreate the transaction after that terminal transition.
       } catch {
+        guard DangguiAlarmRecoveryPolicy.shouldPersistRecoveryFailure(
+          transactionID: transaction.transactionID,
+          transactions: (try? activeTransactions()) ?? []
+        ) else {
+          // A terminal path removed this transaction before throwing.
+          continue
+        }
         var record = transaction.replacement
         record.lastState = DangguiAlarmFailureMapper.state(for: .verification)
         try? persistPendingTransactionState(
@@ -1980,8 +4314,15 @@ actor DangguiAlarmOperationActor {
     try? DangguiAlarmStore.removeTransaction(transactionID: transaction.transactionID)
   }
 
-  private func recoverPersistedCancellationsUnlocked() async {
-    let cancellations = DangguiAlarmStore.cancellations()
+  private func recoverPersistedCancellationsUnlocked(
+    activeDeviceGeneration: String?
+  ) async throws {
+    let cancellations = DangguiAlarmStore.cancellations().filter {
+      DangguiAlarmGeneration.matches(
+        $0.deviceGeneration,
+        activeDeviceGeneration
+      )
+    }
     var activeIDs = (try? await DangguiAlarmKitControllerV2.activeIDs()) ?? []
     for cancellation in cancellations where cancellation.phase == .completed {
       for platformID in DangguiAlarmCancellationPolicy.activeTargetIDs(
@@ -2011,6 +4352,7 @@ actor DangguiAlarmOperationActor {
     _ persistedCancellation: DangguiAlarmCancellation
   ) async throws {
     var cancellation = persistedCancellation
+    try assertActiveGeneration(cancellation.deviceGeneration)
     guard cancellation.phase != .completed else { return }
 
     var activeIDs = try await DangguiAlarmKitControllerV2.activeIDs()
@@ -2019,7 +4361,22 @@ actor DangguiAlarmOperationActor {
       activeIDs: activeIDs
     )
     for platformID in targets {
-      try await DangguiAlarmKitControllerV2.cancel(platformAlarmID: platformID)
+      if cancellation.daemonAction == .stop,
+         cancellation.stopPlatformAlarmID.map({
+           $0.caseInsensitiveCompare(platformID) == .orderedSame
+         }) == true {
+        do {
+          try await DangguiAlarmKitControllerV2.stop(platformAlarmID: platformID)
+          let afterStop = try await DangguiAlarmKitControllerV2.activeIDs()
+          if afterStop.contains(platformID.lowercased()) {
+            try await DangguiAlarmKitControllerV2.cancel(platformAlarmID: platformID)
+          }
+        } catch {
+          try await DangguiAlarmKitControllerV2.cancel(platformAlarmID: platformID)
+        }
+      } else {
+        try await DangguiAlarmKitControllerV2.cancel(platformAlarmID: platformID)
+      }
     }
     activeIDs = try await DangguiAlarmKitControllerV2.activeIDs()
     guard DangguiAlarmCancellationPolicy.activeTargetIDs(
@@ -2034,8 +4391,13 @@ actor DangguiAlarmOperationActor {
       try DangguiAlarmStore.upsertCancellation(cancellation)
     }
     if cancellation.phase == .daemonCleared {
-      _ = try DangguiAlarmStore.remove(reminderID: cancellation.reminderID)
-      try DangguiAlarmStore.removeTransactions(reminderID: cancellation.reminderID)
+      if let completionEvent = cancellation.completionEvent {
+        try DangguiAlarmStore.appendEventDurably(completionEvent)
+      }
+      try DangguiAlarmStore.removeRecordsAndTransactions(
+        reminderID: cancellation.reminderID,
+        platformAlarmIDs: Set(cancellation.platformAlarmIDs)
+      )
       try cancellation.advance(to: .mirrorRemoved, nowEpochMs: Self.nowEpochMs)
       try DangguiAlarmStore.upsertCancellation(cancellation)
     }
@@ -2050,20 +4412,50 @@ actor DangguiAlarmOperationActor {
     _ suppliedAlarms: [Alarm],
     recoverFirst: Bool
   ) async {
+    guard (try? DangguiAlarmStore.assertAuthoritativeStoresHealthy()) != nil else {
+      return
+    }
     if recoverFirst {
-      await recoverPersistedTransactionsUnlocked()
+      guard (try? await recoverPersistedTransactionsUnlocked()) != nil else {
+        return
+      }
     }
     let alarms = (try? await DangguiAlarmKitControllerV2.alarms()) ?? suppliedAlarms
     let remoteByID = Dictionary(
       uniqueKeysWithValues: alarms.map { ($0.id.uuidString.lowercased(), $0) }
     )
     let nowEpochMs = Self.nowEpochMs
-    let pendingReminderIDs = Set(
-      DangguiAlarmStore.transactions().map(\.reminderID)
+    guard let activeTransactions = try? activeTransactions(),
+          let cancellations = try? activeCancellations(),
+          let records = try? activeRecords() else {
+      return
+    }
+    let orphanPlatformAlarmIDs = DangguiAlarmSystemSnapshotPolicy
+      .orphanPlatformAlarmIDs(
+        remotePlatformAlarmIDs: Set(remoteByID.keys),
+        records: records,
+        transactions: activeTransactions,
+        cancellations: cancellations
+      )
+    for platformAlarmID in orphanPlatformAlarmIDs {
+      do {
+        try await DangguiAlarmKitControllerV2.cancel(
+          platformAlarmID: platformAlarmID
+        )
+      } catch {
+        // No mirror is fabricated for an unknown system route. A later
+        // AlarmKit update or launch re-observes and retries the orphan cleanup.
+      }
+    }
+    let pendingReminderGenerations = Set(
+      activeTransactions.map {
+        DangguiAlarmGeneration.scopedReminderKey(
+          reminderID: $0.reminderID,
+          deviceGeneration: $0.replacement.deviceGeneration
+        )
+      }
     )
-    let cancellations = DangguiAlarmStore.cancellations()
-
-    for var record in DangguiAlarmStore.records() {
+    for var record in records {
       if DangguiAlarmCancellationPolicy.isSupersededByCompletedCancellation(
         record: record,
         cancellations: cancellations
@@ -2084,7 +4476,13 @@ actor DangguiAlarmOperationActor {
       if let alarm = remoteByID[record.platformAlarmID.lowercased()] {
         let state = DangguiAlarmKitControllerV2.stateName(alarm.state)
         if state == "ringing" {
-          recordDeliveredIfNeeded(&record)
+          do {
+            try DangguiAlarmDeliveryRecorder.recordDeliveredIfNeeded(&record)
+          } catch {
+            // Do not persist a false `firedEventRecorded` marker. AlarmKit's
+            // next update/reconciliation can retry the stable business event.
+            continue
+          }
         }
         if record.lastState != state {
           record.lastState = state
@@ -2093,29 +4491,47 @@ actor DangguiAlarmOperationActor {
         continue
       }
 
-      if record.triggerAtEpochMs <= nowEpochMs {
-        let delayedByMs = max(0, nowEpochMs - record.triggerAtEpochMs)
-        if DangguiAlarmRecoveryPolicy.isExpired(
-          triggerAtEpochMs: record.triggerAtEpochMs,
-          nowEpochMs: nowEpochMs
-        ) {
-          persistMissed(record, nowEpochMs: nowEpochMs)
-        } else {
-          recordDeliveredIfNeeded(&record, delayedByMs: delayedByMs)
-          DangguiAlarmStore.appendEvent(
-            DangguiAlarmEvent(type: .stopped, record: record, delayedByMs: delayedByMs)
-          )
-          _ = try? DangguiAlarmStore.remove(reminderID: record.reminderID)
-        }
+      // A durable transaction already owns this missing alarm. Its recovery
+      // pass above either completed or deliberately retained it for retry.
+      if record.firedEventRecorded {
+        // Ringing was observed earlier, but AlarmKit absence still does not
+        // prove a Stop action. Retire without manufacturing a stopped event.
+        try? await persistObservedRetirement(record, nowEpochMs: nowEpochMs)
         continue
       }
+      let scopedReminderKey = DangguiAlarmGeneration.scopedReminderKey(
+        reminderID: record.reminderID,
+        deviceGeneration: record.deviceGeneration
+      )
+      guard !pendingReminderGenerations.contains(scopedReminderKey) else { continue }
 
-      guard !pendingReminderIDs.contains(record.reminderID) else { continue }
-      do {
-        try await beginReplacement(record, previousPlatformAlarmID: nil)
-      } catch {
-        // beginReplacement persists a repair state and diagnostic. Keep the
-        // mirror so the next reconciliation can retry rather than dropping it.
+      switch DangguiAlarmRecoveryPolicy.missingAlarmDecision(
+        triggerAtEpochMs: record.triggerAtEpochMs,
+        nowEpochMs: nowEpochMs,
+        observedDelivered: record.firedEventRecorded
+      ) {
+      case .missed:
+        try? await persistMissed(record, nowEpochMs: nowEpochMs)
+      case .retireObserved:
+        // AlarmKit absence after an observed ring does not prove the user
+        // pressed Stop. Retire the mirror without fabricating that action.
+        try? await persistObservedRetirement(record, nowEpochMs: nowEpochMs)
+      case .recoverLate, .recoverScheduled:
+        do {
+          // The transaction is the atomic recovery owner. It is written before
+          // AlarmKit is touched and retained through the terminal decision,
+          // avoiding both a crash-prone marker and repeated audible repairs.
+          try await beginReplacement(
+            record,
+            previousPlatformAlarmID: nil,
+            ownsMissingRecovery: true
+          )
+        } catch {
+          // Apple classifies a missing persisted one-shot alarm as fired, but
+          // absence does not prove that its alert UI, audio, or haptics reached
+          // the user. Keep the mirror during Danggui's bounded recovery window
+          // rather than manufacturing stronger diagnostic milestones.
+        }
       }
     }
   }
@@ -2125,7 +4541,9 @@ actor DangguiAlarmOperationActor {
     previousPlatformAlarmID: String?,
     previousRecord: DangguiAlarmRecord? = nil,
     stopPreviousWhenConfirmed: Bool = false,
-    completionEvent: DangguiAlarmEvent? = nil
+    completionEvent: DangguiAlarmEvent? = nil,
+    ownsMissingRecovery: Bool = false,
+    supersedingTransactionIDs: Set<String> = []
   ) async throws {
     var pendingRecord = requestedRecord
     pendingRecord.lastState = "pending"
@@ -2135,9 +4553,18 @@ actor DangguiAlarmOperationActor {
       previousPlatformAlarmID: previousPlatformAlarmID,
       previousRecord: previousRecord,
       stopPreviousWhenConfirmed: stopPreviousWhenConfirmed,
-      completionEvent: completionEvent
+      completionEvent: completionEvent,
+      ownsMissingRecovery: ownsMissingRecovery
     )
-    try DangguiAlarmStore.upsertTransaction(transaction)
+    if supersedingTransactionIDs.isEmpty {
+      try DangguiAlarmStore.upsertTransaction(transaction)
+    } else {
+      try DangguiAlarmStore.replaceTransactionsAtomically(
+        reminderID: requestedRecord.reminderID,
+        removingTransactionIDs: supersedingTransactionIDs,
+        adding: transaction
+      )
+    }
     try await continueTransaction(transaction)
   }
 
@@ -2145,56 +4572,75 @@ actor DangguiAlarmOperationActor {
     _ persistedTransaction: DangguiAlarmTransaction
   ) async throws {
     var transaction = persistedTransaction
+    try assertActiveGeneration(transaction.replacement.deviceGeneration)
+    let routeRetirement = DangguiAlarmStore.cancellation(
+      reminderID: transaction.reminderID,
+      deviceGeneration: transaction.replacement.deviceGeneration
+    )
+    if DangguiAlarmCancellationPolicy.transactionOwnsSameRevisionRouteReinstall(
+      transaction: transaction,
+      cancellation: routeRetirement
+    ) {
+      // The transaction was persisted before this point. Removing the
+      // route-only marker now is therefore crash safe: a process death before
+      // AlarmKit scheduling leaves a pending owner that startup can retry.
+      // Business Stop/Cancel/Missed tombstones never satisfy this predicate.
+      try DangguiAlarmStore.removeCancellation(
+        reminderID: transaction.reminderID,
+        deviceGeneration: transaction.replacement.deviceGeneration
+      )
+    }
     let now = Date()
     let nowEpochMs = Int64(now.timeIntervalSince1970 * 1_000)
+    var activeIDs = try await DangguiAlarmKitControllerV2.activeIDs()
+    let replacementID = transaction.replacement.platformAlarmID.lowercased()
+
+    if transaction.ownsMissingRecovery == true,
+       let current = DangguiAlarmStore.record(reminderID: transaction.reminderID),
+       current.platformAlarmID.caseInsensitiveCompare(
+         transaction.replacement.platformAlarmID
+       ) == .orderedSame,
+       current.firedEventRecorded {
+      if activeIDs.contains(replacementID) {
+        // A ringing alarm remains system-owned until an explicit Stop/Snooze.
+        return
+      }
+      // Delivery was observed, but disappearance is not proof of Stop.
+      try await persistObservedRetirement(current, nowEpochMs: nowEpochMs)
+      return
+    }
+
     if DangguiAlarmRecoveryPolicy.isExpired(
       triggerAtEpochMs: transaction.replacement.triggerAtEpochMs,
       nowEpochMs: nowEpochMs
     ) {
-      let activeIDs = (try? await DangguiAlarmKitControllerV2.activeIDs()) ?? []
-      let candidateIDs = [
-        transaction.replacement.platformAlarmID,
-        transaction.previousPlatformAlarmID,
-      ].compactMap { $0?.lowercased() }
-      for platformID in candidateIDs where activeIDs.contains(platformID) {
-        try? await DangguiAlarmKitControllerV2.cancel(platformAlarmID: platformID)
-      }
       try persistCompletionEventIfNeeded(transaction)
-      persistMissed(transaction.replacement, nowEpochMs: nowEpochMs)
-      try? DangguiAlarmStore.removeTransaction(transactionID: transaction.transactionID)
+      try await persistMissed(
+        transaction.replacement,
+        nowEpochMs: nowEpochMs
+      )
       throw DangguiAlarmOperationError.expired
     }
 
-    var activeIDs = try await DangguiAlarmKitControllerV2.activeIDs()
-    let replacementID = transaction.replacement.platformAlarmID.lowercased()
-
     if transaction.phase != .pending, !activeIDs.contains(replacementID) {
-      if transaction.replacement.triggerAtEpochMs <= nowEpochMs {
-        // Apple documents that a one-shot alarm disappears from `alarms` after
-        // it fires and stops. A previously scheduled transaction must therefore
-        // be finalized, not recreated as a duplicate late alarm.
-        var delivered = transaction.replacement
-        try persistCompletionEventIfNeeded(transaction)
-        recordDeliveredIfNeeded(
-          &delivered,
-          delayedByMs: max(0, nowEpochMs - delivered.triggerAtEpochMs)
-        )
-        DangguiAlarmStore.appendEvent(
-          DangguiAlarmEvent(type: .stopped, record: delivered)
-        )
-        if let previous = transaction.previousPlatformAlarmID?.lowercased(),
-           activeIDs.contains(previous) {
-          try? await DangguiAlarmKitControllerV2.cancel(platformAlarmID: previous)
-        }
-        _ = try? DangguiAlarmStore.remove(reminderID: delivered.reminderID)
-        try? DangguiAlarmStore.removeTransaction(transactionID: transaction.transactionID)
+      if !DangguiAlarmRecoveryPolicy.shouldRetryMissingTransaction(
+        ownsMissingRecovery: transaction.ownsMissingRecovery == true,
+        triggerAtEpochMs: transaction.replacement.triggerAtEpochMs,
+        nowEpochMs: nowEpochMs
+      ) {
+        // A transaction-owned repair was scheduled once but disappeared after
+        // its due time. Repeating it could create an audible duplicate; retain
+        // ownership until the strict 15-minute expiry path records `missed`.
         return
       }
-
       do {
+        let triggerDate = DangguiAlarmRecoveryPolicy.effectiveTriggerDate(
+          triggerAtEpochMs: transaction.replacement.triggerAtEpochMs,
+          now: now
+        )
         try await DangguiAlarmKitControllerV2.schedule(
           transaction.replacement,
-          triggerDate: transaction.replacement.triggerDate
+          triggerDate: triggerDate
         )
         activeIDs = try await DangguiAlarmKitControllerV2.activeIDs()
       } catch {
@@ -2279,13 +4725,21 @@ actor DangguiAlarmOperationActor {
 
     if transaction.phase == .retired {
       try persistCompletionEventIfNeeded(transaction)
+      // Registration is diagnostic only. A lossy journal write must never
+      // retain a completed transaction or block later reminder revisions.
       DangguiAlarmStore.appendEvent(
         DangguiAlarmEvent(
           type: .registered,
           record: transaction.replacement,
-          state: "scheduled"
+          state: "scheduled",
+          usesStableID: true
         )
       )
+      if transaction.ownsMissingRecovery == true {
+        // Keep the journal through delivery/missed/cancel/edit resolution. A
+        // mere scheduled snapshot cannot prove that later delivery occurred.
+        return
+      }
       try DangguiAlarmStore.removeTransaction(transactionID: transaction.transactionID)
     }
   }
@@ -2320,6 +4774,13 @@ actor DangguiAlarmOperationActor {
     _ state: String,
     transaction: DangguiAlarmTransaction
   ) throws {
+    guard transaction.phase == .pending
+      || transaction.phase == .replacementScheduled else {
+      // Confirmed/retired phases have already established a scheduled mirror.
+      // A later daemon repair failure is diagnostic and must not rewrite that
+      // phase image into a semantically impossible pre-confirmation state.
+      return
+    }
     var updatedTransaction = transaction
     updatedTransaction.replacement.lastState = state
     try DangguiAlarmStore.upsertTransaction(updatedTransaction)
@@ -2338,44 +4799,47 @@ actor DangguiAlarmOperationActor {
   private func persistMissed(
     _ record: DangguiAlarmRecord,
     nowEpochMs: Int64
-  ) {
-    var missed = record
-    missed.lastState = DangguiAlarmFailureMapper.state(for: .expired)
-    DangguiAlarmStore.appendEvent(
-      DangguiAlarmEvent(
-        type: .missed,
-        record: missed,
-        state: missed.lastState,
-        delayedByMs: max(0, nowEpochMs - missed.triggerAtEpochMs)
-      )
+  ) async throws {
+    let tombstone = DangguiAlarmCancellationPolicy.makeMissedTombstone(
+      record: record,
+      currentMirror: DangguiAlarmStore.record(reminderID: record.reminderID),
+      transactions: DangguiAlarmStore.transactions(),
+      existing: DangguiAlarmStore.cancellation(
+        reminderID: record.reminderID,
+        deviceGeneration: record.deviceGeneration
+      ),
+      nowEpochMs: nowEpochMs
     )
-    _ = try? DangguiAlarmStore.remove(reminderID: missed.reminderID)
-    try? DangguiAlarmStore.removeTransactions(reminderID: missed.reminderID)
+    // Terminal ownership is durable before any AlarmKit cancellation. A
+    // daemon failure leaves this pending tombstone for launch-time recovery.
+    try DangguiAlarmStore.upsertCancellation(tombstone)
+    do {
+      try await continueCancellation(tombstone)
+    } catch {
+      // The tombstone remains authoritative and blocks revision resurrection.
+    }
   }
 
-  private func recordDeliveredIfNeeded(
-    _ record: inout DangguiAlarmRecord,
-    delayedByMs: Int64? = nil
-  ) {
-    guard !record.firedEventRecorded else { return }
-    DangguiAlarmStore.appendEvent(
-      DangguiAlarmEvent(
-        type: .delivered,
-        record: record,
-        state: "ringing",
-        delayedByMs: delayedByMs
-      )
+  private func persistObservedRetirement(
+    _ record: DangguiAlarmRecord,
+    nowEpochMs: Int64
+  ) async throws {
+    let tombstone = DangguiAlarmCancellationPolicy.makeObservedRetirementTombstone(
+      record: record,
+      currentMirror: DangguiAlarmStore.record(reminderID: record.reminderID),
+      transactions: DangguiAlarmStore.transactions(),
+      existing: DangguiAlarmStore.cancellation(
+        reminderID: record.reminderID,
+        deviceGeneration: record.deviceGeneration
+      ),
+      nowEpochMs: nowEpochMs
     )
-    DangguiAlarmStore.appendEvent(
-      DangguiAlarmEvent(
-        type: .systemAlert,
-        record: record,
-        state: "ringing",
-        delayedByMs: delayedByMs
-      )
-    )
-    record.firedEventRecorded = true
-    try? DangguiAlarmStore.upsert(record)
+    try DangguiAlarmStore.upsertCancellation(tombstone)
+    do {
+      try await continueCancellation(tombstone)
+    } catch {
+      // Recovery owns any raced daemon registration; no stopped event exists.
+    }
   }
 
   private func targetRecord(
@@ -2383,15 +4847,12 @@ actor DangguiAlarmOperationActor {
     expectedRevision: Int?,
     expectedSession: String?
   ) -> DangguiAlarmRecord? {
-    let current = DangguiAlarmStore.record(reminderID: reminderID)
-    guard DangguiAlarmMutationPolicy.isAuthoritativeAction(
+    guard let expectedRevision, let expectedSession else { return nil }
+    return DangguiAlarmStore.authoritativeActionRecord(
       reminderID: reminderID,
-      expectedRevision: expectedRevision,
-      expectedPlatformAlarmID: expectedSession,
-      current: current,
-      cancellation: DangguiAlarmStore.cancellation(reminderID: reminderID)
-    ) else { return nil }
-    return current
+      scheduleRevision: expectedRevision,
+      platformAlarmID: expectedSession
+    )
   }
 
   private func discardSupersededTransactions(
@@ -2571,15 +5032,24 @@ enum DangguiAlarmKitControllerV2 {
       metadata: DangguiAlarmMetadata(
         reminderID: record.reminderID,
         taskID: record.taskID,
-        scheduleRevision: record.scheduleRevision
+        scheduleRevision: record.scheduleRevision,
+        deviceGeneration: record.deviceGeneration
       ),
       tintColor: Color(red: 0.46, green: 0.55, blue: 0.46)
     )
     return Configuration.alarm(
       schedule: .fixed(triggerDate),
       attributes: attributes,
-      stopIntent: DangguiStopAlarmIntent(platformAlarmID: record.platformAlarmID),
-      secondaryIntent: DangguiSnoozeAlarmIntent(platformAlarmID: record.platformAlarmID)
+      stopIntent: DangguiStopAlarmIntent(
+        platformAlarmID: record.platformAlarmID,
+        reminderID: record.reminderID,
+        scheduleRevision: record.scheduleRevision
+      ),
+      secondaryIntent: DangguiSnoozeAlarmIntent(
+        platformAlarmID: record.platformAlarmID,
+        reminderID: record.reminderID,
+        scheduleRevision: record.scheduleRevision
+      )
     )
   }
 

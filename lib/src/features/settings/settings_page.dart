@@ -14,6 +14,7 @@ import '../../domain/models.dart';
 import '../../services/backup/automatic_backup_coordinator.dart';
 import '../../services/backup/backup_service.dart';
 import '../../services/export/portable_export_service.dart';
+import '../../services/export/temporary_share_artifact.dart';
 import '../../services/notifications/native_alarm_platform.dart';
 import '../../services/notifications/notification_coordinator.dart';
 import '../../ui/components/components.dart';
@@ -29,6 +30,10 @@ typedef BackupRestorer = Future<RestoreResult> Function(
   String? passphrase,
   RestoreMode mode,
 });
+
+@visibleForTesting
+bool manualBackupShareWasAccepted(ShareResult? result) =>
+    result != null && result.status != ShareResultStatus.dismissed;
 
 const _coreBackupTables = <String>[
   'tasks',
@@ -661,19 +666,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       final backup = await ref
           .read(backupServiceProvider)
           .create(passphrase: passphrase);
-      if (!mounted) return;
-      final renderBox = context.findRenderObject() as RenderBox?;
-      final origin = renderBox == null
-          ? null
-          : renderBox.localToGlobal(Offset.zero) & renderBox.size;
-      await SharePlus.instance.share(
-        ShareParams(
-          files: <XFile>[XFile(backup.file.path)],
-          subject: _SettingsCopy.of(context).backupShareSubject,
-          sharePositionOrigin: origin,
-        ),
+      final shareResult = await withDangguiTemporaryShareArtifact<ShareResult?>(
+        file: backup.file,
+        action: () async {
+          if (!mounted) return null;
+          final renderBox = context.findRenderObject() as RenderBox?;
+          final origin = renderBox == null
+              ? null
+              : renderBox.localToGlobal(Offset.zero) & renderBox.size;
+          return SharePlus.instance.share(
+            ShareParams(
+              files: <XFile>[XFile(backup.file.path)],
+              subject: _SettingsCopy.of(context).backupShareSubject,
+              sharePositionOrigin: origin,
+            ),
+          );
+        },
       );
-      if (mounted) {
+      if (mounted && manualBackupShareWasAccepted(shareResult)) {
         _showMessage(
           AppLocalizations.of(context).backupCreated,
           duration: dangguiSnackBarBriefDuration,
@@ -695,17 +705,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       final result = await ref
           .read(portableExportServiceProvider)
           .export(PortableExportRequest.full());
-      if (!mounted) return;
-      final renderBox = context.findRenderObject() as RenderBox?;
-      final origin = renderBox == null
-          ? null
-          : renderBox.localToGlobal(Offset.zero) & renderBox.size;
-      await SharePlus.instance.share(
-        ShareParams(
-          files: <XFile>[XFile(result.file.path)],
-          subject: AppLocalizations.of(context).exportAllData,
-          sharePositionOrigin: origin,
-        ),
+      await withDangguiTemporaryShareArtifact(
+        file: result.file,
+        action: () async {
+          if (!mounted) return;
+          final renderBox = context.findRenderObject() as RenderBox?;
+          final origin = renderBox == null
+              ? null
+              : renderBox.localToGlobal(Offset.zero) & renderBox.size;
+          await SharePlus.instance.share(
+            ShareParams(
+              files: <XFile>[XFile(result.file.path)],
+              subject: AppLocalizations.of(context).exportAllData,
+              sharePositionOrigin: origin,
+            ),
+          );
+        },
       );
     } catch (error) {
       if (mounted) {

@@ -14,6 +14,13 @@ class AlarmActionReceiver : BroadcastReceiver() {
                 null
             }
         val sessionId = intent.getStringExtra(AlarmActions.EXTRA_SESSION_ID)
+        val rawDeviceGeneration = intent.getStringExtra(AlarmActions.EXTRA_DEVICE_GENERATION)
+        val deviceGeneration = rawDeviceGeneration?.let {
+            AlarmIdentityPolicy.canonicalDeviceGeneration(it) ?: return
+        }
+        if (!AlarmStore(context.applicationContext).isActiveDeviceGeneration(deviceGeneration)) {
+            return
+        }
         when (intent.action) {
             AlarmActions.ACTION_STOP ->
                 AlarmActions.stop(

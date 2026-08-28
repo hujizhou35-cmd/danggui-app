@@ -123,6 +123,45 @@ void main() {
     );
   });
 
+  testWidgets('localizes the brand seal semantic label in all four locales', (
+    tester,
+  ) async {
+    final router = GoRouter(
+      initialLocation: '/startup',
+      routes: <RouteBase>[
+        GoRoute(
+          path: '/startup',
+          builder: (context, state) => const StartupPage(),
+        ),
+        GoRoute(
+          path: '/tasks',
+          builder: (context, state) => const SizedBox.shrink(),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    final semantics = tester.ensureSemantics();
+    for (final (locale, label) in const <(Locale, String)>[
+      (Locale('zh'), '当归印章'),
+      (Locale('en'), 'Danggui seal'),
+      (Locale('ja'), '当帰の印章'),
+      (Locale('ru'), 'Печать Danggui'),
+    ]) {
+      await tester.pumpWidget(_testApp(container, router, locale: locale));
+      await tester.pump();
+      expect(
+        tester
+            .getSemantics(
+              find.byKey(const ValueKey<String>('startup-brand-seal')),
+            )
+            .label,
+        label,
+      );
+    }
+    semantics.dispose();
+  });
+
   testWidgets(
     'even a zero duration renders one brand frame before navigation',
     (tester) async {
@@ -310,12 +349,16 @@ Future<void> _waitForArtworkFrame(WidgetTester tester) async {
   );
 }
 
-Widget _testApp(ProviderContainer container, GoRouter router) {
+Widget _testApp(
+  ProviderContainer container,
+  GoRouter router, {
+  Locale locale = const Locale('zh'),
+}) {
   return UncontrolledProviderScope(
     container: container,
     child: MaterialApp.router(
       routerConfig: router,
-      locale: const Locale('zh'),
+      locale: locale,
       supportedLocales: AppLocalizations.supportedLocales,
       localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
         AppLocalizations.delegate,

@@ -850,8 +850,15 @@ void main() {
     final schedulesBefore = notificationGateway.scheduled.length;
     expect(notificationGateway.scheduled.last.body, 'Danggui task reminder');
 
+    final currentSettings = container
+        .read(appStoreProvider)
+        .requireValue
+        .settings;
     await controller.saveSettings(
-      const AppSettingsModel(localeMode: LocaleMode.zhHans),
+      AppSettingsModel(
+        localeMode: LocaleMode.zhHans,
+        rowVersion: currentSettings.rowVersion,
+      ),
     );
 
     expect(notificationGateway.scheduled.length, greaterThan(schedulesBefore));
@@ -1051,6 +1058,45 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
+
+  testWidgets('notification navigation intent opens detail and safe fallback', (
+    tester,
+  ) async {
+    late String taskId;
+    await tester.runAsync(() async {
+      taskId = await controller.createTask(title: '通知点击目标');
+    });
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const DangguiApp(),
+      ),
+    );
+    await tester.pump();
+    container.read(routerProvider).go('/tasks');
+    await tester.pump(const Duration(milliseconds: 300));
+
+    container.read(notificationOpenIntentProvider.notifier).dispatch(taskId);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(
+      container.read(routerProvider).state.uri.path,
+      '/tasks/${Uri.encodeComponent(taskId)}',
+    );
+    expect(find.byType(TaskDetailPage), findsOneWidget);
+
+    container.read(notificationOpenIntentProvider.notifier).dispatch(null);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.byType(TaskDetailPage), findsNothing);
+    expect(container.read(routerProvider).state.uri.path, '/tasks');
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+  });
 }
 
 class _FakeNotificationSettingsLauncher

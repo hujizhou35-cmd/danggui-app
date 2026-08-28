@@ -37,6 +37,8 @@ final portableExportServiceProvider = Provider<PortableExportService>((ref) {
   );
 });
 
+typedef PortableExportReservationCreator = Future<void> Function(File file);
+
 /// Creates local-readable, versioned exports without performing network I/O.
 ///
 /// Output is always written below [readTemporaryDirectory]. A caller may then
@@ -48,13 +50,30 @@ final class PortableExportService {
     required this.readTemporaryDirectory,
     DateTime Function()? nowUtc,
     String Function()? operationId,
+    PortableExportReservationCreator? createReservation,
+    this.maximumGeneratedEntryBytes = _maximumEntryBytes,
+    this.maximumGeneratedUncompressedBytes = _maximumArchiveBytes,
   }) : nowUtc = nowUtc ?? (() => DateTime.now().toUtc()),
-       operationId = operationId ?? const Uuid().v4;
+       operationId = operationId ?? const Uuid().v4,
+       createReservation =
+           createReservation ?? _createExclusiveExportReservation {
+    if (maximumGeneratedEntryBytes <= 0 ||
+        maximumGeneratedUncompressedBytes <= 0 ||
+        maximumGeneratedEntryBytes > maximumGeneratedUncompressedBytes) {
+      throw ArgumentError(
+        'Portable export generation limits must be positive and the per-entry '
+        'limit cannot exceed the total uncompressed limit.',
+      );
+    }
+  }
 
   final Future<DangguiDatabase> Function() readDatabase;
   final Future<Directory> Function() readTemporaryDirectory;
   final DateTime Function() nowUtc;
   final String Function() operationId;
+  final PortableExportReservationCreator createReservation;
+  final int maximumGeneratedEntryBytes;
+  final int maximumGeneratedUncompressedBytes;
 
   Future<PortableExportResult> export(PortableExportRequest request) async {
     final createdAt = nowUtc().toUtc();
@@ -85,6 +104,21 @@ final class PortableExportService {
       'markdown/past.md': _utf8Bytes(_renderPast(snapshot, request)),
       'markdown/tasks.md': _utf8Bytes(_renderTasks(snapshot, request)),
     };
+    var totalGeneratedBytes = 0;
+    for (final entry in payloadEntries.entries) {
+      if (entry.value.length > maximumGeneratedEntryBytes) {
+        throw FileSystemException(
+          'Portable export entry exceeds its generation limit.',
+          entry.key,
+        );
+      }
+      totalGeneratedBytes += entry.value.length;
+      if (totalGeneratedBytes > maximumGeneratedUncompressedBytes) {
+        throw const FileSystemException(
+          'Portable export content exceeds its uncompressed generation limit.',
+        );
+      }
+    }
     final fileMetadata = <Map<String, Object?>>[];
     for (final entry in payloadEntries.entries) {
       fileMetadata.add(<String, Object?>{
@@ -121,6 +155,12 @@ final class PortableExportService {
     if (manifestBytes.length > _maximumManifestBytes) {
       throw const FileSystemException('Portable export manifest is too large.');
     }
+    if (totalGeneratedBytes + manifestBytes.length >
+        maximumGeneratedUncompressedBytes) {
+      throw const FileSystemException(
+        'Portable export content exceeds its uncompressed generation limit.',
+      );
+    }
 
     final archive = Archive()
       ..addFile(ArchiveFile.bytes(_manifestPath, manifestBytes));
@@ -149,19 +189,26 @@ final class PortableExportService {
       PortableExportScopeKind.noteIds => 'notes',
       PortableExportScopeKind.noteFolder => 'folder-notes',
     };
-    final output = File(
-      p.join(
-        exportDirectory.path,
-        'danggui-$scopeName-$stamp-${id.substring(0, 8)}.zip',
-      ),
+    final allocation = await _reserveUniqueExportPath(
+      exportDirectory: exportDirectory,
+      baseName: 'danggui-$scopeName-$stamp-${id.substring(0, 8)}',
+      createReservation: createReservation,
     );
+    final output = allocation.output;
+    final reservation = allocation.reservation;
     final partial = File('${output.path}.partial');
     try {
+      if (await partial.exists()) await partial.delete();
       await partial.writeAsBytes(archiveBytes, flush: true);
       final verified = await PortableExportVerifier.verify(partial);
       if (verified.manifest['contentSha256'] != contentSha256) {
         throw const FileSystemException(
           'Portable export verification returned a different content hash.',
+        );
+      }
+      if (await output.exists()) {
+        throw const FileSystemException(
+          'Portable export destination became occupied before publication.',
         );
       }
       await partial.rename(output.path);
@@ -172,10 +219,55 @@ final class PortableExportService {
       );
     } on Object {
       if (await partial.exists()) await partial.delete();
-      if (await output.exists()) await output.delete();
       rethrow;
+    } finally {
+      if (await reservation.exists()) await reservation.delete();
     }
   }
+}
+
+Future<_ReservedExportPath> _reserveUniqueExportPath({
+  required Directory exportDirectory,
+  required String baseName,
+  required PortableExportReservationCreator createReservation,
+}) async {
+  for (var attempt = 1; attempt <= 10000; attempt++) {
+    final suffix = attempt == 1 ? '' : '-$attempt';
+    final output = File(p.join(exportDirectory.path, '$baseName$suffix.zip'));
+    final reservation = File('${output.path}.reservation');
+    try {
+      await createReservation(reservation);
+    } on FileSystemException {
+      if (await _pathIsOccupied(reservation.path) ||
+          await _pathIsOccupied(output.path)) {
+        continue;
+      }
+      rethrow;
+    }
+    if (await output.exists()) {
+      await reservation.delete();
+      continue;
+    }
+    return _ReservedExportPath(output: output, reservation: reservation);
+  }
+  throw const FileSystemException(
+    'Could not reserve a unique portable export destination.',
+  );
+}
+
+Future<void> _createExclusiveExportReservation(File file) async {
+  await file.create(exclusive: true);
+}
+
+Future<bool> _pathIsOccupied(String path) async =>
+    await FileSystemEntity.type(path, followLinks: false) !=
+    FileSystemEntityType.notFound;
+
+final class _ReservedExportPath {
+  const _ReservedExportPath({required this.output, required this.reservation});
+
+  final File output;
+  final File reservation;
 }
 
 /// Defensive verifier for archives produced by [PortableExportService].
@@ -192,8 +284,10 @@ final class PortableExportVerifier {
     }
     final archiveBytes = await file.readAsBytes();
     late final Archive archive;
+    late final ZipDecoder decoder;
     try {
-      archive = ZipDecoder().decodeBytes(archiveBytes, verify: true);
+      decoder = ZipDecoder();
+      archive = decoder.decodeBytes(archiveBytes);
     } on Object {
       throw const FormatException('Portable export ZIP is damaged.');
     }
@@ -205,6 +299,15 @@ final class PortableExportVerifier {
       'markdown/past.md',
       'markdown/tasks.md',
     };
+    final centralDirectoryNames = decoder.directory.fileHeaders
+        .map((header) => header.filename)
+        .toList(growable: false);
+    if (centralDirectoryNames.length != requiredEntries.length ||
+        centralDirectoryNames.toSet().length != centralDirectoryNames.length) {
+      throw const FormatException(
+        'Portable export has duplicate or unexpected entries.',
+      );
+    }
     final files = <String, ArchiveFile>{};
     var totalUncompressed = 0;
     for (final entry in archive.files) {
@@ -223,6 +326,12 @@ final class PortableExportVerifier {
       if (totalUncompressed > _maximumArchiveBytes) {
         throw const FormatException(
           'Portable export expands beyond its limit.',
+        );
+      }
+      final expectedCrc = entry.crc32;
+      if (expectedCrc == null || getCrc32(entry.content) != expectedCrc) {
+        throw const FormatException(
+          'Portable export entry checksum is invalid.',
         );
       }
       files[entry.name] = entry;

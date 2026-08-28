@@ -9,6 +9,7 @@ import '../../application/app_state.dart';
 import '../../application/app_store.dart';
 import '../../core/theme/theme.dart';
 import '../../services/export/portable_export_service.dart';
+import '../../services/export/temporary_share_artifact.dart';
 import '../../ui/components/components.dart';
 import '../tasks/task_creation_sheet.dart';
 
@@ -361,8 +362,17 @@ class _NotesPageState extends ConsumerState<NotesPage> {
     final result = await ref
         .read(portableExportServiceProvider)
         .export(PortableExportRequest.notesByIds(notes.map((note) => note.id)));
-    await SharePlus.instance.share(
-      ShareParams(subject: subject, files: <XFile>[XFile(result.file.path)]),
+    await withDangguiTemporaryShareArtifact(
+      file: result.file,
+      action: () async {
+        if (!mounted) return;
+        await SharePlus.instance.share(
+          ShareParams(
+            subject: subject,
+            files: <XFile>[XFile(result.file.path)],
+          ),
+        );
+      },
     );
   }
 

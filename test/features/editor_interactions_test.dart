@@ -6,6 +6,7 @@ import 'package:danggui/src/core/theme/theme.dart';
 import 'package:danggui/src/data/database.dart';
 import 'package:danggui/src/features/notes/notes_page.dart';
 import 'package:danggui/src/features/past/past_page.dart';
+import 'package:danggui/src/services/export/portable_export_service.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -159,6 +160,117 @@ void main() {
     expect(writes, 0);
     expect(find.text('已保存'), findsOneWidget);
     expect(find.byIcon(Icons.check_rounded), findsOneWidget);
+  });
+
+  testWidgets('Past all export waits for the pending draft to persist', (
+    tester,
+  ) async {
+    _setPhoneSize(tester);
+    final write = Completer<void>();
+    final saves = <String>[];
+    final exports = <PortableExportRequest>[];
+    await tester.pumpWidget(
+      _testApp(
+        container,
+        PastPage(
+          autosaveDelay: const Duration(seconds: 10),
+          onPersist: (text) async {
+            saves.add(text);
+            await write.future;
+          },
+          exportRequestOverride: (request) async => exports.add(request),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.enterText(
+      find.byKey(const Key('past-continuous-document-editor')),
+      '还没有到自动保存时间的最新草稿',
+    );
+    await tester.tap(find.bySemanticsLabel('导出'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '导出'));
+    await tester.pump();
+
+    expect(saves, <String>['还没有到自动保存时间的最新草稿']);
+    expect(exports, isEmpty);
+
+    write.complete();
+    await tester.pumpAndSettle();
+    expect(exports, hasLength(1));
+    expect(exports.single.kind, PortableExportScopeKind.pastAll);
+  });
+
+  testWidgets('Past does not export all when its pending draft fails to save', (
+    tester,
+  ) async {
+    _setPhoneSize(tester);
+    final exports = <PortableExportRequest>[];
+    await tester.pumpWidget(
+      _testApp(
+        container,
+        PastPage(
+          autosaveDelay: const Duration(seconds: 10),
+          autosaveRetryDelay: const Duration(seconds: 10),
+          onPersist: (text) async => throw StateError('磁盘写入失败'),
+          exportRequestOverride: (request) async => exports.add(request),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.enterText(
+      find.byKey(const Key('past-continuous-document-editor')),
+      '不能导出的未落库草稿',
+    );
+    await tester.tap(find.bySemanticsLabel('导出'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '导出'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(exports, isEmpty);
+    expect(find.textContaining('磁盘写入失败'), findsOneWidget);
+  });
+
+  testWidgets('Past selection export preserves the exact text at sheet open', (
+    tester,
+  ) async {
+    _setPhoneSize(tester);
+    final exports = <PortableExportRequest>[];
+    await tester.pumpWidget(
+      _testApp(
+        container,
+        PastPage(
+          autosaveDelay: const Duration(seconds: 10),
+          onPersist: (text) async {},
+          exportRequestOverride: (request) async => exports.add(request),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    const document = '前文  选中\n文本  后文';
+    const selected = '  选中\n文本  ';
+    final editor = find.byKey(const Key('past-continuous-document-editor'));
+    await tester.enterText(editor, document);
+    final textController = tester.widget<TextField>(editor).controller!;
+    textController.selection = TextSelection(
+      baseOffset: document.indexOf(selected),
+      extentOffset: document.indexOf(selected) + selected.length,
+    );
+    await tester.pump();
+
+    await tester.tap(find.bySemanticsLabel('导出'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('导出所选内容'));
+    await tester.tap(find.widgetWithText(FilledButton, '导出'));
+    await tester.pumpAndSettle();
+
+    expect(exports, hasLength(1));
+    expect(exports.single.kind, PortableExportScopeKind.pastSelection);
+    expect(exports.single.selectedText, selected);
   });
 
   testWidgets('Past flushes pending edits on background and disposal', (

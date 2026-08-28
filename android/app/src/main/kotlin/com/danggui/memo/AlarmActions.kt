@@ -11,6 +11,7 @@ internal object AlarmActions {
     const val EXTRA_REMINDER_ID = "reminderId"
     const val EXTRA_SCHEDULE_REVISION = "scheduleRevision"
     const val EXTRA_SESSION_ID = "sessionId"
+    const val EXTRA_DEVICE_GENERATION = "deviceGeneration"
     const val EXTRA_SNOOZE_MINUTES = "snoozeMinutes"
 
     fun stop(
@@ -31,6 +32,7 @@ internal object AlarmActions {
             )
         var stoppedCount = 0
         var storageFailed = false
+        var capacityExceeded = false
         targets.forEach { record ->
             if (
                 store.removeRingingAndAppendStopped(
@@ -40,14 +42,35 @@ internal object AlarmActions {
                 ) != null
             ) {
                 stoppedCount += 1
-            } else if (store.get(record.reminderId, record.scheduleRevision) == record) {
-                storageFailed = true
+            } else if (
+                store.get(
+                    record.reminderId,
+                    record.scheduleRevision,
+                    record.deviceGeneration,
+                ) == record
+            ) {
+                val stoppedReservation =
+                    AlarmEvent(
+                        reminderId = record.reminderId,
+                        taskId = record.taskId,
+                        scheduleRevision = record.scheduleRevision,
+                        deviceGeneration = record.deviceGeneration,
+                        type = "stopped",
+                        sessionId = record.sessionId,
+                    )
+                if (!store.hasBusinessEventCapacity(listOf(stoppedReservation))) {
+                    capacityExceeded = true
+                } else {
+                    storageFailed = true
+                }
             }
         }
         refreshSession(context, store)
         return AlarmActionOutcome(
             result =
-                if (storageFailed) {
+                if (capacityExceeded) {
+                    AlarmScheduleResult.BUSINESS_EVENT_CAPACITY_EXCEEDED
+                } else if (storageFailed) {
                     AlarmScheduleResult.DURABLE_STORE_WRITE_FAILED
                 } else {
                     AlarmScheduleResult.SUCCESS
@@ -85,13 +108,16 @@ internal object AlarmActions {
                     defaultSnoozeMinutes = safeMinutes,
                     state = AlarmRecord.STATE_SCHEDULED,
                     sessionId = null,
+                    legacySessionId = null,
                     ringStartedElapsedRealtimeMs = null,
+                    reservedBusinessEvents = emptyList(),
                 )
             val snoozedEvent =
                 AlarmEvent(
                     reminderId = record.reminderId,
                     taskId = record.taskId,
                     scheduleRevision = record.scheduleRevision,
+                    deviceGeneration = record.deviceGeneration,
                     type = "snoozed",
                     snoozeMinutes = safeMinutes,
                     nextTriggerAtEpochMs = nextTriggerAtEpochMs,
@@ -112,6 +138,7 @@ internal object AlarmActions {
                         reminderId = record.reminderId,
                         taskId = record.taskId,
                         scheduleRevision = record.scheduleRevision,
+                        deviceGeneration = record.deviceGeneration,
                         type = "error",
                         sessionId = record.sessionId,
                         detailCode = scheduled.errorCode ?: "snooze_schedule_failed",
@@ -138,6 +165,7 @@ internal object AlarmActions {
                     recordReminderId = record.reminderId,
                     recordRevision = record.scheduleRevision,
                     recordSessionId = record.sessionId,
+                    recordLegacySessionId = record.legacySessionId,
                     requestedReminderId = requireNotNull(reminderId),
                     requestedRevision = requireNotNull(scheduleRevision),
                     requestedSessionId = requireNotNull(sessionId),
@@ -183,6 +211,7 @@ internal object AlarmActions {
                         reminderId = record.reminderId,
                         taskId = record.taskId,
                         scheduleRevision = record.scheduleRevision,
+                        deviceGeneration = record.deviceGeneration,
                         type = "error",
                         sessionId = record.sessionId,
                         detailCode = "ringing_service_refresh_failed",

@@ -27,6 +27,7 @@ class DangguiIconButton extends StatelessWidget {
       enabled: onPressed != null,
       selected: selected,
       label: semanticLabel,
+      onTap: onPressed,
       child: ExcludeSemantics(
         child: Material(
           color: Colors.transparent,

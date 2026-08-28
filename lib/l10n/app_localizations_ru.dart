@@ -13,6 +13,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get appName => '当归';
 
   @override
+  String get brandSeal => 'Печать Danggui';
+
+  @override
   String get privacyTagline => 'Только локально · Без загрузки · Без ИИ';
 
   @override
@@ -23,6 +26,13 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get retry => 'Повторить';
+
+  @override
+  String get reload => 'Перезагрузить';
+
+  @override
+  String get editorVersionConflict =>
+      'Содержимое было изменено в другом месте. Перезагрузите его перед продолжением редактирования.';
 
   @override
   String get tasksTab => 'Дела';

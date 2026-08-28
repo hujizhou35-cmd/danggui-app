@@ -12,11 +12,11 @@
 - **理由**：当归的离线 Drift + durable outbox + AlarmKit/普通通知组合与候选项目均不相同。
 - **未采用**：整体移植 Signal/Joplin/AppFlowy；除架构错配外，AGPL/GPL 也不适合默认复制。
 
-## DD03 — 控制状态严格解码，诊断日志可带损坏标记地宽松解码
+## DD03 — 控制状态严格解码，业务事件无损背压，诊断可有界裁剪
 
-- **决定**：alarm records、transactions、cancellations 使用版本化 envelope、generation 和 checksum；任一元素坏则整代失败并回退严格验证的 `.bak`。events 可保留有效项，但追加匿名 `journal-corrupt`。
-- **理由**：控制记录缺一项会改变系统行为；日志少一项只降低诊断完整性。S01、R02/R03 的恢复模式支持失败关闭。
-- **未采用**：所有数组继续 `compactMap`；会丢取消墓碑。所有日志也严格失败；会因为单条诊断丢失全部历史。
+- **决定**：alarm records、transactions、cancellations 使用版本化 envelope、generation 和 checksum；任一元素坏则整代失败并回退严格验证的 `.bak`。未确认的 Stop/Snooze 等业务事件独立保存，最多 4096 条并在满载时拒绝新的有状态动作；纯诊断最多 200 条，可保留有效项并追加匿名 `journal-corrupt`。
+- **理由**：控制记录或业务事件缺一项会改变系统行为；诊断少一项只降低可观测性。S01、R02/R03 的恢复模式支持失败关闭。
+- **未采用**：所有数组继续 `compactMap`，或用 200 条诊断环形缓冲区承载待确认业务事件；两者都会静默丢失取消墓碑或用户动作。所有诊断也严格失败同样未采用，因为单条坏诊断不应丢失全部历史。
 
 ## DD04 — daemon 移除不等同于用户可感知投递；15 分钟内选择可靠性优先
 
@@ -31,9 +31,9 @@
 - **理由**：避免边界在多次 `Date.now` 之间翻转。现有 RunnerTests 已有一次时钟 sample 的良好模式。
 - **未采用**：平台层与 Dart 分别读取当前时间；会产生互相矛盾的 missed/delivered 状态。
 
-## DD06 — 普通通知动作升级为版本化 CAS payload
+## DD06 — 普通通知动作升级为带设备代际的版本化 CAS payload
 
-- **决定**：iOS 15–25 payload 增加 payload version、task ID、reminder ID、revision、session；Snooze/Stop 用同一 CAS 合同。旧 `task:<id>` payload 只导航，不再修改提醒。
+- **决定**：iOS 15–25 payload v3 增加 task ID、reminder ID、revision、session 和 `deviceGeneration`；Snooze/Stop 用同一 CAS 合同。v2 仅能作用于仍处于 legacy generation 的数据；旧 `task:<id>` payload 只导航，不再修改提醒。
 - **理由**：解决 D03，并保持 AlarmKit 与普通通知语义对等。
 - **兼容**：旧公开方法名和字段保留一个版本；解析器接受旧 payload，但以安全只读行为降级。
 - **未采用**：收到旧 payload 后查当前 reminder 并执行动作；会把陈旧用户动作施加到新提醒。
@@ -74,9 +74,9 @@
 - **理由**：X03/X04/X14/X16 展示数据库/迁移失败的不可逆代价；A09、S03/S04提供原子替换与验证边界。
 - **未采用**：解包后直接覆盖 live DB；任何 CRC、空间或 crash 会毁掉唯一良好副本。
 
-## DD13 — merge 总是生成本机 ID 和新的提醒 revision/session
+## DD13 — replace 轮换设备代际，merge 总是生成本机 ID
 
-- **决定**：来源 task/note/reminder 与 platform ID 建立显式 ID map；重复同一备份 merge 由稳定 import identity 幂等；系统提醒只由本机 outbox 重建。
+- **决定**：replace 在数据库交换前写入并激活新的随机 `alarmGeneration`，交换前失败则恢复旧代；merge 保持当前设备代际。来源 task/note/reminder 与 platform ID 建立显式 ID map；重复同一备份 merge 由稳定 import identity 幂等；系统提醒只由本机 outbox 重建。
 - **理由**：平台 ID 和 system request 是设备态，复用会产生碰撞/陈旧动作。
 - **未采用**：原样复制 source platform ID 或 outbox；可能取消/覆盖本机提醒。
 
@@ -120,6 +120,25 @@
 
 - **决定**：所有缺陷修复进入 `codex/v1.1.5-ios-reference-audit`，经失败测试、CI、PR 合入后创建不可变 `v1.1.5`。
 - **理由**：保留可复现基线与已发布校验值；远端 Xcode 若发现新问题进入后续补丁，不移动旧标签。
+
+## DD21 — 原生层只接受当前 active device generation
+
+- **决定**：Dart 在任何事件恢复或系统快照对账前先激活数据库中的 canonical UUID generation；Swift/Kotlin 以带主备校验的单值状态作为原生权威。排期、快照、动作、事件、取消和退休均核对 generation；切代先持久化新 active generation，再精确退休旧平台 ID。来自旧代的延迟取消为幂等空操作，绝不降级成“按 reminder ID 取消当前代”。
+- **理由**：revision/session 只在单一数据集内唯一；replace 后旧通知、冷启动事件或延迟取消可能与新数据库复用业务 ID。代际门禁把平台派生态绑定到创建它的数据库实例。
+- **恢复代价**：Android 在共享层尚无“数据库交换已最终提交”的原生 finalize 握手前保留跨代 LKG records/events，确保 A→B 激活后若 replace 回滚仍可恢复 A；系统 PendingIntent 清理在后续 reconcile 重试。频繁 replace 可能增加应用私有 SharedPreferences 体积，但不得以提前 GC 换取丢失回滚副本或复响风险。
+- **未采用**：在 Dart 首次 reconcile 时仅清理可见旧快照；App 启动前的 Receiver/Service/UNNotification action 仍可能复活或修改旧代。
+
+## DD22 — 数据库与平台派生态变更使用同一进程内 FIFO 门禁
+
+- **决定**：backup replace/merge、提醒 reconcile、通知 Snooze/Stop、通知点击和权限结果产生的数据库变更共享 `PlatformMutationGate`。replace 激活新 generation 与数据库交换处于同一门禁区间；门禁释放后才允许新一轮派生态恢复。
+- **理由**：单独的 SQLite 事务不能序列化 MethodChannel/文件交换；恢复与前台 reconcile 并发会把旧数据库快照重新登记到新代。
+- **未采用**：只在 BackupService 或 NotificationCoordinator 内各自加 mutex；两个互斥锁无法建立跨模块顺序。
+
+## DD23 — 原生事件提交与 ACK 分离，ACK 失败不得阻断修复
+
+- **决定**：原生事件先在 SQLite 事务中按 generation/revision/session compare-and-swap 提交，再刷新共享状态并尝试 ACK。ACK 异常只保留进程内待重试标志，由现有有界 retry timer 重新 drain/ACK；本轮容量计算、系统快照修复和 outbox 排期继续执行。
+- **理由**：Stop/Snooze/Missed 在事务提交后已成为权威业务状态；MethodChannel ACK 失败不能撤销该提交，也不能让新 revision 的提醒等待下一次生命周期才登记。重复事件由 revision/session 幂等拒绝。
+- **未采用**：ACK 异常直接让 reconcile 失败；这会同时跳过 UI 刷新和同轮派生态修复。立即循环 ACK 也未采用，避免平台持续故障时形成忙循环。
 
 ## 功能批次门禁
 

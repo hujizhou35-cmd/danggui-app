@@ -18,9 +18,9 @@ void main() {
     expect(report.checks.length, greaterThanOrEqualTo(50));
     expect(expectedApplicationId, 'com.danggui.memo');
     final version = readReleaseVersion(repositoryRoot);
-    expect(version.name, '1.1.4');
-    expect(version.buildNumber, 5);
-    expect(version.technical, '1.1.4+5');
+    expect(version.name, '1.1.5');
+    expect(version.buildNumber, 6);
+    expect(version.technical, '1.1.5+6');
     expect(appVersionName, version.name);
     expect(appBuildNumber, version.buildNumber);
     expect(appTechnicalVersion, version.technical);
@@ -100,6 +100,62 @@ void main() {
     }
   });
 
+  test('iOS CI uses disposable simulators and immutable free runners', () {
+    final mobileWorkflow = File(
+      _join(repositoryRoot.path, '.github/workflows/mobile-ci.yml'),
+    ).readAsStringSync();
+    final deepWorkflow = File(
+      _join(repositoryRoot.path, '.github/workflows/ios-deep-audit.yml'),
+    ).readAsStringSync();
+    final simulatorScript = File(
+      _join(repositoryRoot.path, 'tool/run_ios_simulator_tests.sh'),
+    ).readAsStringSync();
+    final releaseVerifier = File(
+      _join(repositoryRoot.path, 'tool/verify_release_assets.sh'),
+    ).readAsStringSync();
+
+    final workflows = '$mobileWorkflow\n$deepWorkflow';
+    expect(workflows, contains('runs-on: macos-15'));
+    expect(workflows, contains('runs-on: macos-26'));
+    expect(mobileWorkflow, contains('name: Unsigned iOS source build'));
+    expect(mobileWorkflow, contains('needs: [ios-fallback, ios-unsigned]'));
+    expect(workflows, isNot(contains('macos-latest')));
+    expect(
+      RegExp(r'runs-on:\s*[^\n]*(large|xlarge)').hasMatch(workflows),
+      isFalse,
+    );
+    for (final match in RegExp(
+      r'^\s*uses:\s*[^@\s]+@([^\s#]+)',
+      multiLine: true,
+    ).allMatches(workflows)) {
+      expect(match.group(1), matches(RegExp(r'^[0-9a-f]{40}$')));
+    }
+
+    for (final marker in <String>[
+      'xcrun simctl create',
+      'xcrun simctl delete',
+      '-only-testing:RunnerTests',
+      '-only-testing:RunnerUITests',
+      'xcresulttool get test-results summary',
+      'ui_test_count=2',
+      'system_delivery=device-unverified',
+    ]) {
+      expect(simulatorScript, contains(marker), reason: marker);
+    }
+    expect(simulatorScript, isNot(contains('simctl erase')));
+    expect(simulatorScript, isNot(contains('mapfile')));
+
+    for (final marker in <String>[
+      'SOURCE_COMMIT.txt does not match the protected tag commit',
+      'ui_test_count=2',
+      'testTaskReminderDeleteAndRestoreContract',
+      'testBackupRestoreRebuildsReminderContract',
+      'notification_gateway=in-process-contract-double',
+    ]) {
+      expect(releaseVerifier, contains(marker), reason: marker);
+    }
+  });
+
   test('audit fails closed when release capabilities drift', () {
     final fixture = _createAuditFixture(repositoryRoot);
     addTearDown(() => fixture.deleteSync(recursive: true));
@@ -132,14 +188,24 @@ void main() {
       ),
     );
 
-    final appDelegate = File(
-      _join(fixture.path, 'ios/Runner/AppDelegate.swift'),
+    final dataProtection = File(
+      _join(fixture.path, 'ios/Runner/DangguiDataProtection.swift'),
     );
-    appDelegate.writeAsStringSync(
-      appDelegate.readAsStringSync().replaceFirst(
-        'values.isExcludedFromBackup = true',
-        'values.isExcludedFromBackup = false',
-      ),
+    dataProtection.writeAsStringSync(
+      dataProtection
+          .readAsStringSync()
+          .replaceFirst(
+            'rootValues.isExcludedFromBackup = true',
+            'rootValues.isExcludedFromBackup = false',
+          )
+          .replaceFirst(
+            'FileProtectionType.completeUntilFirstUserAuthentication',
+            'FileProtectionType.none',
+          )
+          .replaceFirst(
+            'readBackupExclusion(rootURL) == true',
+            'readBackupExclusion(rootURL) == false',
+          ),
     );
 
     final secureStorageSource = File(
@@ -197,7 +263,10 @@ void main() {
     expect(failures, contains('alarm-clock or full-screen notification API'));
     expect(failures, contains('hard-coded remote URL'));
     expect(failures, contains('entitlement files require review'));
-    expect(failures, contains('exclude Application Support/danggui'));
+    expect(
+      failures,
+      contains('iOS private data must use explicit file protection'),
+    );
     expect(failures, contains('this-device-only Keychain class'));
     expect(failures, contains('iCloud-synchronizable secure-storage option'));
     expect(failures, contains('old and Build Tools 36 certificate output'));
@@ -224,6 +293,7 @@ Directory _createAuditFixture(Directory sourceRoot) {
     'android/app/src/main/res/xml/data_extraction_rules.xml',
     'android/app/src/main/kotlin/com/danggui/memo/MainActivity.kt',
     'ios/Runner/Info.plist',
+    'ios/Runner/DangguiDataProtection.swift',
     'ios/Runner/zh-Hans.lproj/InfoPlist.strings',
     'ios/Runner/en.lproj/InfoPlist.strings',
     'ios/Runner/ja.lproj/InfoPlist.strings',

@@ -9,6 +9,8 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
+import '../../support/zip_test_support.dart';
+
 void main() {
   late DangguiDatabase database;
   late Directory temporaryDirectory;
@@ -105,7 +107,7 @@ void main() {
       expect(pastMarkdown, contains('用户自由修改后的正文'));
       expect(pastMarkdown, contains('raw-event-one'));
       expect(result.manifest['appId'], 'com.danggui.memo');
-      expect(result.manifest['appVersion'], '1.1.4+5');
+      expect(result.manifest['appVersion'], '1.1.5+6');
       expect(result.manifest['databaseSchemaVersion'], 1);
       final counts = result.manifest['recordCounts']! as Map<String, dynamic>;
       expect(counts['tasks'], 2);
@@ -114,6 +116,135 @@ void main() {
       expect(result.manifest['contentSha256'], matches(r'^[0-9a-f]{64}$'));
     },
   );
+
+  test(
+    'repeated fixed identity exports preserve every successful archive',
+    () async {
+      final first = await service.export(PortableExportRequest.full());
+      final firstBytes = await first.file.readAsBytes();
+
+      final second = await service.export(PortableExportRequest.full());
+
+      expect(
+        p.basename(first.file.path),
+        'danggui-full-20260822T123456Z-abcdef12.zip',
+      );
+      expect(
+        p.basename(second.file.path),
+        'danggui-full-20260822T123456Z-abcdef12-2.zip',
+      );
+      expect(second.file.path, isNot(first.file.path));
+      expect(await first.file.exists(), isTrue);
+      expect(await second.file.exists(), isTrue);
+      expect(await first.file.readAsBytes(), firstBytes);
+      expect(
+        (await PortableExportVerifier.verify(first.file)).archiveSha256,
+        first.archiveSha256,
+      );
+      expect(
+        (await PortableExportVerifier.verify(second.file)).archiveSha256,
+        second.archiveSha256,
+      );
+      expect(
+        await Directory(first.file.parent.path)
+            .list()
+            .where(
+              (entry) =>
+                  entry.path.endsWith('.partial') ||
+                  entry.path.endsWith('.reservation'),
+            )
+            .isEmpty,
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'reservation propagates a non-collision filesystem failure once',
+    () async {
+      final failure = FileSystemException('simulated disk full');
+      var attempts = 0;
+      final failingService = PortableExportService(
+        readDatabase: () async => database,
+        readTemporaryDirectory: () async => temporaryDirectory,
+        nowUtc: () => DateTime.utc(2026, 8, 22, 12, 34, 56),
+        operationId: () => 'ABCDEF12-3456-7890-abcd-ef1234567890',
+        createReservation: (file) async {
+          attempts++;
+          throw failure;
+        },
+      );
+
+      await expectLater(
+        failingService.export(PortableExportRequest.full()),
+        throwsA(same(failure)),
+      );
+      expect(attempts, 1);
+    },
+  );
+
+  test(
+    'generation rejects an oversized entry before path reservation',
+    () async {
+      var reservationAttempted = false;
+      final boundedService = PortableExportService(
+        readDatabase: () async => database,
+        readTemporaryDirectory: () async => temporaryDirectory,
+        nowUtc: () => DateTime.utc(2026, 8, 22, 12, 34, 56),
+        operationId: () => 'ABCDEF12-3456-7890-abcd-ef1234567890',
+        maximumGeneratedEntryBytes: 32,
+        createReservation: (file) async {
+          reservationAttempted = true;
+          await file.create(exclusive: true);
+        },
+      );
+
+      await expectLater(
+        boundedService.export(PortableExportRequest.full()),
+        throwsA(
+          isA<FileSystemException>().having(
+            (error) => error.message,
+            'message',
+            'Portable export entry exceeds its generation limit.',
+          ),
+        ),
+      );
+      expect(reservationAttempted, isFalse);
+    },
+  );
+
+  test('generation rejects excessive total uncompressed content', () async {
+    final largeBody = List<String>.filled(700 * 1024, 'x').join();
+    await database.customStatement(
+      "UPDATE document_blocks SET plain_text = ? WHERE id = 'block-note-a'",
+      <Object?>[largeBody],
+    );
+    var reservationAttempted = false;
+    final boundedService = PortableExportService(
+      readDatabase: () async => database,
+      readTemporaryDirectory: () async => temporaryDirectory,
+      nowUtc: () => DateTime.utc(2026, 8, 22, 12, 34, 56),
+      operationId: () => 'ABCDEF12-3456-7890-abcd-ef1234567890',
+      maximumGeneratedEntryBytes: 900 * 1024,
+      maximumGeneratedUncompressedBytes: 1024 * 1024,
+      createReservation: (file) async {
+        reservationAttempted = true;
+        await file.create(exclusive: true);
+      },
+    );
+
+    await expectLater(
+      boundedService.export(PortableExportRequest.full()),
+      throwsA(
+        isA<FileSystemException>().having(
+          (error) => error.message,
+          'message',
+          'Portable export content exceeds its uncompressed generation limit.',
+        ),
+      ),
+    );
+    expect(reservationAttempted, isFalse);
+  });
 
   test(
     'past date range filters provenance but labels the complete free-form text',
@@ -298,6 +429,24 @@ void main() {
     await damaged.writeAsBytes(ZipEncoder().encodeBytes(changed));
     await expectLater(
       PortableExportVerifier.verify(damaged),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('verifier rejects duplicate central-directory entry names', () async {
+    final result = await service.export(PortableExportRequest.full());
+    final duplicateFile = File(
+      p.join(temporaryDirectory.path, 'duplicate-entry.zip'),
+    );
+    await duplicateFile.writeAsBytes(
+      duplicateZipCentralDirectoryEntry(
+        await result.file.readAsBytes(),
+        'manifest.json',
+      ),
+    );
+
+    await expectLater(
+      PortableExportVerifier.verify(duplicateFile),
       throwsA(isA<FormatException>()),
     );
   });

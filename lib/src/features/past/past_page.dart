@@ -10,6 +10,7 @@ import '../../application/app_state.dart';
 import '../../application/app_store.dart';
 import '../../domain/models.dart';
 import '../../services/export/portable_export_service.dart';
+import '../../services/export/temporary_share_artifact.dart';
 import '../../ui/components/components.dart';
 import '../tasks/task_creation_sheet.dart';
 
@@ -19,11 +20,18 @@ class PastPage extends ConsumerStatefulWidget {
     this.autosaveDelay = const Duration(milliseconds: 650),
     this.autosaveRetryDelay = const Duration(seconds: 2),
     this.onPersist,
+    this.exportRequestOverride,
   });
 
   final Duration autosaveDelay;
   final Duration autosaveRetryDelay;
   final Future<void> Function(String text)? onPersist;
+
+  /// Contract-test seam for observing the request after pending editor state
+  /// has been handled. Production always uses [portableExportServiceProvider]
+  /// and the platform share sheet.
+  final Future<void> Function(PortableExportRequest request)?
+  exportRequestOverride;
 
   @override
   ConsumerState<PastPage> createState() => _PastPageState();
@@ -463,6 +471,9 @@ class _PastPageState extends ConsumerState<PastPage>
 
   Future<void> _showExport(List<PastBlockViewModel> blocks) async {
     final l10n = AppLocalizations.of(context);
+    // Opening a modal moves focus away from the editor and can normalize its
+    // selection. Preserve the exact user-selected text before that happens.
+    final selectedTextAtOpen = _selectedText();
     var selected = 'all';
     var confirmed = false;
     await showModalBottomSheet<void>(
@@ -500,12 +511,11 @@ class _PastPageState extends ConsumerState<PastPage>
 
     late final PortableExportRequest request;
     if (selected == 'selection') {
-      final text = _selectedText().trim();
-      if (text.isEmpty) {
+      if (selectedTextAtOpen.trim().isEmpty) {
         showDangguiSnackBar(context, message: l10n.helpNoResults);
         return;
       }
-      request = PortableExportRequest.pastSelection(text);
+      request = PortableExportRequest.pastSelection(selectedTextAtOpen);
     } else if (selected == 'range') {
       final datedBlocks =
           blocks
@@ -535,14 +545,32 @@ class _PastPageState extends ConsumerState<PastPage>
     } else {
       request = PortableExportRequest.pastAll();
     }
+
+    // Range/all exports read the persisted Past document. Never take that
+    // database snapshot while the editor still has a pending or failed draft.
+    if (selected != 'selection' && (!await _flushSave() || !mounted)) {
+      return;
+    }
+
+    final exportRequestOverride = widget.exportRequestOverride;
+    if (exportRequestOverride != null) {
+      await exportRequestOverride(request);
+      return;
+    }
     final result = await ref
         .read(portableExportServiceProvider)
         .export(request);
-    await SharePlus.instance.share(
-      ShareParams(
-        subject: l10n.pastTitle,
-        files: <XFile>[XFile(result.file.path)],
-      ),
+    await withDangguiTemporaryShareArtifact(
+      file: result.file,
+      action: () async {
+        if (!mounted) return;
+        await SharePlus.instance.share(
+          ShareParams(
+            subject: l10n.pastTitle,
+            files: <XFile>[XFile(result.file.path)],
+          ),
+        );
+      },
     );
   }
 }

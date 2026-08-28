@@ -124,6 +124,7 @@ class DangguiApp extends ConsumerStatefulWidget {
 class _DangguiAppState extends ConsumerState<DangguiApp>
     with WidgetsBindingObserver {
   var _startupReconciled = false;
+  var _lastHandledOpenIntentSequence = 0;
 
   @override
   void initState() {
@@ -139,9 +140,24 @@ class _DangguiAppState extends ConsumerState<DangguiApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _startupReconciled) {
-      unawaited(_reconcileAutomaticBackup(startup: false));
-      unawaited(_reconcileNotifications(refreshStore: true));
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_retryDataProtectionIfNeeded());
+      if (_startupReconciled) {
+        unawaited(_reconcileAutomaticBackup(startup: false));
+        unawaited(_reconcileNotifications(refreshStore: true));
+      }
+    }
+  }
+
+  Future<void> _retryDataProtectionIfNeeded() async {
+    final platform = ref.read(dataProtectionPlatformProvider);
+    final current = await platform.getStatus();
+    if (current.isAvailable) return;
+    final retried = await platform.retry();
+    if (retried.isAvailable && mounted) {
+      // A failed bootstrap may be cached above the file provider. Rebuilding
+      // this source retries the complete database/AppStore dependency chain.
+      ref.invalidate(databaseFileProvider);
     }
   }
 
@@ -188,6 +204,30 @@ class _DangguiAppState extends ConsumerState<DangguiApp>
 
   @override
   Widget build(BuildContext context) {
+    // Watch the durable in-memory intent instead of relying only on an edge
+    // callback. This also observes a cold-start response emitted before the
+    // first application frame. StartupPage suppresses its default `/tasks`
+    // redirect while this intent is pending, so it cannot overwrite the
+    // notification destination in the same frame.
+    final openIntent = ref.watch(notificationOpenIntentProvider);
+    if (openIntent != null &&
+        openIntent.sequence > _lastHandledOpenIntentSequence) {
+      _lastHandledOpenIntentSequence = openIntent.sequence;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final taskId = openIntent.taskId;
+        ref
+            .read(routerProvider)
+            .go(
+              taskId == null
+                  ? '/tasks'
+                  : '/tasks/${Uri.encodeComponent(taskId)}',
+            );
+        ref
+            .read(notificationOpenIntentProvider.notifier)
+            .consume(openIntent.sequence);
+      });
+    }
     ref.listen<int>(notificationStateRevisionProvider, (previous, next) {
       if (previous == null || previous == next) return;
       unawaited(_refreshStoreAfterNotificationAction());
@@ -239,7 +279,12 @@ class _DangguiAppState extends ConsumerState<DangguiApp>
       builder: (context, child) {
         final media = MediaQuery.of(context);
         final userScale = settings.textScalePercent / 100;
-        final combined = (media.textScaler.scale(1) * userScale).clamp(.9, 2.0);
+        // Preserve the platform's full accessibility scale. The lower bound
+        // prevents a small in-app preference from making text unreadable, but
+        // there is deliberately no upper clamp on Dynamic Type / font scale.
+        final combined = (media.textScaler.scale(1) * userScale)
+            .clamp(.9, double.infinity)
+            .toDouble();
         return MediaQuery(
           data: media.copyWith(textScaler: TextScaler.linear(combined)),
           child: ImeInsetGuard(child: child ?? const SizedBox.shrink()),

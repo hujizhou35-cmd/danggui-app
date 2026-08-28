@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../data/database.dart';
+import '../../data/search_projection_rebuilder.dart';
 import '../../domain/models.dart';
 import 'backup_codec.dart';
 
@@ -63,6 +64,7 @@ final class BackupMergeEngine {
         await _importPast();
         await _importTrash();
       }
+      await SearchProjectionRebuilder.rebuild(target);
       summary = <String, Object?>{
         'originDatasetId': originDatasetId,
         'imported': Map<String, int>.unmodifiable(_imported),
@@ -127,18 +129,6 @@ final class BackupMergeEngine {
     );
     if (sourceFolderNames.any(targetFolderNames.contains)) return false;
 
-    final sourceSearchKeys = await _stringSet(
-      source,
-      "SELECT scope || char(0) || entity_id AS value FROM search_records "
-      "WHERE scope IN ('task', 'note')",
-    );
-    final targetSearchKeys = await _stringSet(
-      target,
-      "SELECT scope || char(0) || entity_id AS value FROM search_records "
-      "WHERE scope IN ('task', 'note')",
-    );
-    if (sourceSearchKeys.any(targetSearchKeys.contains)) return false;
-
     final targetDedupeKeys = await _stringSet(
       target,
       'SELECT dedupe_key AS value FROM platform_jobs',
@@ -175,9 +165,6 @@ final class BackupMergeEngine {
     );
     final reminderRows = await _sourceRows(
       'SELECT * FROM reminders ORDER BY task_id, id',
-    );
-    final searchRows = await _sourceRows(
-      'SELECT * FROM search_records ORDER BY scope, entity_id',
     );
     final eventRows = await _sourceRows(
       'SELECT * FROM past_events ORDER BY append_sequence, id',
@@ -220,10 +207,6 @@ final class BackupMergeEngine {
     };
     final taskById = <String, Map<String, Object?>>{
       for (final task in taskRows) task.string('id'): task,
-    };
-    final searchByEntity = <String, Map<String, Object?>>{
-      for (final row in searchRows)
-        '${row.string('scope')}\u0000${row.string('entity_id')}': row,
     };
     final provenance = <_PendingProvenance>[];
     final ownerByDocument = <String, _OwnedDocumentContext>{};
@@ -464,15 +447,9 @@ final class BackupMergeEngine {
       }
       for (final task in taskRows) {
         _batchInsertRow(batch, 'tasks', _taskColumns, task);
-        final search =
-            searchByEntity['${SearchScope.task.name}\u0000${task.string('id')}'];
-        if (search != null) _batchInsertSearch(batch, search);
       }
       for (final note in noteRows) {
         _batchInsertRow(batch, 'notes', _noteColumns, note);
-        final search =
-            searchByEntity['${SearchScope.note.name}\u0000${note.string('id')}'];
-        if (search != null) _batchInsertSearch(batch, search);
       }
       for (final reminder in reminderRows) {
         final task = taskById[reminder.string('task_id')];
@@ -663,7 +640,6 @@ final class BackupMergeEngine {
     _pastBlocksAppended = pastBlocks.length;
     if (pastBlocks.isNotEmpty) {
       await _refreshPastDocument(targetPastId, targetPastDocument);
-      await _refreshPastSearch(targetPastId);
     }
   }
 
@@ -802,12 +778,6 @@ final class BackupMergeEngine {
         aggregateHash,
         resolution.localId,
       );
-      await _importSearchProjection(
-        scope: SearchScope.task.name,
-        incomingEntityId: incomingId,
-        localEntityId: resolution.localId,
-        localDocumentId: localDocumentId,
-      );
       await _importReminder(
         incomingTaskId: incomingId,
         localTaskId: resolution.localId,
@@ -881,12 +851,6 @@ final class BackupMergeEngine {
         incomingId,
         aggregateHash,
         resolution.localId,
-      );
-      await _importSearchProjection(
-        scope: SearchScope.note.name,
-        incomingEntityId: incomingId,
-        localEntityId: resolution.localId,
-        localDocumentId: localDocumentId,
       );
       _count(_imported, 'notes');
     }
@@ -1247,7 +1211,6 @@ final class BackupMergeEngine {
       await _refreshPastDocument(targetDocumentId, targetDocument);
     }
     await _importPastEvents(sourceDocumentId, targetDocumentId);
-    if (pending.isNotEmpty) await _refreshPastSearch(targetDocumentId);
   }
 
   Future<void> _importPastEvents(
@@ -1734,23 +1697,6 @@ final class BackupMergeEngine {
     );
   }
 
-  void _batchInsertSearch(Batch batch, Map<String, Object?> row) {
-    batch.customStatement(
-      'INSERT INTO search_records '
-      '(scope, entity_id, document_id, title_norm, body_norm, date_key, '
-      'updated_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      <Object?>[
-        row['scope'],
-        row['entity_id'],
-        row['document_id'],
-        row['title_norm'],
-        row['body_norm'],
-        row['date_key'],
-        row['updated_at_utc'],
-      ],
-    );
-  }
-
   void _batchRecordProvenance(Batch batch, _PendingProvenance record, int now) {
     batch.customStatement(
       'INSERT INTO import_provenance '
@@ -1791,39 +1737,6 @@ final class BackupMergeEngine {
     );
   }
 
-  Future<void> _importSearchProjection({
-    required String scope,
-    required String incomingEntityId,
-    required String localEntityId,
-    required String localDocumentId,
-  }) async {
-    final query = await source
-        .customSelect(
-          'SELECT * FROM search_records WHERE scope = ? AND entity_id = ? LIMIT 1',
-          variables: <Variable<Object>>[
-            Variable.withString(scope),
-            Variable.withString(incomingEntityId),
-          ],
-        )
-        .getSingleOrNull();
-    if (query == null) return;
-    final row = query.data;
-    await target.customStatement(
-      'INSERT INTO search_records '
-      '(scope, entity_id, document_id, title_norm, body_norm, date_key, '
-      'updated_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      <Object?>[
-        scope,
-        localEntityId,
-        localDocumentId,
-        row['title_norm'],
-        row['body_norm'],
-        row['date_key'],
-        row['updated_at_utc'],
-      ],
-    );
-  }
-
   Future<void> _refreshPastDocument(
     String documentId,
     Map<String, Object?> previous,
@@ -1843,38 +1756,6 @@ final class BackupMergeEngine {
       'UPDATE documents SET revision = revision + 1, semantic_hash = ?, '
       'updated_at_utc = ?, row_version = row_version + 1 WHERE id = ?',
       <Object?>[semanticHash, nowUtc().microsecondsSinceEpoch, documentId],
-    );
-  }
-
-  Future<void> _refreshPastSearch(String documentId) async {
-    final rows = await target
-        .customSelect(
-          'SELECT plain_text FROM document_blocks WHERE document_id = ? '
-          'ORDER BY sort_rank, id',
-          variables: <Variable<Object>>[Variable.withString(documentId)],
-        )
-        .get();
-    final body = rows
-        .map((row) => row.read<String>('plain_text'))
-        .where((text) => text.isNotEmpty)
-        .join('\n')
-        .toLowerCase();
-    await target.customStatement(
-      'INSERT INTO search_records '
-      '(scope, entity_id, document_id, title_norm, body_norm, date_key, '
-      'updated_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?) '
-      'ON CONFLICT(scope, entity_id) DO UPDATE SET '
-      'document_id = excluded.document_id, body_norm = excluded.body_norm, '
-      'updated_at_utc = excluded.updated_at_utc',
-      <Object?>[
-        SearchScope.past.name,
-        'past.main',
-        documentId,
-        '',
-        body,
-        '',
-        nowUtc().microsecondsSinceEpoch,
-      ],
     );
   }
 

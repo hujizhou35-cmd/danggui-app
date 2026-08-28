@@ -23,7 +23,6 @@ import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import java.util.UUID
 
 class AlarmRingingService : Service() {
     private val store by lazy { AlarmStore(this) }
@@ -78,6 +77,7 @@ class AlarmRingingService : Service() {
                 store.markRingingAndAppendDelivered(
                     reminderId = provisional.reminderId,
                     scheduleRevision = provisional.scheduleRevision,
+                    deviceGeneration = provisional.deviceGeneration,
                     occurredAtEpochMs = System.currentTimeMillis(),
                     sessionId = requireNotNull(provisional.sessionId),
                     ringStartedElapsedRealtimeMs =
@@ -90,7 +90,8 @@ class AlarmRingingService : Service() {
             return renderSession(startId, includeFullScreenIntent = true)
         }
 
-        val records = store.ringing()
+        expireCompletedSessions()
+        val records = audibleRingingRecords()
         if (records.isEmpty()) return stopEmptySession(startId)
         AlarmChannels.ensureRingingChannel(this, records.first().localeTag)
         if (!promoteToForeground(buildNotification(records, includeFullScreenIntent = false))) {
@@ -98,7 +99,6 @@ class AlarmRingingService : Service() {
             return START_NOT_STICKY
         }
         acquireBoundedWakeLock()
-        expireCompletedSessions()
         return renderSession(startId, includeFullScreenIntent = false)
     }
 
@@ -113,7 +113,13 @@ class AlarmRingingService : Service() {
         val scheduleRevision =
             intent.getLongExtra(AlarmScheduler.EXTRA_SCHEDULE_REVISION, Long.MIN_VALUE)
         if (scheduleRevision == Long.MIN_VALUE) return null
-        val record = store.get(reminderId, scheduleRevision) ?: return null
+        val rawDeviceGeneration = intent.getStringExtra(AlarmScheduler.EXTRA_DEVICE_GENERATION)
+        val deviceGeneration = rawDeviceGeneration?.let {
+            AlarmIdentityPolicy.canonicalDeviceGeneration(it) ?: return null
+        }
+        if (!store.isActiveDeviceGeneration(deviceGeneration)) return null
+        val record =
+            store.get(reminderId, scheduleRevision, deviceGeneration) ?: return null
         if (!store.isDeliverable(record)) return null
 
         val now = System.currentTimeMillis()
@@ -125,21 +131,33 @@ class AlarmRingingService : Service() {
                 null
             }
             AlarmDeliveryDecision.MISSED -> {
-                store.expireDeliverable(reminderId, scheduleRevision, now)
+                store.expireDeliverable(
+                    reminderId = reminderId,
+                    scheduleRevision = scheduleRevision,
+                    deviceGeneration = deviceGeneration,
+                    occurredAtEpochMs = now,
+                )
                 sendSessionChanged()
                 null
             }
             AlarmDeliveryDecision.DELIVER ->
                 record.copy(
                     state = AlarmRecord.STATE_RINGING,
-                    sessionId = UUID.randomUUID().toString(),
+                    sessionId =
+                        AlarmIdentityPolicy.deterministicSessionId(
+                            record.reminderId,
+                            record.scheduleRevision,
+                            record.deviceGeneration,
+                        ),
+                    legacySessionId = null,
                     ringStartedElapsedRealtimeMs = SystemClock.elapsedRealtime(),
                 )
         }
     }
 
     private fun startExistingSessionOrStop(startId: Int): Int {
-        val records = store.ringing()
+        expireCompletedSessions()
+        val records = audibleRingingRecords()
         if (records.isEmpty()) return stopEmptySession(startId)
         AlarmChannels.ensureRingingChannel(this, records.first().localeTag)
         if (!promoteToForeground(buildNotification(records, includeFullScreenIntent = false))) {
@@ -147,12 +165,11 @@ class AlarmRingingService : Service() {
             return START_NOT_STICKY
         }
         acquireBoundedWakeLock()
-        expireCompletedSessions()
         return renderSession(startId, includeFullScreenIntent = false)
     }
 
     private fun renderSession(startId: Int, includeFullScreenIntent: Boolean): Int {
-        val records = store.ringing()
+        val records = audibleRingingRecords()
         if (records.isEmpty()) {
             return stopEmptySession(startId)
         }
@@ -305,10 +322,14 @@ class AlarmRingingService : Service() {
                         .appendPath(record.reminderId)
                         .appendPath(record.scheduleRevision.toString())
                         .appendPath(record.sessionId.orEmpty())
+                        .apply { record.deviceGeneration?.let { appendPath(it) } }
                         .build()
                 putExtra(AlarmActions.EXTRA_REMINDER_ID, record.reminderId)
                 putExtra(AlarmActions.EXTRA_SCHEDULE_REVISION, record.scheduleRevision)
                 putExtra(AlarmActions.EXTRA_SESSION_ID, record.sessionId)
+                record.deviceGeneration?.let {
+                    putExtra(AlarmActions.EXTRA_DEVICE_GENERATION, it)
+                }
                 snoozeMinutes?.let { putExtra(AlarmActions.EXTRA_SNOOZE_MINUTES, it) }
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -525,22 +546,36 @@ class AlarmRingingService : Service() {
     private fun expireCompletedSessions() {
         val nowEpochMs = System.currentTimeMillis()
         val nowElapsedRealtimeMs = SystemClock.elapsedRealtime()
-        store.ringing()
-            .filter { record ->
+        val expired =
+            store.ringing().filter { record ->
                 AlarmDeliveryPolicy.isRingingExpired(
                     triggerAtEpochMs = record.triggerAtEpochMs,
                     ringStartedElapsedRealtimeMs = record.ringStartedElapsedRealtimeMs,
                     nowEpochMs = nowEpochMs,
                     nowElapsedRealtimeMs = nowElapsedRealtimeMs,
                 )
-            }
-            .forEach { record ->
-                store.removeRingingAndAppendStopped(
-                    expected = record,
-                    occurredAtEpochMs = nowEpochMs,
-                    detailCode = "automatic_cutoff",
-                )
-            }
+        }
+        if (expired.isNotEmpty()) stopOutputs()
+        expired.forEach { record ->
+            store.removeRingingAndAppendStopped(
+                expected = record,
+                occurredAtEpochMs = nowEpochMs,
+                detailCode = "automatic_cutoff",
+            )
+        }
+    }
+
+    private fun audibleRingingRecords(): List<AlarmRecord> {
+        val nowEpochMs = System.currentTimeMillis()
+        val nowElapsedRealtimeMs = SystemClock.elapsedRealtime()
+        return store.ringing().filterNot { record ->
+            AlarmDeliveryPolicy.isRingingExpired(
+                triggerAtEpochMs = record.triggerAtEpochMs,
+                ringStartedElapsedRealtimeMs = record.ringStartedElapsedRealtimeMs,
+                nowEpochMs = nowEpochMs,
+                nowElapsedRealtimeMs = nowElapsedRealtimeMs,
+            )
+        }
     }
 
     private fun reportMilestone(type: String, detailCode: String) {
@@ -571,6 +606,7 @@ class AlarmRingingService : Service() {
             reminderId = record.reminderId,
             taskId = record.taskId,
             scheduleRevision = record.scheduleRevision,
+            deviceGeneration = record.deviceGeneration,
             type = type,
             sessionId = record.sessionId,
             detailCode = detailCode,

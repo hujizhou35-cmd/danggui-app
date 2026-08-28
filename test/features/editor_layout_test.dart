@@ -192,6 +192,21 @@ void main() {
       expect(tester.widget<TextField>(editor).controller?.text, '第一行\n\n第二行');
     }),
   );
+
+  testWidgets(
+    'DangguiApp preserves a system accessibility scale above two times',
+    (tester) => _withMountedApp(tester, () async {
+      _setView(tester, const Size(1024, 1366), textScaleFactor: 3.2);
+      await _pumpRealApp(tester, container, location: '/tasks');
+
+      final pageContext = tester.element(find.byType(TasksPage));
+      expect(
+        MediaQuery.textScalerOf(pageContext).scale(1),
+        closeTo(3.2, 0.001),
+      );
+      expect(tester.takeException(), isNull);
+    }),
+  );
 }
 
 Future<void> _withMountedApp(

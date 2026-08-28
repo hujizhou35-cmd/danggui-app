@@ -8,7 +8,6 @@ import 'package:cryptography/cryptography.dart';
 const _encryptedMagic = 'DANGGUI-ENC-1\n';
 const _databaseEntry = 'data/danggui.sqlite';
 const _manifestEntry = 'manifest.json';
-const _maximumPackageBytes = 512 * 1024 * 1024;
 const _maximumDatabaseBytes = 512 * 1024 * 1024;
 const _maximumManifestBytes = 256 * 1024;
 const _maximumEncryptedHeaderBytes = 16 * 1024;
@@ -34,6 +33,10 @@ final class DecodedBackup {
 /// user-supplied passphrase in platform secure storage.
 final class BackupCodec {
   const BackupCodec._();
+
+  /// Checked from file metadata before [File.readAsBytes] and repeated after
+  /// the read/decryption boundary.
+  static const int maximumPackageBytes = 512 * 1024 * 1024;
 
   static Future<Uint8List> encode({
     required Uint8List databaseBytes,
@@ -66,7 +69,7 @@ final class BackupCodec {
       ..addFile(ArchiveFile.string(_manifestEntry, manifestJson))
       ..addFile(ArchiveFile.bytes(_databaseEntry, databaseBytes));
     final zip = ZipEncoder().encodeBytes(archive, level: 6);
-    if (zip.length > _maximumPackageBytes) {
+    if (zip.length > maximumPackageBytes) {
       throw const FormatException('Backup package is too large.');
     }
     if (!encrypted) return zip;
@@ -119,7 +122,7 @@ final class BackupCodec {
     Uint8List packageBytes, {
     String? passphrase,
   }) async {
-    if (packageBytes.isEmpty || packageBytes.length > _maximumPackageBytes) {
+    if (packageBytes.isEmpty || packageBytes.length > maximumPackageBytes) {
       throw const FormatException('Backup size is invalid.');
     }
     final magic = utf8.encode(_encryptedMagic);
@@ -187,17 +190,30 @@ final class BackupCodec {
         );
       }
     }
-    if (zipBytes.isEmpty || zipBytes.length > _maximumPackageBytes) {
+    if (zipBytes.isEmpty || zipBytes.length > maximumPackageBytes) {
       throw const FormatException('Backup archive size is invalid.');
     }
 
+    _preflightZip(zipBytes);
+
     Archive archive;
+    late final ZipDecoder decoder;
     try {
-      archive = ZipDecoder().decodeBytes(zipBytes, verify: true);
+      decoder = ZipDecoder();
+      archive = decoder.decodeBytes(zipBytes);
     } on Object {
       throw const FormatException('Backup archive is damaged.');
     }
-    if (archive.files.length != 2 ||
+    final centralDirectoryNames = decoder.directory.fileHeaders
+        .map((header) => header.filename)
+        .toList(growable: false);
+    if (centralDirectoryNames.length != 2 ||
+        centralDirectoryNames.toSet().length != centralDirectoryNames.length ||
+        centralDirectoryNames.toSet().difference(const <String>{
+          _manifestEntry,
+          _databaseEntry,
+        }).isNotEmpty ||
+        archive.files.length != 2 ||
         archive.files.any((file) => !file.isFile || file.isSymbolicLink)) {
       throw const FormatException(
         'Backup archive contains unexpected entries.',
@@ -218,7 +234,27 @@ final class BackupCodec {
         databaseFiles.single.size > _maximumDatabaseBytes) {
       throw const FormatException('Backup entry size is invalid.');
     }
-    final manifestBytes = manifestFiles.single.content;
+    final decodedEntries = <String, Uint8List>{};
+    for (final file in archive.files) {
+      final output = _BoundedOutputMemoryStream(file.size);
+      try {
+        file.decompress(output);
+      } on FormatException {
+        rethrow;
+      } on Object {
+        throw const FormatException('Backup archive is damaged.');
+      }
+      if (output.length != file.size) {
+        throw const FormatException('Backup entry size is invalid.');
+      }
+      final content = output.getBytes();
+      final expectedCrc = file.crc32;
+      if (expectedCrc == null || getCrc32(content) != expectedCrc) {
+        throw const FormatException('Backup archive checksum is invalid.');
+      }
+      decodedEntries[file.name] = content;
+    }
+    final manifestBytes = decodedEntries[_manifestEntry]!;
     if (manifestBytes.length > _maximumManifestBytes) {
       throw const FormatException('Backup manifest is too large.');
     }
@@ -230,7 +266,7 @@ final class BackupCodec {
       throw const FormatException('Unsupported backup manifest.');
     }
     _validateApplicationManifest(manifest);
-    final databaseBytes = Uint8List.fromList(databaseFiles.single.content);
+    final databaseBytes = decodedEntries[_databaseEntry]!;
     if (databaseBytes.length > _maximumDatabaseBytes) {
       throw const FormatException('Backup database is too large.');
     }
@@ -243,6 +279,296 @@ final class BackupCodec {
       manifest: manifest,
       encrypted: encrypted,
     );
+  }
+}
+
+/// Reads only the ZIP directory and local headers. No entry content is
+/// decompressed until every declared name, size, type, and offset is bounded.
+void _preflightZip(Uint8List zipBytes) {
+  try {
+    _preflightZipUnchecked(zipBytes);
+  } on FormatException {
+    rethrow;
+  } on Object {
+    throw const FormatException('Backup archive is damaged.');
+  }
+}
+
+void _preflightZipUnchecked(Uint8List zipBytes) {
+  const eocdSignature = 0x06054b50;
+  const centralSignature = 0x02014b50;
+  const minimumEocdLength = 22;
+  const maximumCommentLength = 0xffff;
+  if (zipBytes.length < minimumEocdLength) {
+    throw const FormatException('Backup archive is damaged.');
+  }
+  final view = ByteData.sublistView(zipBytes);
+  final earliestEocd = max(
+    0,
+    zipBytes.length - minimumEocdLength - maximumCommentLength,
+  );
+  var eocdOffset = -1;
+  for (
+    var offset = zipBytes.length - minimumEocdLength;
+    offset >= earliestEocd;
+    offset--
+  ) {
+    if (view.getUint32(offset, Endian.little) == eocdSignature) {
+      final commentLength = view.getUint16(offset + 20, Endian.little);
+      if (offset + minimumEocdLength + commentLength == zipBytes.length) {
+        eocdOffset = offset;
+        break;
+      }
+    }
+  }
+  if (eocdOffset < 0) {
+    throw const FormatException('Backup archive is damaged.');
+  }
+
+  final numberOfThisDisk = view.getUint16(eocdOffset + 4, Endian.little);
+  final centralDirectoryDisk = view.getUint16(eocdOffset + 6, Endian.little);
+  final entriesOnDisk = view.getUint16(eocdOffset + 8, Endian.little);
+  final totalEntries = view.getUint16(eocdOffset + 10, Endian.little);
+  final centralDirectorySize = view.getUint32(eocdOffset + 12, Endian.little);
+  final centralDirectoryOffset = view.getUint32(eocdOffset + 16, Endian.little);
+  if (numberOfThisDisk != 0 ||
+      centralDirectoryDisk != 0 ||
+      entriesOnDisk != 2 ||
+      totalEntries != 2 ||
+      centralDirectorySize <= 0 ||
+      centralDirectoryOffset < 0 ||
+      centralDirectoryOffset + centralDirectorySize != eocdOffset) {
+    throw const FormatException('Backup archive contains unexpected entries.');
+  }
+
+  final entries = <_ZipCentralEntry>[];
+  var centralCursor = centralDirectoryOffset;
+  for (var index = 0; index < totalEntries; index++) {
+    if (centralCursor + 46 > eocdOffset ||
+        view.getUint32(centralCursor, Endian.little) != centralSignature) {
+      throw const FormatException('Backup central directory is invalid.');
+    }
+    final nameLength = view.getUint16(centralCursor + 28, Endian.little);
+    final extraLength = view.getUint16(centralCursor + 30, Endian.little);
+    final commentLength = view.getUint16(centralCursor + 32, Endian.little);
+    final entryEnd =
+        centralCursor + 46 + nameLength + extraLength + commentLength;
+    if (entryEnd > eocdOffset) {
+      throw const FormatException('Backup central directory is invalid.');
+    }
+    final nameBytes = zipBytes.sublist(
+      centralCursor + 46,
+      centralCursor + 46 + nameLength,
+    );
+    final name = utf8.decode(nameBytes);
+    entries.add(
+      _ZipCentralEntry(
+        name: name,
+        versionMadeBy: view.getUint16(centralCursor + 4, Endian.little),
+        flags: view.getUint16(centralCursor + 8, Endian.little),
+        compressionMethod: view.getUint16(centralCursor + 10, Endian.little),
+        crc32: view.getUint32(centralCursor + 16, Endian.little),
+        compressedSize: view.getUint32(centralCursor + 20, Endian.little),
+        uncompressedSize: view.getUint32(centralCursor + 24, Endian.little),
+        diskNumberStart: view.getUint16(centralCursor + 34, Endian.little),
+        externalFileAttributes: view.getUint32(
+          centralCursor + 38,
+          Endian.little,
+        ),
+        localHeaderOffset: view.getUint32(centralCursor + 42, Endian.little),
+      ),
+    );
+    centralCursor = entryEnd;
+  }
+  if (centralCursor != eocdOffset) {
+    throw const FormatException('Backup central directory is invalid.');
+  }
+
+  final names = entries.map((entry) => entry.name).toList(growable: false);
+  if (names.toSet().length != names.length ||
+      names.toSet().difference(const <String>{
+        _manifestEntry,
+        _databaseEntry,
+      }).isNotEmpty) {
+    throw const FormatException('Backup archive contains unexpected entries.');
+  }
+
+  var totalUncompressed = 0;
+  final occupiedRanges = <({int start, int end})>[];
+  for (final entry in entries) {
+    final maximumSize = entry.name == _manifestEntry
+        ? _maximumManifestBytes
+        : _maximumDatabaseBytes;
+    final minimumSize = entry.name == _manifestEntry ? 1 : 100;
+    if (entry.uncompressedSize < minimumSize ||
+        entry.uncompressedSize > maximumSize ||
+        entry.compressedSize <= 0 ||
+        entry.compressedSize > zipBytes.length ||
+        entry.diskNumberStart != 0 ||
+        (entry.flags & 0x1) != 0 ||
+        (entry.compressionMethod != ZipFile.zipCompressionStore &&
+            entry.compressionMethod != ZipFile.zipCompressionDeflate) ||
+        !_isRegularZipEntry(entry)) {
+      throw const FormatException('Backup entry metadata is invalid.');
+    }
+    if (totalUncompressed >
+        _maximumDatabaseBytes +
+            _maximumManifestBytes -
+            entry.uncompressedSize) {
+      throw const FormatException('Backup archive expands beyond its limit.');
+    }
+    totalUncompressed += entry.uncompressedSize;
+    occupiedRanges.add(
+      _validateLocalZipHeader(
+        zipBytes,
+        entry,
+        centralDirectoryOffset: centralDirectoryOffset,
+      ),
+    );
+  }
+  occupiedRanges.sort((left, right) => left.start.compareTo(right.start));
+  for (var index = 1; index < occupiedRanges.length; index++) {
+    if (occupiedRanges[index].start < occupiedRanges[index - 1].end) {
+      throw const FormatException('Backup ZIP entries overlap.');
+    }
+  }
+}
+
+bool _isRegularZipEntry(_ZipCentralEntry entry) {
+  final creatorSystem = entry.versionMadeBy >> 8;
+  if (creatorSystem == 3) {
+    final fileType = (entry.externalFileAttributes >> 16) & 0xf000;
+    return fileType == 0 || fileType == 0x8000;
+  }
+  // DOS directory attribute. Exact entry names also reject path aliases.
+  return (entry.externalFileAttributes & 0x10) == 0;
+}
+
+({int start, int end}) _validateLocalZipHeader(
+  Uint8List bytes,
+  _ZipCentralEntry entry, {
+  required int centralDirectoryOffset,
+}) {
+  final start = entry.localHeaderOffset;
+  if (start < 0 || start + 30 > centralDirectoryOffset) {
+    throw const FormatException('Backup ZIP local header is invalid.');
+  }
+  final view = ByteData.sublistView(bytes);
+  if (view.getUint32(start, Endian.little) != ZipFile.zipSignature) {
+    throw const FormatException('Backup ZIP local header is invalid.');
+  }
+  final flags = view.getUint16(start + 6, Endian.little);
+  final compressionMethod = view.getUint16(start + 8, Endian.little);
+  final crc32 = view.getUint32(start + 14, Endian.little);
+  final compressedSize = view.getUint32(start + 18, Endian.little);
+  final uncompressedSize = view.getUint32(start + 22, Endian.little);
+  final nameLength = view.getUint16(start + 26, Endian.little);
+  final extraLength = view.getUint16(start + 28, Endian.little);
+  final dataStart = start + 30 + nameLength + extraLength;
+  var end = dataStart + entry.compressedSize;
+  final localName = utf8.decode(
+    bytes.sublist(start + 30, start + 30 + nameLength),
+  );
+  if (localName != entry.name ||
+      flags != entry.flags ||
+      (flags & 0x1) != 0 ||
+      compressionMethod != entry.compressionMethod ||
+      dataStart < start ||
+      end < dataStart ||
+      end > centralDirectoryOffset) {
+    throw const FormatException('Backup ZIP local header is inconsistent.');
+  }
+  if ((flags & 0x08) == 0) {
+    if (crc32 != entry.crc32 ||
+        compressedSize != entry.compressedSize ||
+        uncompressedSize != entry.uncompressedSize) {
+      throw const FormatException('Backup ZIP local header is inconsistent.');
+    }
+  } else {
+    var descriptorOffset = end;
+    if (descriptorOffset + 12 > centralDirectoryOffset) {
+      throw const FormatException('Backup ZIP data descriptor is invalid.');
+    }
+    if (view.getUint32(descriptorOffset, Endian.little) == 0x08074b50) {
+      descriptorOffset += 4;
+    }
+    if (descriptorOffset + 12 > centralDirectoryOffset ||
+        view.getUint32(descriptorOffset, Endian.little) != entry.crc32 ||
+        view.getUint32(descriptorOffset + 4, Endian.little) !=
+            entry.compressedSize ||
+        view.getUint32(descriptorOffset + 8, Endian.little) !=
+            entry.uncompressedSize) {
+      throw const FormatException('Backup ZIP data descriptor is invalid.');
+    }
+    end = descriptorOffset + 12;
+  }
+  return (start: start, end: end);
+}
+
+final class _ZipCentralEntry {
+  const _ZipCentralEntry({
+    required this.name,
+    required this.versionMadeBy,
+    required this.flags,
+    required this.compressionMethod,
+    required this.crc32,
+    required this.compressedSize,
+    required this.uncompressedSize,
+    required this.diskNumberStart,
+    required this.externalFileAttributes,
+    required this.localHeaderOffset,
+  });
+
+  final String name;
+  final int versionMadeBy;
+  final int flags;
+  final int compressionMethod;
+  final int crc32;
+  final int compressedSize;
+  final int uncompressedSize;
+  final int diskNumberStart;
+  final int externalFileAttributes;
+  final int localHeaderOffset;
+}
+
+/// Archive 4.x trusts the central-directory size as an allocation hint. This
+/// sink enforces that bound during every inflate write as well, so a forged
+/// deflate stream cannot expand past the already preflighted declaration.
+final class _BoundedOutputMemoryStream extends OutputMemoryStream {
+  _BoundedOutputMemoryStream(this.maximumLength)
+    : super(size: min(maximumLength, OutputMemoryStream.defaultBufferSize));
+
+  final int maximumLength;
+
+  void _reserve(int count) {
+    if (count < 0 || count > maximumLength - length) {
+      throw const FormatException('Backup entry expands beyond its limit.');
+    }
+  }
+
+  @override
+  void writeByte(int value) {
+    _reserve(1);
+    super.writeByte(value);
+  }
+
+  @override
+  void writeBytes(List<int> bytes, {int? length}) {
+    final writeLength = length ?? bytes.length;
+    _reserve(writeLength);
+    super.writeBytes(bytes, length: writeLength);
+  }
+
+  @override
+  void writeStream(InputStream stream) {
+    _reserve(stream.length);
+    super.writeStream(stream);
+  }
+
+  @override
+  void writeBackReference(int distance, int count) {
+    _reserve(count);
+    super.writeBackReference(distance, count);
   }
 }
 

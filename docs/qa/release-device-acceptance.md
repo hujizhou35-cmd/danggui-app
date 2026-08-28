@@ -1,10 +1,10 @@
 # 发布设备验收记录
 
-本文档是 v1.1.4 预发布门禁的证据清单。模拟器作业包含两个不能混称的阶段：第一阶段使用 Debug 测试宿主和临时 VM-service 清单完成数据保留、权限、提醒与通知交互验收；第二阶段安装同一 workflow SHA 的 `android-linux` 通用 Release-mode APK，验证精确二进制的冷启动、包名/版本、基础导航和无崩溃。它们不代替特定 OEM 的锁屏、声音、震动、隔夜和覆盖升级验收。
+本文档是 v1.1.5 预发布门禁的证据清单。Android 模拟器作业包含两个不能混称的阶段：第一阶段使用 Debug 测试宿主和临时 VM-service 清单完成数据保留、权限、提醒与通知交互验收；第二阶段安装同一 workflow SHA 的 `android-linux` 通用 Release-mode APK，验证精确二进制的冷启动、包名/版本、基础导航和无崩溃。iOS 另由固定 iOS 18.5/26.5 Simulator 执行 RunnerTests 与 RunnerUITests。它们都不代替特定 OEM 或 iPhone 的锁屏、声音、触感、隔夜和覆盖升级验收。
 
 ## API 24 / 36 模拟器自动证据
 
-历史 v1.0.0、v1.1.0、v1.1.2 与 v1.1.3 的标签、Release 和验收证据继续保留；v1.1.4 必须产生自己的标签工作流与 Artifact，不沿用或改写旧版本结论。
+v1.1.4 及更早标签、Release 和验收证据继续保留；v1.1.5 必须产生自己的标签工作流与 Artifact，不沿用或改写旧版本结论。
 
 每个 API 矩阵作业一旦开始执行步骤，就会在检出源码和安装工具链之前先创建阶段哨兵；后续用 `if: always()` 上传 `danggui-emulator-api-<API>-acceptance-<SHA>`。若 GitHub 未能分配 runner 或作业被外部取消，则平台无法承诺产出 Artifact。成功门禁要求同时具备：
 
@@ -24,7 +24,7 @@
 
 `android-emulator-smoke` 显式依赖 `android-linux`，按 `danggui-android-<SHA>` 下载该上游作业已上传的完整产物，先复核 `SHA256SUMS` 与 `SIGNING_MODE.txt`，再把唯一的 `danggui-android-universal-<signing-mode>.apk` 交给第二阶段。该阶段先卸载 Debug 测试包，以无 `-r`、无 `-t` 的 `adb install --no-streaming` 安装下载文件；不重新构建、不改名、不注入测试代码。成功还必须具备：
 
-- `release-binary-apk.sha256`、`release-binary-apk-metadata.json`、`release-binary-apk-verification.txt`：记录 workflow SHA 和下载文件 SHA-256，并再次验证 `com.danggui.memo`、`1.1.4`、versionCode `5`、min/target SDK `24/36`、`debuggable=false`、八项精确权限、签名及 manifest 合同。
+- `release-binary-apk.sha256`、`release-binary-apk-metadata.json`、`release-binary-apk-verification.txt`：记录 workflow SHA 和下载文件 SHA-256，并再次验证 `com.danggui.memo`、`1.1.5`、versionCode `6`、min/target SDK `24/36`、`debuggable=false`、八项精确权限、签名及 manifest 合同。
 - `release-binary-device.json`、`release-binary-install.txt`、`release-binary-package*.txt`、`release-binary-cold-start.txt`：先证明设备实际 API 与矩阵 API 24/36 一致，再证明精确文件全新安装成功、设备 Package Manager 读到预期包名与版本，并通过生产 Launcher 执行强停后的冷启动。
 - `release-binary-*.xml`、`release-binary-*-navigation.json` 与对应截图：用四语稳定底栏语义和各页专属可见标记完成“事项 → 笔记 → 设置 → 事项”，每一步均证明目标页面非空且当归仍在前台；此处没有 Flutter test driver 或 integration-test 通道。
 - `release-binary-app-pid-stable.txt`、`release-binary-crash-scan.json`、`release-binary-logcat.txt`、`release-binary-smoke.json`：证明导航期间进程 PID 未重启，且没有当归 FATAL/ANR/native crash 证据。最终 `workflow-phase.json` 必须为 `release-binary-smoke-complete`，否则 required check 失败。
@@ -73,11 +73,11 @@ Flutter 设备测试结束会强制停止应用并清除未触发的系统 Alarm
 - [ ] 在小米/HyperOS 与至少另一代表性 OEM 上记录后台限制、锁屏呈现和自启动入口；不得把入口可打开等同于系统已授权
 - [ ] 勿扰/静音场景按系统与用户设置记录实际行为；确认应用未索取勿扰政策访问或擅自更改系统策略
 
-### v1.1.3 → v1.1.4 正式包覆盖安装与数据
+### v1.1.4 → v1.1.5 正式包覆盖安装与数据
 
-- [ ] 安装公开 Release 中指纹已核对的正式签名 v1.1.3 APK，创建至少一个含日期、计划、正文和提醒的事项，并创建笔记与过往正文
+- [ ] 安装公开 Release 中指纹已核对的正式签名 v1.1.4 APK，创建至少一个含日期、计划、正文和提醒的事项，并创建笔记与过往正文
 - [ ] 记录覆盖前事项与提醒截图：__________
-- [ ] 使用同一应用 ID、同一正式签名的 v1.1.4 APK 执行覆盖安装，未卸载、未清除数据
+- [ ] 使用同一应用 ID、同一正式签名的 v1.1.5 APK 执行覆盖安装，未卸载、未清除数据
 - [ ] 覆盖安装后事项标题、日期、计划、正文、提醒时间和开关，以及笔记、过往和设置均保留
 - [ ] 事项、笔记与过往进入后都能输入、点击保存并看到明确反馈、返回并重进；键盘收起后顶栏和工具栏不消失
 - [ ] 新建事项默认当天且可清除日期；提醒可选择任意分钟，提醒状态、权限受限与系统设置入口可用
@@ -92,7 +92,8 @@ Flutter 设备测试结束会强制停止应用并清除未触发的系统 Alarm
 
 状态：**未执行 / 未签署**。当前只交付源码 ZIP 和 unsigned `.app.zip` 构建证据，不是 IPA；没有 Apple 签名真机包时不得勾选真机项目。
 
-- [ ] macOS 使用带 iOS 26 SDK 的 Xcode 完成 unsigned 构建与 Swift 单元测试，确认部署目标仍为 iOS 15.0
+- [ ] 标准 `macos-15` 使用 Xcode 16.4 / iOS 18.5 Simulator 完成 unsigned device build、RunnerTests 与两条 RunnerUITests，验证 iOS 15–25 回退合同
+- [ ] 标准 `macos-26` 使用 Xcode 26.6 / iOS 26.5 Simulator 完成 unsigned device build、RunnerTests 与两条 RunnerUITests，验证 AlarmKit 合同
 - [ ] iOS 26+ 由应用发起 AlarmKit 授权，用户允许后有声提醒可排期、到点、停止与稍后提醒
 - [ ] iOS 15–25 使用 Time Sensitive 本地通知回退，允许/拒绝状态和设置入口显示正确
 - [ ] `NSAlarmKitUsageDescription` 四语文案与唯一 Time Sensitive entitlement 出现在最终未签名构建配置中；无 Critical Alerts、远程通知或后台网络能力

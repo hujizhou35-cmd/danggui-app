@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:share_plus/share_plus.dart';
 
 void main() {
   late DangguiDatabase database;
@@ -47,7 +48,24 @@ void main() {
     expect(settings.autoBackupMinuteLocal, 35);
   });
 
-  testWidgets('shows the 1.1.4 product version without build metadata', (
+  test('dismissed manual backup share is never reported as created', () {
+    expect(
+      manualBackupShareWasAccepted(
+        const ShareResult('', ShareResultStatus.dismissed),
+      ),
+      isFalse,
+    );
+    expect(manualBackupShareWasAccepted(null), isFalse);
+    expect(
+      manualBackupShareWasAccepted(
+        const ShareResult('save-to-files', ShareResultStatus.success),
+      ),
+      isTrue,
+    );
+    expect(manualBackupShareWasAccepted(ShareResult.unavailable), isTrue);
+  });
+
+  testWidgets('shows the 1.1.5 product version without build metadata', (
     tester,
   ) async {
     _setPhoneSize(tester);
@@ -61,8 +79,8 @@ void main() {
 
     await _scrollToText(tester, '关于当归', maximumDrags: 20);
     expect(find.text('帮助与隐私'), findsOneWidget);
-    expect(find.text('版本 1.1.4'), findsOneWidget);
-    expect(find.textContaining('1.1.4+5'), findsNothing);
+    expect(find.text('版本 1.1.5'), findsOneWidget);
+    expect(find.textContaining('1.1.5+6'), findsNothing);
   });
 
   testWidgets('shows complete settings and exposes every locale choice', (

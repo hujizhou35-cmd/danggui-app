@@ -16,6 +16,7 @@ final class TaskViewModel {
     this.vibrationEnabled = true,
     this.reminderStatus,
     this.reminderPauseReason,
+    this.rowVersion = 1,
   });
 
   final String id;
@@ -30,6 +31,7 @@ final class TaskViewModel {
   final bool vibrationEnabled;
   final ReminderStatus? reminderStatus;
   final ReminderPauseReason? reminderPauseReason;
+  final int rowVersion;
 
   TaskViewModel copyWith({
     String? title,
@@ -43,6 +45,7 @@ final class TaskViewModel {
     bool? vibrationEnabled,
     Object? reminderStatus = _unset,
     Object? reminderPauseReason = _unset,
+    int? rowVersion,
   }) {
     return TaskViewModel(
       id: id,
@@ -63,6 +66,7 @@ final class TaskViewModel {
       reminderPauseReason: identical(reminderPauseReason, _unset)
           ? this.reminderPauseReason
           : reminderPauseReason as ReminderPauseReason?,
+      rowVersion: rowVersion ?? this.rowVersion,
     );
   }
 }
@@ -75,6 +79,7 @@ final class NoteViewModel {
     required this.updatedAt,
     this.folderId,
     this.pinned = false,
+    this.rowVersion = 1,
   });
 
   final String id;
@@ -83,6 +88,7 @@ final class NoteViewModel {
   final String? folderId;
   final bool pinned;
   final DateTime updatedAt;
+  final int rowVersion;
 
   NoteViewModel copyWith({
     String? title,
@@ -90,6 +96,7 @@ final class NoteViewModel {
     Object? folderId = _unset,
     bool? pinned,
     DateTime? updatedAt,
+    int? rowVersion,
   }) {
     return NoteViewModel(
       id: id,
@@ -100,6 +107,7 @@ final class NoteViewModel {
           : folderId as String?,
       pinned: pinned ?? this.pinned,
       updatedAt: updatedAt ?? this.updatedAt,
+      rowVersion: rowVersion ?? this.rowVersion,
     );
   }
 }

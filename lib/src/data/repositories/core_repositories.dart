@@ -141,6 +141,23 @@ abstract base class _RepositoryBase {
   );
 }
 
+Future<Map<String, Object?>> _verifiedRestoreContext(
+  TrashEntryRow trash,
+) async {
+  late final Map<String, Object?> context;
+  try {
+    final decoded = jsonDecode(trash.restoreContextJson);
+    if (decoded is! Map<String, dynamic>) throw const FormatException();
+    context = decoded.cast<String, Object?>();
+  } on Object {
+    throw const StateConflictException('最近删除的恢复信息已损坏。');
+  }
+  if (await sha256Hex(context) != trash.snapshotSha256) {
+    throw const StateConflictException('最近删除的恢复信息校验失败。');
+  }
+  return context;
+}
+
 final class DriftTaskRepository extends _RepositoryBase
     implements TaskRepository {
   DriftTaskRepository(super.db, {super.clock, super.ids});
@@ -560,6 +577,9 @@ final class DriftTaskRepository extends _RepositoryBase
       if (task == null) throw const NotFoundException('事项不存在。');
       if (task.status == TaskStatus.trashed) return;
       final now = nowMicros;
+      final reminder = await (db.select(
+        db.reminders,
+      )..where((row) => row.taskId.equals(id.value))).getSingleOrNull();
       final context = {
         'status': task.status.name,
         'manualRank': task.manualRank,
@@ -567,6 +587,11 @@ final class DriftTaskRepository extends _RepositoryBase
         'closedLocalDate': task.closedLocalDate,
         'closedLocalTime': task.closedLocalTime,
         'closedZoneId': task.closedZoneId,
+        // Preserve the pre-trash reminder intent. Earlier versions inferred
+        // this from the temporary `paused/user` tombstone and could silently
+        // reactivate a reminder the user had already paused.
+        'reminderStatus': reminder?.status.name,
+        'reminderPauseReason': reminder?.pauseReason?.name,
       };
       final snapshotHash = await sha256Hex(context);
       await (db.update(
@@ -598,9 +623,6 @@ final class DriftTaskRepository extends _RepositoryBase
                 row.entityId.equals(id.value),
           ))
           .go();
-      final reminder = await (db.select(
-        db.reminders,
-      )..where((row) => row.taskId.equals(id.value))).getSingleOrNull();
       if (reminder != null && reminder.status != ReminderStatus.cancelled) {
         final revision = reminder.scheduleRevision + 1;
         await (db.update(
@@ -641,8 +663,7 @@ final class DriftTaskRepository extends _RepositoryBase
       if (trash == null || task.status != TaskStatus.trashed) {
         throw const StateConflictException('事项不在最近删除中。');
       }
-      final context =
-          jsonDecode(trash.restoreContextJson) as Map<String, Object?>;
+      final context = await _verifiedRestoreContext(trash);
       final previous = TaskStatus.values.byName(context['status']! as String);
       final now = nowMicros;
       await (db.update(
@@ -679,16 +700,61 @@ final class DriftTaskRepository extends _RepositoryBase
           reminder.status == ReminderStatus.paused &&
           reminder.pauseReason == ReminderPauseReason.user) {
         final revision = reminder.scheduleRevision + 1;
-        final shouldSchedule =
-            previous == TaskStatus.active && reminder.scheduledAtUtc > now;
-        final reminderStatus = shouldSchedule
-            ? ReminderStatus.scheduled
-            : previous == TaskStatus.completionPending
-            ? ReminderStatus.paused
-            : ReminderStatus.expired;
-        final pauseReason = previous == TaskStatus.completionPending
-            ? ReminderPauseReason.taskClosed
-            : null;
+        final hasReminderSnapshot = context.containsKey('reminderStatus');
+        var shouldSchedule = false;
+        late final ReminderStatus reminderStatus;
+        late final ReminderPauseReason? pauseReason;
+        if (hasReminderSnapshot) {
+          final statusName = context['reminderStatus'];
+          final pauseName = context['reminderPauseReason'];
+          try {
+            final originalStatus = statusName == null
+                ? null
+                : ReminderStatus.values.byName(statusName as String);
+            final originalPauseReason = pauseName == null
+                ? null
+                : ReminderPauseReason.values.byName(pauseName as String);
+            if (originalStatus == null) {
+              // A null status records that the task had no reminder. Reaching
+              // this branch with a reminder is inconsistent and fails closed.
+              throw const StateConflictException('最近删除的提醒恢复信息不一致。');
+            }
+            shouldSchedule =
+                originalStatus == ReminderStatus.scheduled &&
+                previous == TaskStatus.active &&
+                reminder.scheduledAtUtc > now;
+            if (originalStatus == ReminderStatus.scheduled) {
+              reminderStatus = shouldSchedule
+                  ? ReminderStatus.scheduled
+                  : previous == TaskStatus.completionPending
+                  ? ReminderStatus.paused
+                  : ReminderStatus.expired;
+              pauseReason = previous == TaskStatus.completionPending
+                  ? ReminderPauseReason.taskClosed
+                  : null;
+            } else {
+              reminderStatus = originalStatus;
+              pauseReason = originalPauseReason;
+            }
+          } on StateConflictException {
+            rethrow;
+          } on Object {
+            throw const StateConflictException('最近删除的提醒恢复信息已损坏。');
+          }
+        } else {
+          // Backward-compatible behavior for v1.1.4 trash rows, which did not
+          // persist reminder intent in their authenticated restore context.
+          shouldSchedule =
+              previous == TaskStatus.active && reminder.scheduledAtUtc > now;
+          reminderStatus = shouldSchedule
+              ? ReminderStatus.scheduled
+              : previous == TaskStatus.completionPending
+              ? ReminderStatus.paused
+              : ReminderStatus.expired;
+          pauseReason = previous == TaskStatus.completionPending
+              ? ReminderPauseReason.taskClosed
+              : null;
+        }
         await (db.update(
           db.reminders,
         )..where((row) => row.id.equals(reminder.id))).write(
@@ -1032,8 +1098,7 @@ final class DriftNoteRepository extends _RepositoryBase
       if (trash == null || note.deletedAtUtc == null) {
         throw const StateConflictException('笔记不在最近删除中。');
       }
-      final context =
-          jsonDecode(trash.restoreContextJson) as Map<String, Object?>;
+      final context = await _verifiedRestoreContext(trash);
       final requestedFolder = context['folderId'] as String?;
       String? folderId;
       if (requestedFolder != null) {

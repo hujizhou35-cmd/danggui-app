@@ -1,9 +1,61 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 const reminderPlatformChannelName = 'com.danggui.memo/reminder_platform';
+const _maximumSignedInt64 = 9223372036854775807;
+const _minimumSignedInt64 = -9223372036854775808;
+// Dart DateTime is limited to +/- 100,000,000 days from the Unix epoch. Keep
+// native values inside that range before constructing DateTime or converting
+// them to the SQLite microsecond representation.
+const _maximumSafeEpochMilliseconds = 8640000000000;
+const _supportedNativeSnoozeMinutes = <int>{10, 30, 60};
+
+/// Stable session identifier shared by AlarmKit, Android, and Dart.
+///
+/// This is byte-for-byte equivalent to `DangguiAlarmIdentifier.platformID`
+/// in the iOS bridge. Binding a mutable native event to this value prevents a
+/// delayed or forged session from changing a newer reminder revision.
+String deterministicNativeAlarmSessionId(
+  String reminderId,
+  int scheduleRevision, {
+  String? deviceGeneration,
+}) {
+  final normalizedGeneration = deviceGeneration?.trim().toLowerCase();
+  final identity = normalizedGeneration == null || normalizedGeneration.isEmpty
+      ? '$reminderId\u001f$scheduleRevision'
+      : '$reminderId\u001f$scheduleRevision\u001f$normalizedGeneration';
+  final bytes = utf8.encode(identity);
+  final first = _fnv1a64(bytes, BigInt.parse('cbf29ce484222325', radix: 16));
+  final second = _fnv1a64(
+    bytes.reversed,
+    BigInt.parse('84222325cbf29ce4', radix: 16),
+  );
+  final characters = <String>[
+    ...first.toRadixString(16).padLeft(16, '0').split(''),
+    ...second.toRadixString(16).padLeft(16, '0').split(''),
+  ];
+  // Match the name-derived version and RFC 4122 variant bits used by iOS.
+  characters[12] = '5';
+  characters[16] = 'a';
+  final compact = characters.join();
+  return '${compact.substring(0, 8)}-${compact.substring(8, 12)}-'
+      '${compact.substring(12, 16)}-${compact.substring(16, 20)}-'
+      '${compact.substring(20)}';
+}
+
+BigInt _fnv1a64(Iterable<int> bytes, BigInt seed) {
+  var hash = seed;
+  final prime = BigInt.parse('100000001b3', radix: 16);
+  final mask = BigInt.parse('ffffffffffffffff', radix: 16);
+  for (final byte in bytes) {
+    hash ^= BigInt.from(byte);
+    hash = (hash * prime) & mask;
+  }
+  return hash;
+}
 
 enum NativeAlarmAuthorization { unavailable, notDetermined, denied, authorized }
 
@@ -193,6 +245,7 @@ final class NativeAlarmSnapshot {
     required this.scheduleRevision,
     required this.triggerAtEpochMs,
     required this.state,
+    this.deviceGeneration,
   });
 
   final String reminderId;
@@ -200,6 +253,7 @@ final class NativeAlarmSnapshot {
   final int scheduleRevision;
   final int triggerAtEpochMs;
   final NativeAlarmSnapshotState state;
+  final String? deviceGeneration;
 
   factory NativeAlarmSnapshot.fromMap(Map<Object?, Object?> map) {
     final reminderId =
@@ -233,6 +287,8 @@ final class NativeAlarmSnapshot {
         'deferred' => NativeAlarmSnapshotState.capacityDeferred,
         _ => NativeAlarmSnapshotState.unknown,
       },
+      deviceGeneration:
+          _string(map, 'deviceGeneration') ?? _string(map, 'alarmGeneration'),
     );
   }
 }
@@ -248,6 +304,7 @@ final class NativeAlarmRequest {
     required this.vibrationEnabled,
     required this.defaultSnoozeMinutes,
     required this.localeTag,
+    this.deviceGeneration,
   });
 
   final String reminderId;
@@ -259,6 +316,7 @@ final class NativeAlarmRequest {
   final bool vibrationEnabled;
   final int defaultSnoozeMinutes;
   final String localeTag;
+  final String? deviceGeneration;
 
   Map<String, Object?> toMap() => <String, Object?>{
     'reminderId': reminderId,
@@ -273,6 +331,7 @@ final class NativeAlarmRequest {
     'vibrationEnabled': vibrationEnabled,
     'defaultSnoozeMinutes': defaultSnoozeMinutes,
     'localeTag': localeTag,
+    'deviceGeneration': ?deviceGeneration,
   };
 }
 
@@ -300,6 +359,7 @@ final class NativeAlarmEvent {
     this.snoozeMinutes,
     this.successorTriggerAtEpochMs,
     this.sessionId,
+    this.deviceGeneration,
     this.errorCode,
   });
 
@@ -312,46 +372,108 @@ final class NativeAlarmEvent {
   final int? snoozeMinutes;
   final int? successorTriggerAtEpochMs;
   final String? sessionId;
+  final String? deviceGeneration;
   final String? errorCode;
 
   factory NativeAlarmEvent.fromMap(Map<Object?, Object?> map) {
+    try {
+      return _fromMap(map);
+    } on Object {
+      // Method-channel values normally contain primitives only. Still keep one
+      // malformed platform value from preventing every later durable Stop,
+      // Snooze, Missed, or Delivered event from being drained and acknowledged.
+      return _invalidEnvelope(map);
+    }
+  }
+
+  static NativeAlarmEvent _fromMap(Map<Object?, Object?> map) {
     final rawType = _normalizedWireName(
       _string(map, 'type') ?? _string(map, 'eventType'),
     );
+    final parsedType = switch (rawType) {
+      'registered' || 'scheduled' => NativeAlarmEventType.registered,
+      'delivered' || 'fired' || 'fire' => NativeAlarmEventType.delivered,
+      'foreground' => NativeAlarmEventType.foreground,
+      'systemalert' => NativeAlarmEventType.systemAlert,
+      'audio' => NativeAlarmEventType.audio,
+      'vibration' || 'vibrate' => NativeAlarmEventType.vibration,
+      'missed' || 'expired' => NativeAlarmEventType.missed,
+      'stopped' || 'stop' => NativeAlarmEventType.stopped,
+      'snoozed' || 'snooze' => NativeAlarmEventType.snoozed,
+      _ => NativeAlarmEventType.error,
+    };
+    final eventId = _string(map, 'eventId')?.trim();
+    final reminderId =
+        (_string(map, 'reminderId') ?? _string(map, 'alarmId') ?? '').trim();
     final occurredAtMs =
-        _int(map, 'occurredAtEpochMs') ??
-        _int(map, 'occurredAt') ??
-        DateTime.now().toUtc().millisecondsSinceEpoch;
+        _safeInt(map, 'occurredAtEpochMs') ?? _safeInt(map, 'occurredAt');
+    final revision =
+        _safeInt(map, 'scheduleRevision') ?? _safeInt(map, 'revision') ?? 0;
+    final snoozeMinutes = _safeInt(map, 'snoozeMinutes');
+    final successorPresent =
+        map.containsKey('successorTriggerAtEpochMs') ||
+        map.containsKey('nextTriggerAtEpochMs');
+    final successorTriggerAtEpochMs =
+        _safeInt(map, 'successorTriggerAtEpochMs') ??
+        _safeInt(map, 'nextTriggerAtEpochMs');
+    final mutatesBusinessState = switch (parsedType) {
+      NativeAlarmEventType.delivered ||
+      NativeAlarmEventType.missed ||
+      NativeAlarmEventType.stopped ||
+      NativeAlarmEventType.snoozed => true,
+      _ => false,
+    };
+    final validBusinessEnvelope =
+        !mutatesBusinessState ||
+        (eventId != null &&
+            eventId.isNotEmpty &&
+            reminderId.isNotEmpty &&
+            revision > 0 &&
+            _isSafeEpochMilliseconds(occurredAtMs) &&
+            (parsedType != NativeAlarmEventType.snoozed ||
+                _supportedNativeSnoozeMinutes.contains(snoozeMinutes)) &&
+            (!successorPresent ||
+                _isSafeEpochMilliseconds(successorTriggerAtEpochMs)));
+    final safeOccurredAtMs = _isSafeEpochMilliseconds(occurredAtMs)
+        ? occurredAtMs!
+        : DateTime.now().toUtc().millisecondsSinceEpoch;
     return NativeAlarmEvent(
-      eventId:
-          _string(map, 'eventId') ??
-          '${_string(map, 'reminderId') ?? 'unknown'}:$occurredAtMs:$rawType',
-      reminderId: _string(map, 'reminderId') ?? _string(map, 'alarmId') ?? '',
-      taskId: _string(map, 'taskId') ?? '',
-      scheduleRevision:
-          _int(map, 'scheduleRevision') ?? _int(map, 'revision') ?? 0,
-      type: switch (rawType) {
-        'registered' || 'scheduled' => NativeAlarmEventType.registered,
-        'delivered' || 'fired' || 'fire' => NativeAlarmEventType.delivered,
-        'foreground' => NativeAlarmEventType.foreground,
-        'systemalert' => NativeAlarmEventType.systemAlert,
-        'audio' => NativeAlarmEventType.audio,
-        'vibration' || 'vibrate' => NativeAlarmEventType.vibration,
-        'missed' || 'expired' => NativeAlarmEventType.missed,
-        'stopped' || 'stop' => NativeAlarmEventType.stopped,
-        'snoozed' || 'snooze' => NativeAlarmEventType.snoozed,
-        _ => NativeAlarmEventType.error,
-      },
+      eventId: eventId == null || eventId.isEmpty
+          ? '$reminderId:$safeOccurredAtMs:$rawType'
+          : eventId,
+      reminderId: reminderId,
+      taskId: (_string(map, 'taskId') ?? '').trim(),
+      scheduleRevision: revision,
+      type: validBusinessEnvelope ? parsedType : NativeAlarmEventType.error,
       occurredAtUtc: DateTime.fromMillisecondsSinceEpoch(
-        occurredAtMs,
+        safeOccurredAtMs,
         isUtc: true,
       ),
-      snoozeMinutes: _int(map, 'snoozeMinutes'),
-      successorTriggerAtEpochMs:
-          _int(map, 'successorTriggerAtEpochMs') ??
-          _int(map, 'nextTriggerAtEpochMs'),
+      snoozeMinutes: snoozeMinutes,
+      successorTriggerAtEpochMs: successorTriggerAtEpochMs,
       sessionId: _string(map, 'sessionId') ?? _string(map, 'session'),
-      errorCode: _string(map, 'errorCode') ?? _string(map, 'code'),
+      deviceGeneration:
+          _string(map, 'deviceGeneration') ?? _string(map, 'alarmGeneration'),
+      errorCode: validBusinessEnvelope
+          ? _string(map, 'errorCode') ?? _string(map, 'code')
+          : 'invalid_event_envelope',
+    );
+  }
+
+  static NativeAlarmEvent _invalidEnvelope(Map<Object?, Object?> map) {
+    final now = DateTime.now().toUtc();
+    final eventId = map['eventId'];
+    final reminderId = map['reminderId'];
+    return NativeAlarmEvent(
+      eventId: eventId is String && eventId.trim().isNotEmpty
+          ? eventId.trim()
+          : 'invalid:${now.microsecondsSinceEpoch}',
+      reminderId: reminderId is String ? reminderId.trim() : '',
+      taskId: '',
+      scheduleRevision: 0,
+      type: NativeAlarmEventType.error,
+      occurredAtUtc: now,
+      errorCode: 'invalid_event_envelope',
     );
   }
 }
@@ -366,8 +488,22 @@ abstract interface class NativeAlarmPlatform {
   Future<void> openNotificationSettings();
   Future<void> openAlarmSoundSettings();
   Future<bool> openOemAutostartSettings();
+  Future<void> activateDeviceGeneration(String? deviceGeneration);
   Future<void> scheduleAlarm(NativeAlarmRequest request);
-  Future<void> cancelAlarm(String reminderId);
+  Future<void> cancelAlarm(String reminderId, {String? deviceGeneration});
+
+  /// Retires only the current native delivery route for [reminderId].
+  ///
+  /// Unlike [cancelAlarm], this is not a business cancellation. It permits the
+  /// same logical revision to move back to a stronger native route when a
+  /// temporary platform capability (for example AlarmKit authorization) is
+  /// restored.
+  Future<void> retireNativeAlarmRoute(
+    String reminderId, {
+    required int scheduleRevision,
+    required String sessionId,
+    String? deviceGeneration,
+  });
   Future<void> stopAlarm(
     String reminderId, {
     required int scheduleRevision,
@@ -448,14 +584,40 @@ final class MethodChannelNativeAlarmPlatform implements NativeAlarmPlatform {
       _invokeBool('openOemAutostartSettings');
 
   @override
+  Future<void> activateDeviceGeneration(String? deviceGeneration) =>
+      _channel.invokeMethod<void>('activateDeviceGeneration', <String, Object?>{
+        'deviceGeneration': deviceGeneration,
+        'generation': deviceGeneration,
+      });
+
+  @override
   Future<void> scheduleAlarm(NativeAlarmRequest request) =>
       _channel.invokeMethod<void>('scheduleAlarm', request.toMap());
 
   @override
-  Future<void> cancelAlarm(String reminderId) => _channel.invokeMethod<void>(
-    'cancelAlarm',
-    <String, Object?>{'reminderId': reminderId, 'alarmId': reminderId},
-  );
+  Future<void> cancelAlarm(String reminderId, {String? deviceGeneration}) =>
+      _channel.invokeMethod<void>('cancelAlarm', <String, Object?>{
+        'reminderId': reminderId,
+        'alarmId': reminderId,
+        'deviceGeneration': ?deviceGeneration,
+        'generation': ?deviceGeneration,
+      });
+
+  @override
+  Future<void> retireNativeAlarmRoute(
+    String reminderId, {
+    required int scheduleRevision,
+    required String sessionId,
+    String? deviceGeneration,
+  }) => _channel.invokeMethod<void>('retireNativeAlarmRoute', <String, Object?>{
+    'reminderId': reminderId,
+    'alarmId': reminderId,
+    'scheduleRevision': scheduleRevision,
+    'revision': scheduleRevision,
+    'sessionId': sessionId,
+    'session': sessionId,
+    'deviceGeneration': ?deviceGeneration,
+  });
 
   @override
   Future<void> stopAlarm(
@@ -623,6 +785,23 @@ int? _int(Map<Object?, Object?> map, String key) {
   if (value is num) return value.toInt();
   return int.tryParse(value?.toString() ?? '');
 }
+
+int? _safeInt(Map<Object?, Object?> map, String key) {
+  try {
+    final value = _int(map, key);
+    if (value == null ||
+        value < _minimumSignedInt64 ||
+        value > _maximumSignedInt64) {
+      return null;
+    }
+    return value;
+  } on Object {
+    return null;
+  }
+}
+
+bool _isSafeEpochMilliseconds(int? value) =>
+    value != null && value > 0 && value <= _maximumSafeEpochMilliseconds;
 
 bool? _positiveNumber(Map<Object?, Object?> map, String key) {
   final value = map[key];

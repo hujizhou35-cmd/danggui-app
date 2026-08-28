@@ -1,10 +1,13 @@
 {
   "@@locale": "en",
   "appName": "当归",
+  "brandSeal": "Danggui seal",
   "privacyTagline": "Local only · No uploads · No AI",
   "loading": "Loading…",
   "bootstrapError": "Setup could not finish",
   "retry": "Retry",
+  "reload": "Reload",
+  "editorVersionConflict": "This content changed elsewhere. Reload it before continuing to edit.",
   "tasksTab": "Tasks",
   "pastTab": "Past",
   "notesTab": "Notes",
