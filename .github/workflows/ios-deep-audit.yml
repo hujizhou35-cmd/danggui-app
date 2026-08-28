@@ -1,0 +1,119 @@
+name: Weekly iOS deep audit
+
+on:
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-deep-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.47.1
+
+jobs:
+  ios-model-fault-and-ui:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: iOS 18.5 fallback deep audit (Xcode 16.4)
+            runner: macos-15
+            xcode: /Applications/Xcode_16.4.app/Contents/Developer
+            runtime: "18.5"
+            suite: ios-18.5-fallback-deep
+          - name: iOS 26.5 AlarmKit API deep audit (Xcode 26.6)
+            runner: macos-26
+            xcode: /Applications/Xcode_26.6.app/Contents/Developer
+            runtime: "26.5"
+            suite: ios-26.5-alarmkit-deep
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select fixed Xcode and runtime
+        shell: bash
+        run: |
+          sudo xcode-select --switch "${{ matrix.xcode }}"
+          xcodebuild -version
+          xcrun simctl list runtimes available
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve pinned dependencies and native assets
+        shell: bash
+        run: |
+          flutter config --no-analytics --enable-swift-package-manager
+          dart --disable-analytics
+          flutter pub get --enforce-lockfile
+          bash tool/prefetch_sqlite_ios.sh
+
+      - name: Run offline audit and complete non-golden model/fault suite
+        shell: bash
+        run: |
+          dart run tool/audit_offline_boundary.dart
+          tests=()
+          while IFS= read -r test_file; do
+            tests+=("${test_file}")
+          done < <(
+            find test -type f -name '*_test.dart' \
+              ! -name 'app_pages_golden_test.dart' \
+              ! -name 'component_gallery_golden_test.dart' \
+              -print | LC_ALL=C sort
+          )
+          ((${#tests[@]} > 0))
+          flutter test --reporter expanded --concurrency=1 "${tests[@]}"
+
+      - name: Compile unsigned device target
+        run: flutter build ios --release --no-codesign
+
+      - name: Run only RunnerTests and RunnerUITests on disposable simulators
+        shell: bash
+        run: |
+          evidence_dir="${RUNNER_TEMP}/${{ matrix.suite }}"
+          bash tool/run_ios_simulator_tests.sh \
+            "${{ matrix.runtime }}" "${evidence_dir}" \
+            "${{ matrix.suite }}-iphone" iPhone
+          bash tool/run_ios_simulator_tests.sh \
+            "${{ matrix.runtime }}" "${evidence_dir}" \
+            "${{ matrix.suite }}-ipad" iPad
+          xcodebuild -version > "${evidence_dir}/XCODE.txt"
+          flutter --version > "${evidence_dir}/TOOLCHAIN.txt"
+
+      - name: Upload compact successful evidence
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: danggui-${{ matrix.suite }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/${{ matrix.suite }}/*.summary.txt
+            ${{ runner.temp }}/${{ matrix.suite }}/*.environment.txt
+            ${{ runner.temp }}/${{ matrix.suite }}/XCODE.txt
+            ${{ runner.temp }}/${{ matrix.suite }}/TOOLCHAIN.txt
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload logs and xcresult bundles only after failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: danggui-${{ matrix.suite }}-failure-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/${{ matrix.suite }}/*.xcresult
+            ${{ runner.temp }}/${{ matrix.suite }}/*.log
+            ${{ runner.temp }}/${{ matrix.suite }}/*.json
+          if-no-files-found: warn
+          retention-days: 7

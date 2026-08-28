@@ -679,6 +679,16 @@ final class _Audit {
     final project = _requiredText(projectPath);
     final frameworkInfo = _requiredText('ios/Flutter/AppFrameworkInfo.plist');
     final appDelegate = _requiredText('ios/Runner/AppDelegate.swift');
+    final dataProtection = _requiredText(
+      'ios/Runner/DangguiDataProtection.swift',
+    );
+    final dartDataProtection = _requiredText(
+      'lib/src/data/data_protection.dart',
+    );
+    final databaseProvider = _requiredText(
+      'lib/src/data/database_provider.dart',
+    );
+    final appSource = _requiredText('lib/src/app.dart');
     final secureStorageSource = _requiredText(
       'lib/src/services/backup/automatic_backup_coordinator.dart',
     );
@@ -740,7 +750,7 @@ final class _Audit {
         r'IPHONEOS_DEPLOYMENT_TARGET\s*=\s*([^;]+);',
       ).allMatches(project).map((match) => match.group(1)!.trim()).toList();
       _expect(
-        deploymentTargets.length == 3 &&
+        deploymentTargets.length >= 3 &&
             deploymentTargets.every(
               (target) => target == expectedIosDeploymentTarget,
             ),
@@ -813,8 +823,10 @@ final class _Audit {
         'excludeDangguiDataFromSystemBackups()',
         'for: .applicationSupportDirectory',
         'appendingPathComponent("danggui", isDirectory: true)',
-        'values.isExcludedFromBackup = true',
-        'dangguiURL.setResourceValues(values)',
+        'DangguiDataProtection.apply(to: dangguiURL',
+        'com.danggui.memo/data_protection',
+        'getDataProtectionStatus',
+        'retryDataProtection',
       ]) {
         _expectContains(
           'ios/Runner/AppDelegate.swift',
@@ -822,6 +834,76 @@ final class _Audit {
           marker,
           'iOS must attempt to exclude Application Support/danggui from '
               'system backups',
+        );
+      }
+    }
+
+    if (dataProtection != null) {
+      for (final marker in <String>[
+        'FileProtectionType.completeUntilFirstUserAuthentication',
+        'rootValues.isExcludedFromBackup = true',
+        'readBackupExclusion(rootURL) == true',
+        'fileManager.setAttributes(',
+        '.protectionKey: protectionType',
+        '.isSymbolicLinkKey',
+        'recordUnavailable(errorCode: "policy-pending")',
+      ]) {
+        _expectContains(
+          'ios/Runner/DangguiDataProtection.swift',
+          dataProtection,
+          marker,
+          'iOS private data must use explicit file protection and remain '
+              'excluded from system backups',
+        );
+      }
+    }
+
+    if (dartDataProtection != null) {
+      for (final marker in <String>[
+        'DataProtectionUnavailableException',
+        'getDataProtectionStatus',
+        'retryDataProtection',
+        "DataProtectionStatus.unavailable('channel-error')",
+        "DataProtectionStatus.unavailable('invalid-response')",
+      ]) {
+        _expectContains(
+          'lib/src/data/data_protection.dart',
+          dartDataProtection,
+          marker,
+          'Dart must fail closed and expose only stable iOS data-protection '
+              'status codes',
+        );
+      }
+    }
+
+    if (databaseProvider != null) {
+      for (final marker in <String>[
+        'dataProtectionPlatformProvider',
+        '.ensureAvailable()',
+        'throw DataProtectionUnavailableException(',
+      ]) {
+        _expectContains(
+          'lib/src/data/database_provider.dart',
+          databaseProvider,
+          marker,
+          'the SQLite path must remain unavailable until the iOS private-data '
+              'policy is confirmed',
+        );
+      }
+    }
+
+    if (appSource != null) {
+      for (final marker in <String>[
+        '_retryDataProtectionIfNeeded()',
+        'final retried = await platform.retry()',
+        'ref.invalidate(databaseFileProvider)',
+      ]) {
+        _expectContains(
+          'lib/src/app.dart',
+          appSource,
+          marker,
+          'foreground resume must retry and rebuild a previously unavailable '
+              'iOS data path',
         );
       }
     }
@@ -967,6 +1049,7 @@ final class _Audit {
       'bash tool/verify_android_artifacts.sh',
       'bash tool/build_ios_unsigned.sh',
       'bash tool/build_ios_source_zip.sh',
+      'bash tool/run_ios_simulator_tests.sh',
       'bash tool/assemble_release_assets.sh',
       'bash tool/render_release_notes.sh',
     ]) {
@@ -1086,6 +1169,110 @@ final class _Audit {
         releaseVerifier,
         exactContract,
         'release verification must fail closed on allowlist or checksum drift',
+      );
+    }
+    for (final releaseEvidenceContract in <String>[
+      'EXPECTED_SOURCE_COMMIT',
+      'SOURCE_COMMIT.txt does not match the protected tag commit',
+      'ui_test_count=2',
+      'testTaskReminderDeleteAndRestoreContract',
+      'testBackupRestoreRebuildsReminderContract',
+      'system_delivery=device-unverified',
+      'notification_gateway=in-process-contract-double',
+    ]) {
+      _expectContains(
+        releaseEvidenceContract == 'EXPECTED_SOURCE_COMMIT'
+            ? workflowPath
+            : releaseVerifierPath,
+        releaseEvidenceContract == 'EXPECTED_SOURCE_COMMIT'
+            ? workflow
+            : releaseVerifier,
+        releaseEvidenceContract,
+        'release evidence must match the tag and exact two UI contracts',
+      );
+    }
+
+    const simulatorScriptPath = 'tool/run_ios_simulator_tests.sh';
+    final simulatorScript = _requiredText(simulatorScriptPath) ?? '';
+    for (final simulatorContract in <String>[
+      'xcrun simctl create',
+      'xcrun simctl delete',
+      '-only-testing:RunnerTests',
+      '-only-testing:RunnerUITests',
+      'xcresulttool get test-results summary',
+      'total_test_count',
+      'ui_test_count=2',
+      'runner_image_version=',
+      'runner_arch=',
+      'runtime_build=',
+      'system_delivery=device-unverified',
+    ]) {
+      _expectContains(
+        simulatorScriptPath,
+        simulatorScript,
+        simulatorContract,
+        'iOS Simulator CI must be disposable, explicit, and fail closed',
+      );
+    }
+    _expect(
+      !simulatorScript.contains('simctl erase') &&
+          !simulatorScript.contains('mapfile'),
+      'iOS simulator runner neither erases existing devices nor requires Bash 4',
+      '$simulatorScriptPath must create/delete only its disposable device and '
+          'remain compatible with macOS Bash 3',
+    );
+
+    const deepAuditPath = '.github/workflows/ios-deep-audit.yml';
+    final deepAudit = _requiredText(deepAuditPath) ?? '';
+    for (final fixedMacContract in <String>[
+      'runs-on: macos-15',
+      'runs-on: macos-26',
+      '/Applications/Xcode_16.4.app/Contents/Developer',
+      '/Applications/Xcode_26.6.app/Contents/Developer',
+      'runtime: "18.5"',
+      'runtime: "26.5"',
+    ]) {
+      final source = fixedMacContract.startsWith('runs-on:')
+          ? '$workflow\n$deepAudit'
+          : deepAudit;
+      _expectContains(
+        fixedMacContract.startsWith('runs-on:')
+            ? 'iOS workflow contracts'
+            : deepAuditPath,
+        source,
+        fixedMacContract,
+        'free iOS CI must pin standard runner, Xcode, and runtime versions',
+      );
+    }
+    final combinedWorkflows = '$workflow\n$deepAudit';
+    for (final protectedIosContext in <String>[
+      'name: Unsigned iOS source build',
+      'needs: [ios-fallback, ios-unsigned]',
+      'needs: [android-linux, android-emulator-smoke, ios-unsigned-contract]',
+    ]) {
+      _expectContains(
+        workflowPath,
+        workflow,
+        protectedIosContext,
+        'protected-main iOS context must aggregate both fixed iOS contracts',
+      );
+    }
+    _expect(
+      !combinedWorkflows.contains('macos-latest') &&
+          !RegExp(r'runs-on:\s*[^\n]*(large|xlarge)')
+              .hasMatch(combinedWorkflows),
+      'iOS CI uses no floating or paid large macOS runner',
+      'mobile and deep-audit workflows must use fixed standard runners',
+    );
+    for (final match in RegExp(
+      r'^\s*uses:\s*[^@\s]+@([^\s#]+)',
+      multiLine: true,
+    ).allMatches(combinedWorkflows)) {
+      final reference = match.group(1) ?? '';
+      _expect(
+        RegExp(r'^[0-9a-f]{40}$').hasMatch(reference),
+        'GitHub Action dependency is pinned to an immutable commit',
+        'workflow action reference is mutable: $reference',
       );
     }
     _expect(

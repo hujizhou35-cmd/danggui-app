@@ -73,6 +73,8 @@ required_archive_entries=(
   docs/architecture/ios-source-build.md
   integration_test/app_cold_start_test.dart
   ios/Runner.xcodeproj/project.pbxproj
+  ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme
+  ios/RunnerUITests/RunnerUITests.swift
   lib/main.dart
   LICENSE
   pubspec.lock
@@ -80,6 +82,7 @@ required_archive_entries=(
   test/platform/privacy_platform_config_test.dart
   THIRD_PARTY_NOTICES.md
   tool/build_ios_unsigned.sh
+  tool/run_ios_simulator_tests.sh
 )
 for entry in "${required_archive_entries[@]}"; do
   if ! grep -Fxq "${prefix}${entry}" <<<"${archive_contents}"; then

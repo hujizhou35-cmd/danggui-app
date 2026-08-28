@@ -7,6 +7,57 @@ fail() {
   exit 1
 }
 
+require_exact_line_once() {
+  local path="$1"
+  local expected="$2"
+  local count
+  count="$({ grep -Fxc -- "${expected}" "${path}" || true; })"
+  [[ "${count}" == '1' ]] ||
+    fail "$(basename -- "${path}") must contain exactly once: ${expected}"
+}
+
+verify_ios_contract_summary() {
+  local path="$1"
+  local expected_runtime="$2"
+  [[ -f "${path}" && ! -L "${path}" ]] ||
+    fail "missing regular iOS contract summary: ${path}"
+
+  require_exact_line_once "${path}" 'status=passed'
+  require_exact_line_once "${path}" "runtime_version=${expected_runtime}"
+  require_exact_line_once "${path}" 'test_targets=RunnerTests,RunnerUITests'
+  require_exact_line_once "${path}" 'ui_test_count=2'
+  require_exact_line_once "${path}" \
+    'ui_test=RunnerUITests/RunnerUITests/testTaskReminderDeleteAndRestoreContract'
+  require_exact_line_once "${path}" \
+    'ui_test=RunnerUITests/RunnerUITests/testBackupRestoreRebuildsReminderContract'
+  require_exact_line_once "${path}" \
+    'notification_gateway=in-process-contract-double'
+  require_exact_line_once "${path}" 'system_delivery=device-unverified'
+
+  local ui_test_lines
+  ui_test_lines="$({ grep -c '^ui_test=' "${path}" || true; })"
+  [[ "${ui_test_lines}" == '2' ]] ||
+    fail "$(basename -- "${path}") must attest exactly two UI tests"
+
+  local total_test_count
+  total_test_count="$({ sed -n 's/^total_test_count=//p' "${path}" || true; })"
+  [[ "${total_test_count}" =~ ^[0-9]+$ ]] && ((total_test_count >= 3)) ||
+    fail "$(basename -- "${path}") has no positive RunnerTests test count"
+
+  local marker
+  for marker in \
+    '^runtime_identifier=.+$' \
+    '^runtime_build=.+$' \
+    '^runner_image=.+$' \
+    '^runner_image_version=.+$' \
+    '^runner_arch=.+$' \
+    '^host_arch=.+$' \
+    '^xcode=Xcode .+;Build version .+$'; do
+    grep -Eq "${marker}" "${path}" ||
+      fail "$(basename -- "${path}") lacks environment evidence: ${marker}"
+  done
+}
+
 if (($# != 2)); then
   echo "Usage: $0 <vX.Y.Z tag> <release asset directory>" >&2
   exit 64
@@ -69,6 +120,9 @@ expected_developer=(
   "${archive_root}/android/danggui-android-release.aab"
   "${archive_root}/android/danggui-android-x86_64-release.apk"
   "${archive_root}/ios/PLATFORM_AUDIT.txt"
+  "${archive_root}/ios/IOS_ALARMKIT_SUMMARY.txt"
+  "${archive_root}/ios/IOS_FALLBACK_TESTS.txt"
+  "${archive_root}/ios/IOS_FALLBACK_XCODE.txt"
   "${archive_root}/ios/RUNNER_TESTS.txt"
   "${archive_root}/ios/SOURCE_ARCHIVE_CONTENTS.txt"
   "${archive_root}/ios/SOURCE_COMMIT.txt"
@@ -94,6 +148,9 @@ workspace="$(mktemp -d)"
 trap 'rm -rf -- "${workspace}"' EXIT
 unzip -q "${developer_archive}" -d "${workspace}"
 bundle_root="${workspace}/${archive_root}"
+if [[ -n "$(find "${bundle_root}" -type l -print -quit)" ]]; then
+  fail "developer archive must not contain symbolic links"
+fi
 [[ "$(tr -d '\r\n' < "${bundle_root}/android/SIGNING_MODE.txt")" == "release" ]] ||
   fail "developer signing evidence is not release mode"
 normalized_fingerprint="$({ tr -d '[:space:]:' < "${bundle_root}/android/SIGNING_CERTIFICATE_SHA256.txt" || true; } | tr '[:lower:]' '[:upper:]')"
@@ -101,6 +158,29 @@ normalized_fingerprint="$({ tr -d '[:space:]:' < "${bundle_root}/android/SIGNING
   fail "developer signing fingerprint is malformed"
 grep -Fq 'not an installable IPA' "${bundle_root}/ios/UNSIGNED.txt" ||
   fail "unsigned iOS evidence must explicitly say it is not an installable IPA"
+
+verify_ios_contract_summary \
+  "${bundle_root}/ios/IOS_FALLBACK_TESTS.txt" 18.5
+verify_ios_contract_summary \
+  "${bundle_root}/ios/IOS_ALARMKIT_SUMMARY.txt" 26.5
+cmp -s \
+  "${bundle_root}/ios/IOS_ALARMKIT_SUMMARY.txt" \
+  "${bundle_root}/ios/RUNNER_TESTS.txt" ||
+  fail "RUNNER_TESTS.txt must be the compact iOS 26.5 contract summary"
+grep -Fq 'Xcode 16.4' "${bundle_root}/ios/IOS_FALLBACK_XCODE.txt" ||
+  fail "fallback evidence must come from Xcode 16.4"
+grep -Fq 'Xcode 26.6' "${bundle_root}/ios/XCODE.txt" ||
+  fail "AlarmKit API contract evidence must come from Xcode 26.6"
+
+source_commit="$({ tr -d '\r\n' < "${bundle_root}/ios/SOURCE_COMMIT.txt" || true; })"
+[[ "${source_commit}" =~ ^[0-9a-f]{40}$ ]] ||
+  fail "SOURCE_COMMIT.txt must contain one lowercase 40-character commit"
+if [[ -n "${EXPECTED_SOURCE_COMMIT:-}" ]]; then
+  [[ "${EXPECTED_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] ||
+    fail "EXPECTED_SOURCE_COMMIT must be a lowercase 40-character commit"
+  [[ "${source_commit}" == "${EXPECTED_SOURCE_COMMIT}" ]] ||
+    fail "SOURCE_COMMIT.txt does not match the protected tag commit"
+fi
 
 mapfile -t expected_internal_checksum_targets < <(
   cd -- "${bundle_root}"

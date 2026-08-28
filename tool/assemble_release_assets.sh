@@ -72,6 +72,9 @@ assemble_release_assets() (
     "XCODE.txt"
     "TOOLCHAIN.txt"
     "RUNNER_TESTS.txt"
+    "IOS_ALARMKIT_SUMMARY.txt"
+    "IOS_FALLBACK_TESTS.txt"
+    "IOS_FALLBACK_XCODE.txt"
     "SOURCE_COMMIT.txt"
     "SOURCE_ARCHIVE_CONTENTS.txt"
   )
@@ -90,6 +93,16 @@ assemble_release_assets() (
   for filename in "${ios_evidence[@]}"; do
     require_file "${ios_dir}/${filename}"
   done
+  local source_commit
+  source_commit="$({ tr -d '\r\n' < "${ios_dir}/SOURCE_COMMIT.txt" || true; })"
+  [[ "${source_commit}" =~ ^[0-9a-f]{40}$ ]] ||
+    fail "SOURCE_COMMIT.txt must contain one lowercase 40-character commit"
+  if [[ -n "${EXPECTED_SOURCE_COMMIT:-}" ]]; then
+    [[ "${EXPECTED_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] ||
+      fail "EXPECTED_SOURCE_COMMIT must be a lowercase 40-character commit"
+    [[ "${source_commit}" == "${EXPECTED_SOURCE_COMMIT}" ]] ||
+      fail "SOURCE_COMMIT.txt does not match the protected tag commit"
+  fi
   require_file "${ios_dir}/SHA256SUMS"
   (
     cd -- "${ios_dir}"
@@ -131,11 +144,11 @@ assemble_release_assets() (
     "## Contents / 内容" \
     "" \
     "- \`android/\`: ABI-specific APKs, the AAB, native-test/lint output, signing mode/certificate evidence, and the pinned Flutter toolchain record." \
-    "- \`ios/\`: unsigned \`Runner.app\` build evidence, RunnerTests output, platform/Xcode/toolchain records, and the source commit/archive manifest. The app archive is not an IPA and cannot be installed on a normal iPhone." \
+    "- \`ios/\`: unsigned \`Runner.app\` build evidence, fixed iOS 18.5 fallback and iOS 26.5 AlarmKit API contract output, platform/Xcode/toolchain records, and the source commit/archive manifest. Simulator evidence uses an in-process notification double and does not prove system alarm delivery. The app archive is not an IPA and cannot be installed on a normal iPhone." \
     "- \`SHA256SUMS\`: SHA-256 for every other file in this archive, including this README." \
     "" \
     "- \`android/\`：分架构 APK、AAB、原生测试/Lint 输出、签名模式/证书证据及 Flutter 工具链记录。" \
-    "- \`ios/\`：无签名 \`Runner.app\` 构建证据、RunnerTests 输出、平台/Xcode/工具链记录，以及源码提交和归档清单。该 app 压缩包不是 IPA，不能安装到普通 iPhone。" \
+    "- \`ios/\`：无签名 \`Runner.app\` 构建证据、固定 iOS 18.5 回退路径与 iOS 26.5 AlarmKit API 合同测试输出、平台/Xcode/工具链记录，以及源码提交和归档清单。Simulator 证据使用进程内通知替身，不证明系统闹钟投递。该 app 压缩包不是 IPA，不能安装到普通 iPhone。" \
     "- \`SHA256SUMS\`：本归档内除校验清单自身外所有文件（包括本说明）的 SHA-256。" \
     "" \
     "## Verify / 校验" \
@@ -214,9 +227,39 @@ self_test() (
   )
   printf 'fixture platform audit\n' > "${test_root}/ios/PLATFORM_AUDIT.txt"
   printf 'This archive is unsigned build evidence, not an installable IPA.\n' > "${test_root}/ios/UNSIGNED.txt"
-  printf 'fixture Xcode\n' > "${test_root}/ios/XCODE.txt"
+  printf 'Xcode 26.6\nBuild version fixture\n' > "${test_root}/ios/XCODE.txt"
   printf 'fixture iOS toolchain\n' > "${test_root}/ios/TOOLCHAIN.txt"
-  printf 'fixture RunnerTests passed\n' > "${test_root}/ios/RUNNER_TESTS.txt"
+  write_ios_summary() {
+    local path="$1"
+    local runtime="$2"
+    local xcode="$3"
+    printf '%s\n' \
+      'status=passed' \
+      'suite=fixture' \
+      "runtime_version=${runtime}" \
+      "runtime_identifier=com.apple.CoreSimulator.SimRuntime.iOS-${runtime//./-}" \
+      'runtime_build=fixture' \
+      'runner_image=fixture-macos' \
+      'runner_image_version=fixture' \
+      'runner_arch=ARM64' \
+      'host_arch=arm64' \
+      "xcode=Xcode version ${xcode};Build version fixture" \
+      'test_targets=RunnerTests,RunnerUITests' \
+      'total_test_count=3' \
+      'ui_test_count=2' \
+      'ui_test=RunnerUITests/RunnerUITests/testTaskReminderDeleteAndRestoreContract' \
+      'ui_test=RunnerUITests/RunnerUITests/testBackupRestoreRebuildsReminderContract' \
+      'notification_gateway=in-process-contract-double' \
+      'system_delivery=device-unverified' \
+      > "${path}"
+  }
+  write_ios_summary "${test_root}/ios/IOS_ALARMKIT_SUMMARY.txt" 26.5 26.6
+  cp \
+    "${test_root}/ios/IOS_ALARMKIT_SUMMARY.txt" \
+    "${test_root}/ios/RUNNER_TESTS.txt"
+  write_ios_summary "${test_root}/ios/IOS_FALLBACK_TESTS.txt" 18.5 16.4
+  printf 'Xcode 16.4\nBuild version fixture\n' \
+    > "${test_root}/ios/IOS_FALLBACK_XCODE.txt"
   printf '%040d\n' 0 > "${test_root}/ios/SOURCE_COMMIT.txt"
   printf 'source.txt\n' > "${test_root}/ios/SOURCE_ARCHIVE_CONTENTS.txt"
   (
@@ -224,8 +267,9 @@ self_test() (
     sha256sum ./*.zip > SHA256SUMS
   )
 
-  assemble_release_assets \
-    v9.8.7 "${test_root}/android" "${test_root}/ios" "${test_root}/release"
+  EXPECTED_SOURCE_COMMIT="$(printf '%040d' 0)" \
+    assemble_release_assets \
+      v9.8.7 "${test_root}/android" "${test_root}/ios" "${test_root}/release"
   printf 'unexpected\n' > "${test_root}/release/extra.txt"
   if bash "${script_dir}/verify_release_assets.sh" \
     v9.8.7 "${test_root}/release" >/dev/null 2>&1; then
@@ -244,6 +288,11 @@ self_test() (
     "${test_root}/release/danggui-android-universal-release.apk"
   bash "${script_dir}/verify_release_assets.sh" \
     v9.8.7 "${test_root}/release" >/dev/null
+  if EXPECTED_SOURCE_COMMIT="$(printf '%040d' 1)" \
+    bash "${script_dir}/verify_release_assets.sh" \
+      v9.8.7 "${test_root}/release" >/dev/null 2>&1; then
+    fail "self-test verifier accepted evidence from a different commit"
+  fi
   echo "release asset assembly self-test passed"
 )
 
