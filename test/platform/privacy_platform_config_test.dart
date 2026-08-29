@@ -172,6 +172,46 @@ void main() {
     }
   });
 
+  test('audit rejects an unlocked Android native build toolchain', () {
+    final fixture = _createAuditFixture(repositoryRoot);
+    addTearDown(() => fixture.deleteSync(recursive: true));
+
+    final mobileWorkflow = File(
+      _join(fixture.path, '.github/workflows/mobile-ci.yml'),
+    );
+    mobileWorkflow.writeAsStringSync(
+      mobileWorkflow.readAsStringSync().replaceAll(
+        '"cmake;3.22.1"',
+        '"cmake;3.22.0"',
+      ),
+    );
+    final readmeWorkflow = File(
+      _join(fixture.path, '.github/workflows/readme-screenshots.yml'),
+    );
+    readmeWorkflow.writeAsStringSync(
+      readmeWorkflow.readAsStringSync().replaceAll(
+        '"cmake;3.22.1"',
+        '"cmake;3.22.0"',
+      ),
+    );
+
+    final failures = auditPrivacyAndPlatform(
+      fixture,
+      scanResolvedPlugins: false,
+    ).failures.join('\n');
+    expect(failures, contains('README screenshot builds must preinstall'));
+    expect(
+      failures,
+      contains('#android-linux: Android artifact builds must preinstall'),
+    );
+    expect(
+      failures,
+      contains(
+        '#android-emulator-smoke: Android device acceptance must preinstall',
+      ),
+    );
+  });
+
   test('audit fails closed when release capabilities drift', () {
     final fixture = _createAuditFixture(repositoryRoot);
     addTearDown(() => fixture.deleteSync(recursive: true));
@@ -297,6 +337,7 @@ Directory _createAuditFixture(Directory sourceRoot) {
     'pubspec.yaml',
     'pubspec.lock',
     '.github/workflows/mobile-ci.yml',
+    '.github/workflows/readme-screenshots.yml',
     'tool/verify_android_artifacts.sh',
     'tool/verify_android_artifacts.ps1',
     'android/app/build.gradle.kts',

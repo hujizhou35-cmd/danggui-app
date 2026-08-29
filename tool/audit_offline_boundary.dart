@@ -1047,6 +1047,28 @@ final class _Audit {
       '"cmake;3.22.1"',
       'README screenshot builds must preinstall the locked native toolchain',
     );
+    final androidLinuxJob = _workflowJobBlock(
+      workflow,
+      'android-linux',
+      nextJobName: 'android-emulator-smoke',
+    );
+    final androidEmulatorJob = _workflowJobBlock(
+      workflow,
+      'android-emulator-smoke',
+      nextJobName: 'ios-fallback',
+    );
+    _expectContains(
+      '$workflowPath#android-linux',
+      androidLinuxJob,
+      '"cmake;3.22.1"',
+      'Android artifact builds must preinstall the locked native toolchain',
+    );
+    _expectContains(
+      '$workflowPath#android-emulator-smoke',
+      androidEmulatorJob,
+      '"cmake;3.22.1"',
+      'Android device acceptance must preinstall the locked native toolchain',
+    );
 
     for (final command in <String>[
       'dart run tool/audit_offline_boundary.dart',
@@ -2174,6 +2196,19 @@ final class _Audit {
     }
     return found;
   }
+}
+
+String _workflowJobBlock(
+  String workflow,
+  String jobName, {
+  required String nextJobName,
+}) {
+  final startMarker = '\n  $jobName:';
+  final endMarker = '\n  $nextJobName:';
+  final start = workflow.indexOf(startMarker);
+  if (start < 0) return '';
+  final end = workflow.indexOf(endMarker, start + startMarker.length);
+  return workflow.substring(start, end < 0 ? workflow.length : end);
 }
 
 final class _ForbiddenPattern {
