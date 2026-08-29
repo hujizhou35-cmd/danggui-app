@@ -417,7 +417,8 @@ fi
 # The production lib/main.dart does not import the destructive harness. Generate
 # an explicit Debug-Simulator Flutter configuration for its dedicated entrypoint
 # and pass the target through raw xcodebuild as a second guard. The dedicated
-# entrypoint itself requires kDebugMode and an allow-listed launch scenario.
+# entrypoint itself requires kDebugMode and exposes only fixed allow-listed
+# scenario controls.
 readonly xcui_flutter_target="lib/xcui_main.dart"
 flutter_config_backup_dir="$(mktemp -d)"
 if [[ -f "${generated_xcconfig_path}" ]]; then

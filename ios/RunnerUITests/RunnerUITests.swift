@@ -18,13 +18,24 @@ final class RunnerUITests: XCTestCase {
     if app.state != .notRunning {
       app.terminate()
     }
-    app.launchArguments += [
-      "--danggui-xcui-scenario=\(scenario)",
-      "-AppleLanguages", "(en)",
-      "-AppleLocale", "en_US",
-    ]
+    app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
     app.launch()
     defer { app.terminate() }
+
+    let selector = app.descendants(matching: .any)
+      .matching(identifier: "xcui-scenario-\(scenario)")
+      .firstMatch
+    let selectorReady = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "exists == true AND hittable == true"),
+      object: selector
+    )
+    guard XCTWaiter().wait(for: [selectorReady], timeout: 15) == .completed else {
+      XCTFail(
+        "Scenario selector was unavailable or not hittable. Visible labels: \(app.descendants(matching: .any).allElementsBoundByIndex.map(\.label))"
+      )
+      return
+    }
+    selector.tap()
 
     let result = app.descendants(matching: .any)
       .matching(identifier: "xcui-scenario-result")

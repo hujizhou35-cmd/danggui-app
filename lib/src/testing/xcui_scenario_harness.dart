@@ -13,28 +13,6 @@ import '../services/backup/backup_service.dart';
 import '../services/notifications/local_time_zone.dart';
 import '../services/notifications/notification_coordinator.dart';
 
-const String dangguiXcuiScenarioArgumentPrefix = '--danggui-xcui-scenario=';
-
-/// Reads the one scenario supplied by XCUITest from process launch arguments.
-///
-/// XCTest launch environments are not consistently surfaced by Dart across
-/// fixed Xcode runtimes. Process arguments are part of the launched app
-/// contract, so the dedicated Debug-only entrypoint accepts exactly one
-/// non-empty prefixed value and rejects missing or duplicated selectors.
-String? dangguiXcuiScenarioFromArguments(Iterable<String> arguments) {
-  String? scenario;
-  for (final argument in arguments) {
-    if (!argument.startsWith(dangguiXcuiScenarioArgumentPrefix)) continue;
-    if (scenario != null) return null;
-    final candidate = argument.substring(
-      dangguiXcuiScenarioArgumentPrefix.length,
-    );
-    if (candidate.isEmpty) return null;
-    scenario = candidate;
-  }
-  return scenario;
-}
-
 /// Runs cross-module contracts from a real iOS application process.
 ///
 /// The dedicated `xcui_main.dart` entrypoint only enables this surface in debug

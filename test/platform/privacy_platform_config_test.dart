@@ -157,14 +157,21 @@ void main() {
     expect(simulatorScript, isNot(contains('mapfile')));
     expect(productionMain, isNot(contains('xcui_scenario_harness.dart')));
     expect(productionMain, isNot(contains('DANGGUI_XCUITEST_SCENARIO')));
-    expect(productionMain, isNot(contains('danggui-xcui-scenario')));
+    expect(productionMain, isNot(contains('xcui-scenario')));
     expect(xcuiMain, contains('if (!kDebugMode)'));
-    expect(xcuiMain, contains('Platform.executableArguments'));
-    expect(xcuiMain, contains('_supportedXcuiScenarios.contains(scenario)'));
-    expect(xcuiTests, contains('--danggui-xcui-scenario=\\(scenario)'));
+    expect(xcuiMain, contains('DangguiXcuiScenarioSelectorApp'));
+    expect(xcuiMain, contains("identifier: 'xcui-scenario-\$scenario'"));
+    expect(xcuiMain, contains('excludeSemantics: true'));
+    expect(xcuiMain, contains('enabled: true'));
+    expect(xcuiMain, contains('onTap: () => onSelected(scenario)'));
+    expect(xcuiMain, contains('onSelected: runDangguiXcuiScenario'));
+    expect(xcuiTests, contains('xcui-scenario-\\(scenario)'));
+    expect(xcuiTests, contains('exists == true AND hittable == true'));
+    expect(xcuiTests, contains('guard XCTWaiter().wait'));
     expect(xcuiTests, contains('label BEGINSWITH %@'));
     expect(xcuiTests, isNot(contains('launchEnvironment')));
     expect(xcuiMain, isNot(contains('Platform.environment')));
+    expect(xcuiMain, isNot(contains('Platform.executableArguments')));
 
     for (final marker in <String>[
       'SOURCE_COMMIT.txt does not match the protected tag commit',

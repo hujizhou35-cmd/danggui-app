@@ -1267,14 +1267,18 @@ final class _Audit {
     _expect(
       !productionMain.contains('xcui_scenario_harness.dart') &&
           !productionMain.contains('DANGGUI_XCUITEST_SCENARIO') &&
-          !productionMain.contains('danggui-xcui-scenario'),
+          !productionMain.contains('xcui-scenario'),
       'production Dart entrypoint excludes the XCUITest harness',
       '$productionMainPath must not import or select the destructive test harness',
     );
     for (final xcuiGate in <String>[
       'if (!kDebugMode)',
-      'Platform.executableArguments',
-      '_supportedXcuiScenarios.contains(scenario)',
+      'DangguiXcuiScenarioSelectorApp',
+      "identifier: 'xcui-scenario-\$scenario'",
+      'excludeSemantics: true',
+      'enabled: true',
+      'onTap: () => onSelected(scenario)',
+      'onSelected: runDangguiXcuiScenario',
     ]) {
       _expectContains(
         xcuiMainPath,
@@ -1286,8 +1290,8 @@ final class _Audit {
     _expectContains(
       xcuiTestsPath,
       xcuiTests,
-      '--danggui-xcui-scenario=\\(scenario)',
-      'XCUITest must pass its scenario through explicit process arguments',
+      'xcui-scenario-\\(scenario)',
+      'XCUITest must select an explicit allow-listed scenario control',
     );
     _expectContains(
       xcuiTestsPath,
@@ -1295,11 +1299,23 @@ final class _Audit {
       'label BEGINSWITH %@',
       'XCUITest must fail promptly when the app exposes a contract failure',
     );
+    for (final selectorReadinessGate in <String>[
+      'exists == true AND hittable == true',
+      'guard XCTWaiter().wait',
+    ]) {
+      _expectContains(
+        xcuiTestsPath,
+        xcuiTests,
+        selectorReadinessGate,
+        'XCUITest must not tap a missing or inaccessible scenario selector',
+      );
+    }
     _expect(
       !xcuiTests.contains('launchEnvironment') &&
-          !xcuiMain.contains('Platform.environment'),
+          !xcuiMain.contains('Platform.environment') &&
+          !xcuiMain.contains('Platform.executableArguments'),
       'XCUITest scenario selection avoids runtime-dependent environment bridging',
-      'XCUITest scenario selection must not depend on launchEnvironment reaching Dart',
+      'XCUITest scenario selection must not depend on process metadata reaching Dart',
     );
 
     const deepAuditPath = '.github/workflows/ios-deep-audit.yml';

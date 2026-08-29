@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,9 +7,9 @@ import 'src/testing/xcui_scenario_harness.dart';
 /// Dedicated entrypoint selected only by the disposable-Simulator CI script.
 ///
 /// The production entrypoint does not import the destructive contract harness,
-/// so ordinary Debug/Profile/Release artifacts cannot select it with a launch
-/// argument. This entrypoint also requires a Debug build and an allow-listed
-/// XCUITest launch scenario.
+/// so ordinary Debug/Profile/Release artifacts cannot select or reach its
+/// scenario controls. This entrypoint also requires a Debug build and exposes
+/// only the two allow-listed XCUITest scenarios.
 const _supportedXcuiScenarios = <String>{
   'task-reminder-trash-restore',
   'backup-restore-reminder-rebuild',
@@ -29,22 +27,48 @@ void main() {
       systemNavigationBarDividerColor: Color(0xFFD8CEC1),
     ),
   );
-  final scenario = dangguiXcuiScenarioFromArguments(
-    Platform.executableArguments,
-  );
   if (!kDebugMode) {
     _showUnavailableHarness('XCUITEST FAIL non-debug harness build');
     return;
   }
-  if (scenario == null || scenario.isEmpty) {
-    _showUnavailableHarness('XCUITEST FAIL launch scenario unavailable');
-    return;
-  }
-  if (!_supportedXcuiScenarios.contains(scenario)) {
-    _showUnavailableHarness('XCUITEST FAIL launch scenario not allow-listed');
-    return;
-  }
-  runDangguiXcuiScenario(scenario);
+  runApp(DangguiXcuiScenarioSelectorApp(onSelected: runDangguiXcuiScenario));
+}
+
+@visibleForTesting
+class DangguiXcuiScenarioSelectorApp extends StatelessWidget {
+  const DangguiXcuiScenarioSelectorApp({required this.onSelected, super.key});
+
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    home: Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            for (final scenario in _supportedXcuiScenarios)
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Semantics(
+                  key: ValueKey<String>('xcui-scenario-$scenario'),
+                  identifier: 'xcui-scenario-$scenario',
+                  excludeSemantics: true,
+                  button: true,
+                  enabled: true,
+                  label: 'Run $scenario',
+                  onTap: () => onSelected(scenario),
+                  child: FilledButton(
+                    onPressed: () => onSelected(scenario),
+                    child: Text(scenario),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 void _showUnavailableHarness(String reason) =>

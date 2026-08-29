@@ -142,7 +142,7 @@
 
 ## DD24 — XCUITest 使用独立 Flutter 入口，不在生产入口保留测试路由
 
-- **决定**：生产 `lib/main.dart` 不导入测试 harness；两条代表性 XCUITest 只通过 `lib/xcui_main.dart` 构建。该入口同时要求 Debug 与 allow-list 内的 XCTest launch scenario。CI 由固定 Flutter 生成并校验 `FLUTTER_TARGET`，再以显式 `-configuration Debug` 交给 `xcodebuild`，退出时恢复生成配置；各拒绝原因分别显示，避免超时后仍无法归因。
+- **决定**：生产 `lib/main.dart` 不导入测试 harness；两条代表性 XCUITest 只通过 `lib/xcui_main.dart` 构建。该入口要求 Debug，且只呈现 allow-list 内的两个场景控件。CI 由固定 Flutter 生成并校验 `FLUTTER_TARGET`，再以显式 `-configuration Debug` 交给 `xcodebuild`，退出时恢复生成配置；各拒绝原因分别显示，避免超时后仍无法归因。
 - **理由**：首轮 iOS 26.5 CI 证明 raw `xcodebuild` 覆盖入口不可靠；第二轮又证明即使日志显示专用入口、Debug 与正确 `DART_DEFINES`，应用内三重合并门禁仍只能给出不可诊断的统一失败。生产入口与 harness 已物理隔离，因此专用入口、Debug 和场景 allow-list 是更直接且可验证的最小可信边界。
 - **未采用**：在生产 `main.dart` 中保留 Debug 分支，或继续保留无法独立诊断的编译期布尔门禁；前者仍让破坏性测试代码进入普通构建依赖图，后者增加假失败却不提升发布隔离。
 
@@ -182,11 +182,17 @@
 - **理由**：第三轮英文截图任务在 Gradle 隐式安装 CMake 时下载到损坏的非 ZIP，中文并行任务则成功。依赖隐式安装既晚于静态检查，也没有仓库可控的版本门禁；前置安装能让工具链版本和失败位置保持一致。
 - **未采用**：把该失败当作偶发网络问题直接重跑，或让 Gradle继续按需安装；两者都会保留不可复现的工具链差异。
 
-## DD31 — XCUITest 场景通过唯一进程参数传入 Dart
+## DD31 — XCUITest 在专用 Debug 入口选择固定场景
 
-- **决定**：`RunnerUITests` 用 `--danggui-xcui-scenario=<allow-listed-value>` 启动参数选择场景；专用 `lib/xcui_main.dart` 从 `Platform.executableArguments` 读取且只接受一个非空选择器，随后继续执行 Debug 和 allow-list 门禁。生产入口仍不导入 harness。
-- **理由**：最终候选的 Xcode 16.4/iOS 18.5 实跑证明 `XCUIApplication.launchEnvironment` 未出现在 Dart `Platform.environment`，尽管专用入口、Debug 配置和 68 个 RunnerTests 均正确；两条 UI 合同因此都显示 `launch scenario unavailable`。进程参数由 XCTest 直接交给目标进程，并可在 Dart 端进行确定性解析。
-- **未采用**：把场景编译进 `DART_DEFINES`；同一 xcodebuild 测试会话需要依次运行两个不同场景，单一编译期常量无法为每次 app launch 选择不同合同。也不再以环境变量作静默回退，避免不同 Xcode runtime 产生两套优先级语义。
+- **决定**：专用 `lib/xcui_main.dart` 在 Debug 中只呈现两个固定且带稳定 accessibility identifier 的场景控件；每条 RunnerUITest 启动后点击对应控件，再等待唯一结果。生产入口不导入 harness，非 Debug 的专用入口也只显示拒绝状态。
+- **理由**：连续两轮双 runtime 实跑证明 `XCUIApplication.launchEnvironment` 与 `launchArguments` 都没有分别出现在 Dart `Platform.environment` 和 `Platform.executableArguments`。测试专用 UI 选择无需跨越 Flutter engine 的进程元数据边界；identifier、tap action 与 enabled 状态合并到单一 Semantics 节点，XCTest 只在该节点存在且可点击后启动场景。
+- **未采用**：把场景编译进 `DART_DEFINES`，因为同一测试会话需要两个场景；也未在 AppDelegate 增加 Debug MethodChannel，避免为纯测试选择器扩大原生应用面。
+
+## DD32 — Android IME 验收等待当前编辑器的稳定最终几何
+
+- **决定**：API 24/36 验收先证明目标 `EditableText` 实际取得焦点，再要求 raw view inset、编辑器 MediaQuery inset 与 AnimatedPadding target 一致，并连续两个采样帧确认顶部栏和工具栏均在真实键盘上方；隐藏阶段同样要求三层 inset 归零。最终几何边界不放宽。
+- **理由**：API 36 实跑显示创建页旧 IME 隐藏与任务详情新 IME 显示发生多阶段交接；原测试看到第一个非零 raw inset 后固定等待 250ms，会在新 EditorPageFrame 尚未应用 inset 时读取零偏移工具栏。API 24 还暴露了 multiline TextField 外层 RenderObject tap warning，因此现在以内部 EditableText 的真实 focus 作为输入前置条件。
+- **未采用**：把功能失败归类为可重试的模拟器基础设施问题、移除键盘几何断言，或直接修改尚无稳定态失败证据的生产布局；这些做法会隐藏真实回归或制造无证据重写。
 
 ## 功能批次门禁
 

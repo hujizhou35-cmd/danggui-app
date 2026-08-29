@@ -21,6 +21,12 @@ void main() {
   testWidgets('cold start exposes all primary areas and offline help', (
     tester,
   ) async {
+    final previousHitTestPolicy = WidgetController.hitTestWarningShouldBeFatal;
+    WidgetController.hitTestWarningShouldBeFatal = true;
+    addTearDown(
+      () =>
+          WidgetController.hitTestWarningShouldBeFatal = previousHitTestPolicy,
+    );
     // Calling the production entry point exercises the real database, plugin
     // registrations, startup reconciliation, router, and launch transition.
     app.main();
@@ -129,21 +135,22 @@ Future<void> _exerciseProductionEditors(WidgetTester tester) async {
   final taskBodyField = find.byKey(const Key('task-body-field'));
   await tester.ensureVisible(taskBodyField);
   await tester.pump(const Duration(milliseconds: 250));
-  await tester.tap(taskBodyField);
-  await tester.pump();
+  await _tapEditable(tester, taskBodyField, phase: 'task body focus');
   await _waitForIme(tester, taskBodyField, visible: true);
   await tester.enterText(taskBodyField, taskBody);
   await tester.pump();
-  _expectEditorChromeVisible(
+  await _expectEditorChromeVisible(
     tester,
     toolbar: find.byKey(const Key('task-editor-toolbar')),
     phase: 'task editor with IME',
+    imeVisible: true,
   );
   await _hideImeAndVerifyReset(tester, taskBodyField);
-  _expectEditorChromeVisible(
+  await _expectEditorChromeVisible(
     tester,
     toolbar: find.byKey(const Key('task-editor-toolbar')),
     phase: 'task editor after IME dismissal',
+    imeVisible: false,
   );
   await _tapEditorBack(tester, phase: 'task editor save and close');
   await _waitForCondition(
@@ -220,28 +227,28 @@ Future<void> _exerciseProductionEditors(WidgetTester tester) async {
   );
 
   final noteTitleField = find.byKey(const Key('note-editor-title'));
-  await tester.tap(noteTitleField);
-  await tester.pump();
+  await _tapEditable(tester, noteTitleField, phase: 'note title focus');
   await _waitForIme(tester, noteTitleField, visible: true);
   await tester.enterText(noteTitleField, noteTitle);
   final noteBodyField = find.byKey(const Key('note-editor-body'));
   await tester.ensureVisible(noteBodyField);
   await tester.pump(const Duration(milliseconds: 250));
-  await tester.tap(noteBodyField);
-  await tester.pump();
+  await _tapEditable(tester, noteBodyField, phase: 'note body focus');
   await _waitForIme(tester, noteBodyField, visible: true);
   await tester.enterText(noteBodyField, noteBody);
   await tester.pump();
-  _expectEditorChromeVisible(
+  await _expectEditorChromeVisible(
     tester,
     toolbar: find.byKey(const Key('note-editor-toolbar')),
     phase: 'note editor with IME',
+    imeVisible: true,
   );
   await _hideImeAndVerifyReset(tester, noteBodyField);
-  _expectEditorChromeVisible(
+  await _expectEditorChromeVisible(
     tester,
     toolbar: find.byKey(const Key('note-editor-toolbar')),
     phase: 'note editor after IME dismissal',
+    imeVisible: false,
   );
   await _tapEditorBack(tester, phase: 'note editor save and close');
   await _waitForCondition(
@@ -310,21 +317,22 @@ Future<void> _exerciseProductionEditors(WidgetTester tester) async {
   final updatedPastText = existingPastText.isEmpty
       ? pastMarker
       : '$existingPastText\n\n$pastMarker';
-  await tester.tap(pastEditor);
-  await tester.pump();
+  await _tapEditable(tester, pastEditor, phase: 'past editor focus');
   await _waitForIme(tester, pastEditor, visible: true);
   await tester.enterText(pastEditor, updatedPastText);
   await tester.pump();
-  _expectEditorChromeVisible(
+  await _expectEditorChromeVisible(
     tester,
     toolbar: find.byKey(const Key('past-editor-toolbar')),
     phase: 'past editor with IME',
+    imeVisible: true,
   );
   await _hideImeAndVerifyReset(tester, pastEditor);
-  _expectEditorChromeVisible(
+  await _expectEditorChromeVisible(
     tester,
     toolbar: find.byKey(const Key('past-editor-toolbar')),
     phase: 'past editor after IME dismissal',
+    imeVisible: false,
   );
 
   await _openDestination(tester, index: 0, page: find.byType(TasksPage));
@@ -350,6 +358,31 @@ String _textFieldValue(WidgetTester tester, Finder finder) {
   final controller = field.controller;
   expect(controller, isNotNull, reason: 'The production editor must own data.');
   return controller!.text;
+}
+
+Future<void> _tapEditable(
+  WidgetTester tester,
+  Finder field, {
+  required String phase,
+}) async {
+  final editable = find.descendant(
+    of: field,
+    matching: find.byType(EditableText),
+  );
+  expect(editable, findsOneWidget, reason: '$phase requires an EditableText.');
+
+  // TextField's outer RenderMouseRegion can be clipped while a large multiline
+  // EditableText inside it still receives the real pointer. Suppress only that
+  // outer-render-object warning, then prove the intended inner editor owns
+  // focus before any direct enterText call is allowed.
+  await tester.tap(field, warnIfMissed: false);
+  await tester.pump();
+  await _waitForCondition(
+    tester,
+    () => tester.widget<EditableText>(editable).focusNode.hasFocus,
+    phase: phase,
+    timeout: const Duration(seconds: 3),
+  );
 }
 
 Future<void> _waitForIme(
@@ -384,11 +417,12 @@ Future<void> _hideImeAndVerifyReset(
   expect(MediaQuery.viewInsetsOf(tester.element(editable)).bottom, 0);
 }
 
-void _expectEditorChromeVisible(
+Future<void> _expectEditorChromeVisible(
   WidgetTester tester, {
   required Finder toolbar,
   required String phase,
-}) {
+  required bool imeVisible,
+}) async {
   final topBar = find.byKey(EditorPageFrame.topBarKey);
   expect(
     topBar,
@@ -400,6 +434,47 @@ void _expectEditorChromeVisible(
     findsOneWidget,
     reason: '$phase must keep the toolbar mounted.',
   );
+
+  // A route transition can retain the previous IME's raw inset while the new
+  // EditableText and EditorPageFrame are still acquiring focus. API 36 also
+  // animates that hand-off over multiple platform frames. Wait for the actual
+  // toolbar geometry to converge instead of treating the first non-zero raw
+  // inset as a settled layout; the same strict final boundary remains below.
+  var stableFrames = 0;
+  await _waitForCondition(
+    tester,
+    () {
+      if (topBar.evaluate().isEmpty || toolbar.evaluate().isEmpty) return false;
+      final toolbarContext = tester.element(toolbar);
+      final view = View.of(toolbarContext);
+      final rawInset = view.viewInsets.bottom / view.devicePixelRatio;
+      final guardedInset = MediaQuery.viewInsetsOf(toolbarContext).bottom;
+      final padding = tester
+          .widget<AnimatedPadding>(find.byKey(EditorPageFrame.insetPaddingKey))
+          .padding
+          .resolve(Directionality.of(toolbarContext));
+      final usableBottom =
+          (view.physicalSize.height - view.viewInsets.bottom) /
+          view.devicePixelRatio;
+      final insetStateMatches = imeVisible
+          ? rawInset > 0 &&
+                (guardedInset - rawInset).abs() <= 1 &&
+                (padding.bottom - rawInset).abs() <= 1
+          : rawInset <= 0.5 && guardedInset <= 0.5 && padding.bottom <= 0.5;
+      final geometryMatches =
+          tester.getRect(topBar).bottom <= usableBottom + 1 &&
+          tester.getRect(toolbar).bottom <= usableBottom + 1;
+      if (!insetStateMatches || !geometryMatches) {
+        stableFrames = 0;
+        return false;
+      }
+      stableFrames += 1;
+      return stableFrames >= 2;
+    },
+    phase: '$phase stable ${imeVisible ? 'visible' : 'hidden'} IME geometry',
+    timeout: const Duration(seconds: 8),
+  );
+
   final view = View.of(tester.element(toolbar));
   final usableBottom =
       (view.physicalSize.height - view.viewInsets.bottom) /

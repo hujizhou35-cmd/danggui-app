@@ -3,41 +3,63 @@ import 'dart:io';
 import 'package:danggui/src/data/database_provider.dart';
 import 'package:danggui/src/services/backup/backup_service.dart';
 import 'package:danggui/src/testing/xcui_scenario_harness.dart';
+import 'package:danggui/xcui_main.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
-  group('XCUITest scenario launch contract', () {
-    test('accepts one explicit process argument', () {
-      expect(
-        dangguiXcuiScenarioFromArguments(const <String>[
-          '-AppleLanguages',
-          '(en)',
-          '--danggui-xcui-scenario=task-reminder-trash-restore',
-          '-AppleLocale',
-          'en_US',
-        ]),
-        'task-reminder-trash-restore',
-      );
-    });
+  testWidgets('dedicated entrypoint exposes only fixed scenario selectors', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    String? selected;
+    await tester.pumpWidget(
+      DangguiXcuiScenarioSelectorApp(
+        onSelected: (scenario) => selected = scenario,
+      ),
+    );
 
-    test('rejects missing, empty, and duplicate selectors', () {
-      expect(dangguiXcuiScenarioFromArguments(const <String>[]), isNull);
-      expect(
-        dangguiXcuiScenarioFromArguments(const <String>[
-          '--danggui-xcui-scenario=',
-        ]),
-        isNull,
-      );
-      expect(
-        dangguiXcuiScenarioFromArguments(const <String>[
-          '--danggui-xcui-scenario=task-reminder-trash-restore',
-          '--danggui-xcui-scenario=backup-restore-reminder-rebuild',
-        ]),
-        isNull,
-      );
-    });
+    const taskSelector = ValueKey<String>(
+      'xcui-scenario-task-reminder-trash-restore',
+    );
+    const backupSelector = ValueKey<String>(
+      'xcui-scenario-backup-restore-reminder-rebuild',
+    );
+    expect(find.byType(FilledButton), findsNWidgets(2));
+    expect(find.byKey(taskSelector), findsOneWidget);
+    expect(find.byKey(backupSelector), findsOneWidget);
+    expect(find.textContaining('not-allow-listed'), findsNothing);
+    expect(
+      tester.getSemantics(find.byKey(taskSelector)),
+      matchesSemantics(
+        identifier: 'xcui-scenario-task-reminder-trash-restore',
+        label: 'Run task-reminder-trash-restore',
+        isButton: true,
+        hasEnabledState: true,
+        isEnabled: true,
+        hasTapAction: true,
+      ),
+    );
+    expect(
+      find.bySemanticsIdentifier(
+        'xcui-scenario-backup-restore-reminder-rebuild',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(taskSelector));
+    expect(selected, 'task-reminder-trash-restore');
+    final backupSemantics = find.semantics.byPredicate(
+      (node) =>
+          node.identifier == 'xcui-scenario-backup-restore-reminder-rebuild',
+    );
+    expect(backupSemantics, findsOne);
+    tester.semantics.tap(backupSemantics);
+    await tester.pump();
+    expect(selected, 'backup-restore-reminder-rebuild');
+    semantics.dispose();
   });
 
   group('XCUITest scenario storage', () {
