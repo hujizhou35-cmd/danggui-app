@@ -1262,15 +1262,18 @@ final class _Audit {
     final productionMain = _requiredText(productionMainPath) ?? '';
     const xcuiMainPath = 'lib/xcui_main.dart';
     final xcuiMain = _requiredText(xcuiMainPath) ?? '';
+    const xcuiTestsPath = 'ios/RunnerUITests/RunnerUITests.swift';
+    final xcuiTests = _requiredText(xcuiTestsPath) ?? '';
     _expect(
       !productionMain.contains('xcui_scenario_harness.dart') &&
-          !productionMain.contains('DANGGUI_XCUITEST_SCENARIO'),
+          !productionMain.contains('DANGGUI_XCUITEST_SCENARIO') &&
+          !productionMain.contains('danggui-xcui-scenario'),
       'production Dart entrypoint excludes the XCUITest harness',
       '$productionMainPath must not import or select the destructive test harness',
     );
     for (final xcuiGate in <String>[
       'if (!kDebugMode)',
-      'DANGGUI_XCUITEST_SCENARIO',
+      'Platform.executableArguments',
       '_supportedXcuiScenarios.contains(scenario)',
     ]) {
       _expectContains(
@@ -1280,6 +1283,24 @@ final class _Audit {
         'dedicated XCUITest entrypoint must retain Debug and scenario gates',
       );
     }
+    _expectContains(
+      xcuiTestsPath,
+      xcuiTests,
+      '--danggui-xcui-scenario=\\(scenario)',
+      'XCUITest must pass its scenario through explicit process arguments',
+    );
+    _expectContains(
+      xcuiTestsPath,
+      xcuiTests,
+      'label BEGINSWITH %@',
+      'XCUITest must fail promptly when the app exposes a contract failure',
+    );
+    _expect(
+      !xcuiTests.contains('launchEnvironment') &&
+          !xcuiMain.contains('Platform.environment'),
+      'XCUITest scenario selection avoids runtime-dependent environment bridging',
+      'XCUITest scenario selection must not depend on launchEnvironment reaching Dart',
+    );
 
     const deepAuditPath = '.github/workflows/ios-deep-audit.yml';
     final deepAudit = _requiredText(deepAuditPath) ?? '';

@@ -182,6 +182,12 @@
 - **理由**：第三轮英文截图任务在 Gradle 隐式安装 CMake 时下载到损坏的非 ZIP，中文并行任务则成功。依赖隐式安装既晚于静态检查，也没有仓库可控的版本门禁；前置安装能让工具链版本和失败位置保持一致。
 - **未采用**：把该失败当作偶发网络问题直接重跑，或让 Gradle继续按需安装；两者都会保留不可复现的工具链差异。
 
+## DD31 — XCUITest 场景通过唯一进程参数传入 Dart
+
+- **决定**：`RunnerUITests` 用 `--danggui-xcui-scenario=<allow-listed-value>` 启动参数选择场景；专用 `lib/xcui_main.dart` 从 `Platform.executableArguments` 读取且只接受一个非空选择器，随后继续执行 Debug 和 allow-list 门禁。生产入口仍不导入 harness。
+- **理由**：最终候选的 Xcode 16.4/iOS 18.5 实跑证明 `XCUIApplication.launchEnvironment` 未出现在 Dart `Platform.environment`，尽管专用入口、Debug 配置和 68 个 RunnerTests 均正确；两条 UI 合同因此都显示 `launch scenario unavailable`。进程参数由 XCTest 直接交给目标进程，并可在 Dart 端进行确定性解析。
+- **未采用**：把场景编译进 `DART_DEFINES`；同一 xcodebuild 测试会话需要依次运行两个不同场景，单一编译期常量无法为每次 app launch 选择不同合同。也不再以环境变量作静默回退，避免不同 Xcode runtime 产生两套优先级语义。
+
 ## 功能批次门禁
 
 1. 第一批 F01/F03/F04/F15/F17/F19：D01–D04 全部关闭且 iOS 18/26 合同无未解释差异。

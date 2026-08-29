@@ -8,6 +8,38 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  group('XCUITest scenario launch contract', () {
+    test('accepts one explicit process argument', () {
+      expect(
+        dangguiXcuiScenarioFromArguments(const <String>[
+          '-AppleLanguages',
+          '(en)',
+          '--danggui-xcui-scenario=task-reminder-trash-restore',
+          '-AppleLocale',
+          'en_US',
+        ]),
+        'task-reminder-trash-restore',
+      );
+    });
+
+    test('rejects missing, empty, and duplicate selectors', () {
+      expect(dangguiXcuiScenarioFromArguments(const <String>[]), isNull);
+      expect(
+        dangguiXcuiScenarioFromArguments(const <String>[
+          '--danggui-xcui-scenario=',
+        ]),
+        isNull,
+      );
+      expect(
+        dangguiXcuiScenarioFromArguments(const <String>[
+          '--danggui-xcui-scenario=task-reminder-trash-restore',
+          '--danggui-xcui-scenario=backup-restore-reminder-rebuild',
+        ]),
+        isNull,
+      );
+    });
+  });
+
   group('XCUITest scenario storage', () {
     late Directory testRoot;
 

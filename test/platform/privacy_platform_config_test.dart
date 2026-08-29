@@ -115,6 +115,9 @@ void main() {
         .readAsStringSync();
     final xcuiMain = File(_join(repositoryRoot.path, 'lib/xcui_main.dart'))
         .readAsStringSync();
+    final xcuiTests = File(
+      _join(repositoryRoot.path, 'ios/RunnerUITests/RunnerUITests.swift'),
+    ).readAsStringSync();
     final releaseVerifier = File(
       _join(repositoryRoot.path, 'tool/verify_release_assets.sh'),
     ).readAsStringSync();
@@ -154,12 +157,14 @@ void main() {
     expect(simulatorScript, isNot(contains('mapfile')));
     expect(productionMain, isNot(contains('xcui_scenario_harness.dart')));
     expect(productionMain, isNot(contains('DANGGUI_XCUITEST_SCENARIO')));
+    expect(productionMain, isNot(contains('danggui-xcui-scenario')));
     expect(xcuiMain, contains('if (!kDebugMode)'));
-    expect(
-      xcuiMain,
-      contains("Platform.environment['DANGGUI_XCUITEST_SCENARIO']"),
-    );
+    expect(xcuiMain, contains('Platform.executableArguments'));
     expect(xcuiMain, contains('_supportedXcuiScenarios.contains(scenario)'));
+    expect(xcuiTests, contains('--danggui-xcui-scenario=\\(scenario)'));
+    expect(xcuiTests, contains('label BEGINSWITH %@'));
+    expect(xcuiTests, isNot(contains('launchEnvironment')));
+    expect(xcuiMain, isNot(contains('Platform.environment')));
 
     for (final marker in <String>[
       'SOURCE_COMMIT.txt does not match the protected tag commit',

@@ -18,8 +18,11 @@ final class RunnerUITests: XCTestCase {
     if app.state != .notRunning {
       app.terminate()
     }
-    app.launchEnvironment["DANGGUI_XCUITEST_SCENARIO"] = scenario
-    app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+    app.launchArguments += [
+      "--danggui-xcui-scenario=\(scenario)",
+      "-AppleLanguages", "(en)",
+      "-AppleLocale", "en_US",
+    ]
     app.launch()
     defer { app.terminate() }
 
@@ -32,13 +35,22 @@ final class RunnerUITests: XCTestCase {
     )
     let expected = "XCUITEST PASS \(scenario)"
     let completion = XCTNSPredicateExpectation(
-      predicate: NSPredicate(format: "label == %@", expected),
+      predicate: NSPredicate(
+        format: "label == %@ OR label BEGINSWITH %@",
+        expected,
+        "XCUITEST FAIL"
+      ),
       object: result
     )
     let outcome = XCTWaiter().wait(for: [completion], timeout: timeout)
     XCTAssertEqual(
       outcome,
       .completed,
+      "Scenario timed out with visible result: \(result.label)"
+    )
+    XCTAssertEqual(
+      result.label,
+      expected,
       "Scenario failed with visible result: \(result.label)"
     )
   }
