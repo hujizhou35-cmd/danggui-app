@@ -378,6 +378,12 @@ Future<void> _tapEditable(
   );
   final editableState = tester.state<EditableTextState>(editable);
   final renderEditable = editableState.renderEditable;
+  final fieldRenderObjects = _attachedRenderObjectsBelow(tester.element(field));
+  expect(
+    fieldRenderObjects,
+    isNotEmpty,
+    reason: '$phase requires an attached TextField render subtree.',
+  );
   final visibleEditableRect = MatrixUtils.transformRect(
     renderEditable.getTransformTo(null),
     Offset.zero & renderEditable.size,
@@ -393,12 +399,12 @@ Future<void> _tapEditable(
     reason: '$phase must expose a tappable editor height.',
   );
 
-  // A long multiline TextField can extend beyond its clipped scroll viewport.
-  // RenderEditable is the actual text surface and reports itself in a
-  // legitimate pointer hit path. Search only the visible text surface, send
-  // one real gesture, and still require focus plus the platform IME before
-  // direct text entry is allowed. This avoids depending on TextField's private
-  // recognizer/proxy widget structure, which is not a Flutter contract.
+  // TextField intentionally delegates pointer handling away from its
+  // RenderEditable. Flutter's exact intermediate receiver differs between
+  // test bindings, so require the real hit path to enter this TextField's own
+  // attached render subtree instead of coupling the acceptance test to one
+  // framework proxy. Then send one real gesture and still require focus plus
+  // the platform IME before direct text entry is allowed.
   final fieldView = View.of(tester.element(editable));
   final focusNode = editableState.widget.focusNode;
   expect(
@@ -426,7 +432,15 @@ Future<void> _tapEditable(
         '$candidate=[${hitTest.path.map((entry) => entry.target.runtimeType).join('>')}]',
       );
     }
-    if (hitTest.path.any((entry) => identical(entry.target, renderEditable))) {
+    final fieldTargets = hitTest.path
+        .map((entry) => entry.target)
+        .whereType<RenderObject>()
+        .where(fieldRenderObjects.contains)
+        .toList(growable: false);
+    hitPathDiagnostics.add(
+      '$candidate=field[${fieldTargets.map((target) => target.runtimeType).join('>')}]',
+    );
+    if (fieldTargets.isNotEmpty) {
       tapPoint = candidate;
       break;
     }
@@ -435,7 +449,7 @@ Future<void> _tapEditable(
     tapPoint,
     isNotNull,
     reason:
-        '$phase must expose a hit-test path through its RenderEditable within '
+        '$phase must expose a hit-test path into its TextField subtree within '
         '$visibleEditableRect. samples=${hitPathDiagnostics.join('; ')}.',
   );
   final gesture = await tester.startGesture(tapPoint!, view: fieldView);
@@ -448,6 +462,21 @@ Future<void> _tapEditable(
     phase: '$phase at $tapPoint within $visibleEditableRect',
     timeout: const Duration(seconds: 3),
   );
+}
+
+Set<RenderObject> _attachedRenderObjectsBelow(Element root) {
+  final result = Set<RenderObject>.identity();
+
+  void visit(Element element) {
+    if (element is RenderObjectElement && element.renderObject.attached) {
+      final renderObject = element.renderObject;
+      result.add(renderObject);
+    }
+    element.visitChildren(visit);
+  }
+
+  visit(root);
+  return result;
 }
 
 Future<void> _waitForIme(

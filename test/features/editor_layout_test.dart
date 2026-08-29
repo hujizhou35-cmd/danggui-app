@@ -13,6 +13,7 @@ import 'package:danggui/src/features/tasks/tasks_page.dart';
 import 'package:danggui/src/services/backup/automatic_backup_coordinator.dart';
 import 'package:danggui/src/ui/components/components.dart';
 import 'package:drift/native.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -157,66 +158,86 @@ void main() {
 
   testWidgets(
     'visible note body pointer transfers focus from the title',
-    (tester) => _withMountedApp(tester, () async {
-      _setView(tester, const Size(412, 915));
-      await _pumpRealApp(tester, container, location: '/tasks');
-      await _openBranch(tester, 2);
-      await tester.tap(find.text('原笔记').hitTestable());
-      await _waitForFinder(tester, find.byType(NoteEditorPage));
+    (tester) => _withMountedApp(
+      tester,
+      () => _withAndroidPlatform(() async {
+        _setView(tester, const Size(412, 915));
+        await _pumpRealApp(tester, container, location: '/tasks');
+        await _openBranch(tester, 2);
+        await tester.tap(find.text('原笔记').hitTestable());
+        await _waitForFinder(tester, find.byType(NoteEditorPage));
 
-      final title = find.byKey(const Key('note-editor-title'));
-      final body = find.byKey(const Key('note-editor-body'));
-      final bodyEditable = find.descendant(
-        of: body,
-        matching: find.byType(EditableText),
-      );
-      await tester.tap(title);
-      await tester.pump();
-      final titleEditable = find.descendant(
-        of: title,
-        matching: find.byType(EditableText),
-      );
-      expect(
-        tester.widget<EditableText>(titleEditable).focusNode.hasFocus,
-        isTrue,
-      );
-      expect(
-        tester.widget<EditableText>(bodyEditable).focusNode.hasFocus,
-        isFalse,
-      );
-      tester.view.viewInsets = const FakeViewPadding(bottom: 427);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 250));
-      await tester.ensureVisible(body);
-      await tester.pump(const Duration(milliseconds: 250));
+        final title = find.byKey(const Key('note-editor-title'));
+        final body = find.byKey(const Key('note-editor-body'));
+        final bodyEditable = find.descendant(
+          of: body,
+          matching: find.byType(EditableText),
+        );
+        await tester.tap(title);
+        await tester.pump();
+        final titleEditable = find.descendant(
+          of: title,
+          matching: find.byType(EditableText),
+        );
+        expect(
+          tester.widget<EditableText>(titleEditable).focusNode.hasFocus,
+          isTrue,
+        );
+        expect(
+          tester.widget<EditableText>(bodyEditable).focusNode.hasFocus,
+          isFalse,
+        );
+        tester.view.viewInsets = const FakeViewPadding(bottom: 427);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
+        await tester.ensureVisible(body);
+        await tester.pump(const Duration(milliseconds: 250));
 
-      final renderEditable = tester
-          .state<EditableTextState>(bodyEditable)
-          .renderEditable;
-      final visibleBodyEditor = MatrixUtils.transformRect(
-        renderEditable.getTransformTo(null),
-        Offset.zero & renderEditable.size,
-      ).intersect(tester.getRect(find.byKey(EditorPageFrame.editorKey)));
-      expect(visibleBodyEditor.width, greaterThanOrEqualTo(24));
-      expect(visibleBodyEditor.height, greaterThanOrEqualTo(24));
-      final tapPoint = Offset(
-        visibleBodyEditor.left + visibleBodyEditor.width * 0.1,
-        visibleBodyEditor.top + visibleBodyEditor.height * 0.1,
-      );
-      final hitTest = tester.hitTestOnBinding(tapPoint);
-      expect(
-        hitTest.path.any((entry) => identical(entry.target, renderEditable)),
-        isTrue,
-      );
-      final gesture = await tester.startGesture(tapPoint);
-      await tester.pump(const Duration(milliseconds: 16));
-      await gesture.up();
-      await tester.pump(const Duration(milliseconds: 32));
-      expect(
-        tester.widget<EditableText>(bodyEditable).focusNode.hasFocus,
-        isTrue,
-      );
-    }),
+        final renderEditable = tester
+            .state<EditableTextState>(bodyEditable)
+            .renderEditable;
+        final bodyRenderObjects = _attachedRenderObjectsBelow(
+          tester.element(body),
+        );
+        expect(bodyRenderObjects, isNotEmpty);
+        final visibleBodyEditor = MatrixUtils.transformRect(
+          renderEditable.getTransformTo(null),
+          Offset.zero & renderEditable.size,
+        ).intersect(tester.getRect(find.byKey(EditorPageFrame.editorKey)));
+        expect(visibleBodyEditor.width, greaterThanOrEqualTo(24));
+        expect(visibleBodyEditor.height, greaterThanOrEqualTo(24));
+        final candidates = <Offset>[
+          for (final dy in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
+            for (final dx in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
+              Offset(
+                visibleBodyEditor.left + visibleBodyEditor.width * dx,
+                visibleBodyEditor.top + visibleBodyEditor.height * dy,
+              ),
+        ];
+        Offset? tapPoint;
+        for (final candidate in candidates) {
+          final hitsBodySubtree = tester
+              .hitTestOnBinding(candidate)
+              .path
+              .map((entry) => entry.target)
+              .whereType<RenderObject>()
+              .any(bodyRenderObjects.contains);
+          if (hitsBodySubtree) {
+            tapPoint = candidate;
+            break;
+          }
+        }
+        expect(tapPoint, isNotNull);
+        final gesture = await tester.startGesture(tapPoint!);
+        await tester.pump(const Duration(milliseconds: 16));
+        await gesture.up();
+        await tester.pump(const Duration(milliseconds: 32));
+        expect(
+          tester.widget<EditableText>(bodyEditable).focusNode.hasFocus,
+          isTrue,
+        );
+      }),
+    ),
   );
 
   testWidgets(
@@ -271,6 +292,30 @@ void main() {
       expect(tester.takeException(), isNull);
     }),
   );
+}
+
+Set<RenderObject> _attachedRenderObjectsBelow(Element root) {
+  final result = Set<RenderObject>.identity();
+
+  void visit(Element element) {
+    if (element is RenderObjectElement && element.renderObject.attached) {
+      final renderObject = element.renderObject;
+      result.add(renderObject);
+    }
+    element.visitChildren(visit);
+  }
+
+  visit(root);
+  return result;
+}
+
+Future<void> _withAndroidPlatform(Future<void> Function() body) async {
+  debugDefaultTargetPlatformOverride = TargetPlatform.android;
+  try {
+    await body();
+  } finally {
+    debugDefaultTargetPlatformOverride = null;
+  }
 }
 
 Future<void> _withMountedApp(
