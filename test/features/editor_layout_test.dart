@@ -217,7 +217,7 @@ void main() {
       final hitTest = tester.hitTestOnBinding(tapPoint);
       expect(
         hitTest.path.any(
-          (entry) => identical(entry.target, handlerRenderObject),
+          (entry) => _renderObjectOwnsTarget(handlerRenderObject, entry.target),
         ),
         isTrue,
       );
@@ -284,6 +284,15 @@ void main() {
       expect(tester.takeException(), isNull);
     }),
   );
+}
+
+bool _renderObjectOwnsTarget(RenderObject expectedAncestor, Object target) {
+  RenderObject? current = target is RenderObject ? target : null;
+  while (current != null) {
+    if (identical(current, expectedAncestor)) return true;
+    current = current.parent;
+  }
+  return false;
 }
 
 Future<void> _withMountedApp(

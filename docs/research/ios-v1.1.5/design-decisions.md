@@ -196,7 +196,7 @@
 
 ## DD33 — Android 编辑器验收只在真实主手势命中点短按一次
 
-- **决定**：设备验收先确认目标 `EditableText` 尚未聚焦，再在编辑器可见区域内无副作用扫描 5×5 候选点。候选只有在当前 Flutter view 的 hit-test 路径直接包含 `TextSelectionGestureDetector` 对应 `RawGestureDetector` render object 时才可使用；选择正文上方的首个有效点后只发送一次 16ms pointer down/up，随后必须由同一 `FocusNode`、真实 IME 和三层 inset/几何合同共同证明成功。
+- **决定**：设备验收先确认目标 `EditableText` 尚未聚焦，再在编辑器可见区域内无副作用扫描 5×5 候选点。候选只有在当前 Flutter view 的 hit-test 路径存在位于 `TextSelectionGestureDetector` 对应 `RawGestureDetector` render 子树内的目标时才可使用；该判断与 Flutter `WidgetController` 的 missed-hit 合同一致，并兼容 automated/live binding 的 entry 身份差异。选择正文上方的首个有效点后只发送一次 16ms pointer down/up，随后必须由同一 `FocusNode`、真实 IME 和三层 inset/几何合同共同证明成功。
 - **理由**：PR runs `33236883417` 与 `33237782722` 在 API 24/36 都证明大尺寸 multiline `TextField` 的外层几何中心可见却不会把焦点交给正文。Flutter 3.47.1 的 `TextField` 显式设置 `rendererIgnoresPointer: true`，主点击实际由平台对应的 `TapAndHorizontalDragGestureRecognizer`（Android/iOS）或 `TapAndPanGestureRecognizer` 处理；因此外层矩形或 `RenderEditable` 本身都不是充分命中证据。
 - **未采用**：直接 `requestFocus`/`showKeyboard`、压制 tap warning、重复点击直到成功或只延长超时。前两者会绕过用户手势，重复点击会隐藏首次交互缺陷，延长超时不能改变错误命中路径。
 

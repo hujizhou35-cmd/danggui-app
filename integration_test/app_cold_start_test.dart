@@ -435,7 +435,8 @@ Future<void> _tapEditable(
       viewId: fieldView.viewId,
     );
     if (hitTest.path.any(
-      (entry) => identical(entry.target, handlerRenderObject),
+      (entry) =>
+          _isRenderObjectAncestorOfTarget(handlerRenderObject, entry.target),
     )) {
       tapPoint = candidate;
       break;
@@ -458,6 +459,18 @@ Future<void> _tapEditable(
     phase: '$phase at $tapPoint within $visibleTapHandlerRect',
     timeout: const Duration(seconds: 3),
   );
+}
+
+bool _isRenderObjectAncestorOfTarget(
+  RenderObject expectedAncestor,
+  Object target,
+) {
+  RenderObject? current = target is RenderObject ? target : null;
+  while (current != null) {
+    if (identical(current, expectedAncestor)) return true;
+    current = current.parent;
+  }
+  return false;
 }
 
 Future<void> _waitForIme(
