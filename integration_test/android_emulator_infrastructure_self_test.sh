@@ -414,10 +414,13 @@ run_product_failure_precedence_tests() {
       "${completion_path}" "${log_path}" "${partial_path}" 3
     [[ "${DANGGUI_SEED_FAILURE_STATUS}" == "42" ]]
     danggui_revoke_retry_authorization "delayed-product-self-test"
-    set +e
-    wait "${delayed_pid}"
-    delayed_status=$?
-    set -e
+    delayed_status="${DANGGUI_SEED_FAILURE_STATUS}"
+    if [[ "${DANGGUI_SEED_PROCESS_REAPED}" != "true" ]]; then
+      set +e
+      wait "${delayed_pid}"
+      delayed_status=$?
+      set -e
+    fi
     [[ "${delayed_status}" == "42" ]]
     [[ ! -e "${evidence_dir}/retry-on-fresh-avd.signal" ]]
     jq -e ".retryEligible == false and .freshAvdRequired == false and

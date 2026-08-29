@@ -142,9 +142,9 @@
 
 ## DD24 — XCUITest 使用独立 Flutter 入口，不在生产入口保留测试路由
 
-- **决定**：生产 `lib/main.dart` 不导入测试 harness；两条代表性 XCUITest 只通过 `lib/xcui_main.dart` 构建。该入口同时要求 Debug、编译期 `DANGGUI_XCUITEST_BUILD=true` 与 XCTest launch scenario。CI 先由固定 Flutter 生成并校验 `FLUTTER_TARGET`/`DART_DEFINES`，再交给 `xcodebuild`，退出时恢复生成配置。
-- **理由**：首轮 iOS 26.5 CI 证明 raw `xcodebuild` 覆盖单个 define 不能可靠改变先前配置的 Flutter app，导致 UI 测试启动真实首页；把 harness 从生产入口物理移除同时解决可靠性与发布边界问题。
-- **未采用**：仅依赖 launch environment 或在生产 `main.dart` 中保留 Debug 分支；前者没有编译期隔离，后者仍让破坏性测试代码进入普通构建依赖图。
+- **决定**：生产 `lib/main.dart` 不导入测试 harness；两条代表性 XCUITest 只通过 `lib/xcui_main.dart` 构建。该入口同时要求 Debug 与 allow-list 内的 XCTest launch scenario。CI 由固定 Flutter 生成并校验 `FLUTTER_TARGET`，再以显式 `-configuration Debug` 交给 `xcodebuild`，退出时恢复生成配置；各拒绝原因分别显示，避免超时后仍无法归因。
+- **理由**：首轮 iOS 26.5 CI 证明 raw `xcodebuild` 覆盖入口不可靠；第二轮又证明即使日志显示专用入口、Debug 与正确 `DART_DEFINES`，应用内三重合并门禁仍只能给出不可诊断的统一失败。生产入口与 harness 已物理隔离，因此专用入口、Debug 和场景 allow-list 是更直接且可验证的最小可信边界。
+- **未采用**：在生产 `main.dart` 中保留 Debug 分支，或继续保留无法独立诊断的编译期布尔门禁；前者仍让破坏性测试代码进入普通构建依赖图，后者增加假失败却不提升发布隔离。
 
 ## DD25 — Simulator 文件保护测试验证写入意图，不虚构文件系统回读能力
 
@@ -163,6 +163,18 @@
 - **决定**：API 33+ 健康门禁解析默认 HOME component 与只读系统分区 package path；只有 Android ANR 对话框、当前 ANR 焦点包和该 HOME 包完全一致，且当归尚未安装时，才将其归为 `launcher` 基础设施故障并签发 attempt-1 的唯一 fresh-AVD token。Retry gate 独立复核全部证据。
 - **理由**：首轮 API 36 的 Permission Manager 已打开，但被系统 Quickstep ANR 遮挡；旧分类器把它误记为不可重试的 Permission Controller 不可见。该故障发生在当归安装前。
 - **未采用**：任意 `aerr_close`、任意应用 ANR 或当归自身 ANR都允许重试；这些情况必须直接失败，避免 CI 隐藏产品崩溃。
+
+## DD28 — Simulator 型号由目标 runtime 实际验证，不依赖全局列表顺序
+
+- **决定**：固定 runtime 后，CI 按设备族收集并记录候选 device type，由 `simctl create` 逐项验证兼容性；创建成功的型号才进入两次全新设备 boot 尝试，所有已取得 UDID 的设备均由退出 trap 关闭并删除。
+- **理由**：第二轮 iOS 18.5 CI 证明全局 `devicetypes` 第一项可能不兼容目标 runtime，两次只换设备名称的重试会稳定重复 `CoreSimulator.SimError 403`。实际创建是比列表顺序或型号命名更可靠的兼容性判据。
+- **未采用**：硬编码某一代 iPhone，或继续对同一未验证型号盲目重试；前者会随固定 Xcode 镜像变化而漂移，后者不能改变失败条件。
+
+## DD29 — CI 子进程回收状态只能消费一次
+
+- **决定**：Android 基础设施自测复用生产代码的 `DANGGUI_SEED_PROCESS_REAPED` 合同；若等待器已回收子进程，后续直接使用已捕获的失败状态，不再次 `wait` 同一 PID。
+- **理由**：第二轮 Linux CI 命中了“等待器先回收”分支，旧自测再次 `wait` 得到 127 并静默失败；生产验收脚本已经按该标志避免二次回收。该问题只影响门禁自测，不改变应用行为。
+- **未采用**：放宽预期退出码或将 127 当作原测试失败；这会掩盖真正的产品退出状态。
 
 ## 功能批次门禁
 

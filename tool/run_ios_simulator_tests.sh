@@ -65,17 +65,29 @@ xcconfig_value() {
 validate_xcui_flutter_config() {
   local xcconfig_file="$1"
   local expected_target="$2"
-  local expected_define="$3"
-  local actual_target actual_defines
+  local actual_target
 
   actual_target="$(xcconfig_value "${xcconfig_file}" FLUTTER_TARGET)" || return 1
-  actual_defines="$(xcconfig_value "${xcconfig_file}" DART_DEFINES)" || return 1
   [[ "${actual_target}" == "${expected_target}" ]] || return 1
-  case ",${actual_defines}," in
-    *",${expected_define},"*) ;;
-    *) return 1 ;;
-  esac
-  printf '%s\n' "${actual_defines}"
+  printf '%s\n' "${actual_target}"
+}
+
+list_simulator_device_type_candidates() {
+  local device_family="$1"
+
+  jq -r --arg family "${device_family}" '
+    .devicetypes
+    | map(select(
+        (.identifier | type) == "string" and
+        (
+          ((.productFamily? // "") == $family) or
+          ((.name? // "") | startswith($family))
+        )
+      ))
+    | sort_by([(.minRuntimeVersion? // 0), (.name? // ""), .identifier])
+    | reverse
+    | .[].identifier
+  ' | tr -d '\r'
 }
 
 self_test_xcresult_summary_parser() (
@@ -153,24 +165,45 @@ self_test_xcresult_summary_parser() (
 
   printf '%s\n' \
     'FLUTTER_TARGET=lib/xcui_main.dart' \
-    'DART_DEFINES=other,REFOR0dVSV9YQ1VJVEVTVF9CVUlMRD10cnVl' \
     > "${test_root}/Generated.xcconfig"
   [[ "$(
     validate_xcui_flutter_config \
       "${test_root}/Generated.xcconfig" \
-      lib/xcui_main.dart REFOR0dVSV9YQ1VJVEVTVF9CVUlMRD10cnVl
-  )" == 'other,REFOR0dVSV9YQ1VJVEVTVF9CVUlMRD10cnVl' ]] || {
+      lib/xcui_main.dart
+  )" == 'lib/xcui_main.dart' ]] || {
     echo 'XCUITest Flutter config parser rejected a valid fixture.' >&2
     exit 1
   }
   if validate_xcui_flutter_config \
     "${test_root}/Generated.xcconfig" \
-    lib/main.dart REFOR0dVSV9YQ1VJVEVTVF9CVUlMRD10cnVl >/dev/null 2>&1; then
+    lib/main.dart >/dev/null 2>&1; then
     echo 'XCUITest Flutter config parser accepted the production entrypoint.' >&2
     exit 1
   fi
 
-  echo 'xcresult, XCUITest log and Flutter config parser self-test passed'
+  printf '%s\n' \
+    '{"devicetypes":[' \
+    '{"name":"iPhone Old","productFamily":"iPhone","minRuntimeVersion":1,"identifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-Old"},' \
+    '{"name":"iPad New","productFamily":"iPad","minRuntimeVersion":3,"identifier":"com.apple.CoreSimulator.SimDeviceType.iPad-New"},' \
+    '{"name":"iPhone New","productFamily":"iPhone","minRuntimeVersion":4,"identifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-New"},' \
+    '{"name":"iPhone Mid","minRuntimeVersion":2,"identifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-Mid"}' \
+    ']}' > "${test_root}/device-types.json"
+  [[ "$(
+    list_simulator_device_type_candidates iPhone \
+      < "${test_root}/device-types.json"
+  )" == $'com.apple.CoreSimulator.SimDeviceType.iPhone-New\ncom.apple.CoreSimulator.SimDeviceType.iPhone-Mid\ncom.apple.CoreSimulator.SimDeviceType.iPhone-Old' ]] || {
+    echo 'Simulator device-type selector rejected a valid mixed fixture.' >&2
+    exit 1
+  }
+  [[ "$(
+    list_simulator_device_type_candidates iPad \
+      < "${test_root}/device-types.json"
+  )" == 'com.apple.CoreSimulator.SimDeviceType.iPad-New' ]] || {
+    echo 'Simulator device-type selector crossed product families.' >&2
+    exit 1
+  }
+
+  echo 'xcresult, XCUITest log, Flutter target and device selector self-test passed'
 )
 
 if [[ "${1:-}" == '--self-test' ]]; then
@@ -254,15 +287,11 @@ runtime_build="$(
       | .[0].buildversion // "unknown"
     '
 )"
-device_type_identifier="$(
+device_type_candidates="$(
   xcrun simctl list devicetypes -j |
-    jq -r --arg prefix "${device_prefix}" '
-      .devicetypes
-      | map(select(.name | startswith($prefix)))
-      | .[0].identifier // empty
-    '
+    list_simulator_device_type_candidates "${device_prefix}"
 )"
-if [[ -z "${device_type_identifier}" ]]; then
+if [[ -z "${device_type_candidates}" ]]; then
   echo "No ${device_prefix} Simulator device type is installed." >&2
   exit 1
 fi
@@ -270,6 +299,7 @@ fi
 simulator_udid=""
 simulator_name=""
 simulator_boot_attempt=0
+device_type_identifier=""
 flutter_config_backup_dir=""
 generated_xcconfig_existed=false
 flutter_export_environment_existed=false
@@ -313,11 +343,36 @@ for simulator_boot_attempt in 1 2; do
   simulator_name="Danggui-${suite_name}-$$-${RANDOM}-${simulator_boot_attempt}"
   printf 'boot_attempt=%s simulator=%s\n' \
     "${simulator_boot_attempt}" "${simulator_name}" >> "${boot_log_path}"
-  if simulator_udid="$(
-    xcrun simctl create \
-      "${simulator_name}" "${device_type_identifier}" "${runtime_identifier}" \
-      2>> "${boot_log_path}"
-  )"; then
+  create_succeeded=false
+  candidates_for_attempt="${device_type_candidates}"
+  if [[ -n "${device_type_identifier}" ]]; then
+    candidates_for_attempt="${device_type_identifier}"$'\n'"${device_type_candidates}"
+  fi
+  while IFS= read -r candidate_identifier; do
+    [[ -n "${candidate_identifier}" ]] || continue
+    [[ "${candidate_identifier}" =~ ^com[.]apple[.]CoreSimulator[.]SimDeviceType[.][A-Za-z0-9._-]+$ ]] || {
+      printf 'Rejected malformed Simulator device type: %s\n' \
+        "${candidate_identifier}" >> "${boot_log_path}"
+      continue
+    }
+    printf 'create_candidate=%s\n' \
+      "${candidate_identifier}" >> "${boot_log_path}"
+    if simulator_udid="$(
+      xcrun simctl create \
+        "${simulator_name}" "${candidate_identifier}" "${runtime_identifier}" \
+        2>> "${boot_log_path}"
+    )"; then
+      device_type_identifier="${candidate_identifier}"
+      create_succeeded=true
+      break
+    else
+      create_status=$?
+      printf 'Simulator candidate %s was rejected with status %s.\n' \
+        "${candidate_identifier}" "${create_status}" >> "${boot_log_path}"
+      simulator_udid=""
+    fi
+  done <<< "${candidates_for_attempt}"
+  if [[ "${create_succeeded}" == true ]]; then
     if [[ ! "${simulator_udid}" =~ ^[0-9A-Fa-f-]{36}$ ]]; then
       printf 'simctl returned an invalid Simulator identifier: %s\n' \
         "${simulator_udid}" >> "${boot_log_path}"
@@ -332,9 +387,8 @@ for simulator_boot_attempt in 1 2; do
         "${simulator_boot_attempt}" "${boot_status}" >> "${boot_log_path}"
     fi
   else
-    create_status=$?
-    printf 'Simulator creation attempt %s failed with status %s.\n' \
-      "${simulator_boot_attempt}" "${create_status}" >> "${boot_log_path}"
+    printf 'Simulator creation attempt %s exhausted all compatible candidates.\n' \
+      "${simulator_boot_attempt}" >> "${boot_log_path}"
   fi
   destroy_simulator
 done
@@ -362,12 +416,9 @@ fi
 
 # The production lib/main.dart does not import the destructive harness. Generate
 # an explicit Debug-Simulator Flutter configuration for its dedicated entrypoint
-# and then pass the generated values through raw xcodebuild as a second guard.
+# and pass the target through raw xcodebuild as a second guard. The dedicated
+# entrypoint itself requires kDebugMode and an allow-listed launch scenario.
 readonly xcui_flutter_target="lib/xcui_main.dart"
-xcui_dart_define="$(
-  printf '%s' 'DANGGUI_XCUITEST_BUILD=true' | base64 | tr -d '\r\n'
-)"
-readonly xcui_dart_define
 flutter_config_backup_dir="$(mktemp -d)"
 if [[ -f "${generated_xcconfig_path}" ]]; then
   generated_xcconfig_existed=true
@@ -384,30 +435,28 @@ flutter build ios \
   --debug \
   --config-only \
   --no-codesign \
-  --target="${xcui_flutter_target}" \
-  --dart-define='DANGGUI_XCUITEST_BUILD=true'
-xcui_dart_defines="$(
+  --target="${xcui_flutter_target}"
+validated_xcui_flutter_target="$(
   validate_xcui_flutter_config \
     "${generated_xcconfig_path}" \
-    "${xcui_flutter_target}" \
-    "${xcui_dart_define}"
+    "${xcui_flutter_target}"
 )" || {
-  echo 'Flutter did not generate the required XCUITest target and Dart define.' >&2
+  echo 'Flutter did not generate the required XCUITest target.' >&2
   exit 1
 }
-readonly xcui_dart_defines
+readonly validated_xcui_flutter_target
 {
   cat "${metadata_path}"
   xcodebuild test \
     -workspace ios/Runner.xcworkspace \
     -scheme Runner \
+    -configuration Debug \
     -destination "platform=iOS Simulator,id=${simulator_udid}" \
     -resultBundlePath "${result_bundle}" \
     -parallel-testing-enabled NO \
     -only-testing:RunnerTests \
     -only-testing:RunnerUITests \
-    FLUTTER_TARGET="${xcui_flutter_target}" \
-    DART_DEFINES="${xcui_dart_defines}" \
+    FLUTTER_TARGET="${validated_xcui_flutter_target}" \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO
 } 2>&1 | tee "${log_path}"

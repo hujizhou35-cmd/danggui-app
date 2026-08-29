@@ -198,7 +198,7 @@ void main() {
       final actionIdentity = ReminderNotificationActionIdentity.tryDecode(
         actionPayload,
       );
-      expect(actionIdentity, isNotNull);
+      expect(actionIdentity, isA<ReminderNotificationActionIdentity>());
       final handled = await coordinator.handleNotificationAction(
         'danggui.snooze.$minutes',
         actionPayload,

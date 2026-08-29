@@ -1208,8 +1208,8 @@ final class _Audit {
       'system_delivery=device-unverified',
       '--config-only',
       'lib/xcui_main.dart',
-      r'FLUTTER_TARGET="${xcui_flutter_target}"',
-      'DANGGUI_XCUITEST_BUILD=true',
+      r'FLUTTER_TARGET="${validated_xcui_flutter_target}"',
+      '-configuration Debug',
     ]) {
       _expectContains(
         simulatorScriptPath,
@@ -1236,15 +1236,15 @@ final class _Audit {
       '$productionMainPath must not import or select the destructive test harness',
     );
     for (final xcuiGate in <String>[
-      'DANGGUI_XCUITEST_BUILD',
-      'kDebugMode && harnessBuild',
+      'if (!kDebugMode)',
       'DANGGUI_XCUITEST_SCENARIO',
+      '_supportedXcuiScenarios.contains(scenario)',
     ]) {
       _expectContains(
         xcuiMainPath,
         xcuiMain,
         xcuiGate,
-        'dedicated XCUITest entrypoint must retain compile-time and Debug gates',
+        'dedicated XCUITest entrypoint must retain Debug and scenario gates',
       );
     }
 

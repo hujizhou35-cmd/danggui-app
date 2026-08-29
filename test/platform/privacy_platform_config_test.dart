@@ -145,8 +145,8 @@ void main() {
       'ui_test_count=2',
       'system_delivery=device-unverified',
       '--config-only',
-      r'FLUTTER_TARGET="${xcui_flutter_target}"',
-      'DANGGUI_XCUITEST_BUILD=true',
+      r'FLUTTER_TARGET="${validated_xcui_flutter_target}"',
+      '-configuration Debug',
     ]) {
       expect(simulatorScript, contains(marker), reason: marker);
     }
@@ -154,15 +154,12 @@ void main() {
     expect(simulatorScript, isNot(contains('mapfile')));
     expect(productionMain, isNot(contains('xcui_scenario_harness.dart')));
     expect(productionMain, isNot(contains('DANGGUI_XCUITEST_SCENARIO')));
-    expect(
-      xcuiMain,
-      contains("bool.fromEnvironment(\n    'DANGGUI_XCUITEST_BUILD'"),
-    );
-    expect(xcuiMain, contains('kDebugMode && harnessBuild'));
+    expect(xcuiMain, contains('if (!kDebugMode)'));
     expect(
       xcuiMain,
       contains("Platform.environment['DANGGUI_XCUITEST_SCENARIO']"),
     );
+    expect(xcuiMain, contains('_supportedXcuiScenarios.contains(scenario)'));
 
     for (final marker in <String>[
       'SOURCE_COMMIT.txt does not match the protected tag commit',
