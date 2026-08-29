@@ -9,8 +9,8 @@ import 'package:danggui/src/features/settings/settings_page.dart';
 import 'package:danggui/src/features/tasks/task_detail_page.dart';
 import 'package:danggui/src/features/tasks/tasks_page.dart';
 import 'package:danggui/src/ui/components/components.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -377,44 +377,31 @@ Future<void> _tapEditable(
     findsOneWidget,
     reason: '$phase requires the shared editor viewport.',
   );
-  final tapHandler = find.descendant(
-    of: field,
-    matching: find.byWidgetPredicate((widget) {
-      if (widget is! RawGestureDetector) return false;
-      return widget.gestures.containsKey(
-            TapAndHorizontalDragGestureRecognizer,
-          ) ||
-          widget.gestures.containsKey(TapAndPanGestureRecognizer);
-    }, description: 'TextField tap gesture handler'),
-  );
+  final editableState = tester.state<EditableTextState>(editable);
+  final renderEditable = editableState.renderEditable;
+  final visibleEditableRect = MatrixUtils.transformRect(
+    renderEditable.getTransformTo(null),
+    Offset.zero & renderEditable.size,
+  ).intersect(tester.getRect(editorViewport));
   expect(
-    tapHandler,
-    findsOneWidget,
-    reason: '$phase requires one TextField tap gesture handler.',
-  );
-  final visibleTapHandlerRect = tester
-      .getRect(tapHandler)
-      .intersect(tester.getRect(editorViewport));
-  expect(
-    visibleTapHandlerRect.width,
+    visibleEditableRect.width,
     greaterThanOrEqualTo(24),
     reason: '$phase must expose a tappable editor width.',
   );
   expect(
-    visibleTapHandlerRect.height,
+    visibleEditableRect.height,
     greaterThanOrEqualTo(24),
     reason: '$phase must expose a tappable editor height.',
   );
 
   // A long multiline TextField can extend beyond its clipped scroll viewport.
-  // RenderEditable deliberately ignores pointers inside TextField; selection
-  // and focus belong to the surrounding RawGestureDetector. Search the visible
-  // handler area for a point whose real hit path includes that detector instead
-  // of assuming the outer field's center belongs to it. The focus assertion
-  // still proves the tap won the arena before direct text entry is allowed.
-  final handlerRenderObject = tester.renderObject<RenderObject>(tapHandler);
-  final fieldView = View.of(tester.element(field));
-  final focusNode = tester.widget<EditableText>(editable).focusNode;
+  // RenderEditable is the actual text surface and reports itself in a
+  // legitimate pointer hit path. Search only the visible text surface, send
+  // one real gesture, and still require focus plus the platform IME before
+  // direct text entry is allowed. This avoids depending on TextField's private
+  // recognizer/proxy widget structure, which is not a Flutter contract.
+  final fieldView = View.of(tester.element(editable));
+  final focusNode = editableState.widget.focusNode;
   expect(
     focusNode.hasFocus,
     isFalse,
@@ -424,20 +411,23 @@ Future<void> _tapEditable(
     for (final dy in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
       for (final dx in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
         Offset(
-          visibleTapHandlerRect.left + visibleTapHandlerRect.width * dx,
-          visibleTapHandlerRect.top + visibleTapHandlerRect.height * dy,
+          visibleEditableRect.left + visibleEditableRect.width * dx,
+          visibleEditableRect.top + visibleEditableRect.height * dy,
         ),
   ];
   Offset? tapPoint;
+  final hitPathDiagnostics = <String>[];
   for (final candidate in candidates) {
     final hitTest = tester.hitTestOnBinding(
       candidate,
       viewId: fieldView.viewId,
     );
-    if (hitTest.path.any(
-      (entry) =>
-          _isRenderObjectAncestorOfTarget(handlerRenderObject, entry.target),
-    )) {
+    if (hitPathDiagnostics.length < 5) {
+      hitPathDiagnostics.add(
+        '$candidate=[${hitTest.path.map((entry) => entry.target.runtimeType).join('>')}]',
+      );
+    }
+    if (hitTest.path.any((entry) => identical(entry.target, renderEditable))) {
       tapPoint = candidate;
       break;
     }
@@ -446,8 +436,8 @@ Future<void> _tapEditable(
     tapPoint,
     isNotNull,
     reason:
-        '$phase must expose a hit-test path through its TextField tap handler '
-        'within $visibleTapHandlerRect.',
+        '$phase must expose a hit-test path through its RenderEditable within '
+        '$visibleEditableRect. samples=${hitPathDiagnostics.join('; ')}.',
   );
   final gesture = await tester.startGesture(tapPoint!, view: fieldView);
   await tester.pump(const Duration(milliseconds: 16));
@@ -456,21 +446,9 @@ Future<void> _tapEditable(
   await _waitForCondition(
     tester,
     () => focusNode.hasFocus,
-    phase: '$phase at $tapPoint within $visibleTapHandlerRect',
+    phase: '$phase at $tapPoint within $visibleEditableRect',
     timeout: const Duration(seconds: 3),
   );
-}
-
-bool _isRenderObjectAncestorOfTarget(
-  RenderObject expectedAncestor,
-  Object target,
-) {
-  RenderObject? current = target is RenderObject ? target : null;
-  while (current != null) {
-    if (identical(current, expectedAncestor)) return true;
-    current = current.parent;
-  }
-  return false;
 }
 
 Future<void> _waitForIme(

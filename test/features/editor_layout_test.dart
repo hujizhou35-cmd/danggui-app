@@ -13,8 +13,8 @@ import 'package:danggui/src/features/tasks/tasks_page.dart';
 import 'package:danggui/src/services/backup/automatic_backup_coordinator.dart';
 import 'package:danggui/src/ui/components/components.dart';
 import 'package:drift/native.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -171,17 +171,6 @@ void main() {
         of: body,
         matching: find.byType(EditableText),
       );
-      final bodyTapHandler = find.descendant(
-        of: body,
-        matching: find.byWidgetPredicate((widget) {
-          if (widget is! RawGestureDetector) return false;
-          return widget.gestures.containsKey(
-                TapAndHorizontalDragGestureRecognizer,
-              ) ||
-              widget.gestures.containsKey(TapAndPanGestureRecognizer);
-        }),
-      );
-      expect(bodyTapHandler, findsOneWidget);
       await tester.tap(title);
       await tester.pump();
       final titleEditable = find.descendant(
@@ -202,23 +191,22 @@ void main() {
       await tester.ensureVisible(body);
       await tester.pump(const Duration(milliseconds: 250));
 
-      final visibleBodyHandler = tester
-          .getRect(bodyTapHandler)
-          .intersect(tester.getRect(find.byKey(EditorPageFrame.editorKey)));
-      expect(visibleBodyHandler.width, greaterThanOrEqualTo(24));
-      expect(visibleBodyHandler.height, greaterThanOrEqualTo(24));
-      final handlerRenderObject = tester.renderObject<RenderObject>(
-        bodyTapHandler,
-      );
+      final renderEditable = tester
+          .state<EditableTextState>(bodyEditable)
+          .renderEditable;
+      final visibleBodyEditor = MatrixUtils.transformRect(
+        renderEditable.getTransformTo(null),
+        Offset.zero & renderEditable.size,
+      ).intersect(tester.getRect(find.byKey(EditorPageFrame.editorKey)));
+      expect(visibleBodyEditor.width, greaterThanOrEqualTo(24));
+      expect(visibleBodyEditor.height, greaterThanOrEqualTo(24));
       final tapPoint = Offset(
-        visibleBodyHandler.left + visibleBodyHandler.width * 0.1,
-        visibleBodyHandler.top + visibleBodyHandler.height * 0.1,
+        visibleBodyEditor.left + visibleBodyEditor.width * 0.1,
+        visibleBodyEditor.top + visibleBodyEditor.height * 0.1,
       );
       final hitTest = tester.hitTestOnBinding(tapPoint);
       expect(
-        hitTest.path.any(
-          (entry) => _renderObjectOwnsTarget(handlerRenderObject, entry.target),
-        ),
+        hitTest.path.any((entry) => identical(entry.target, renderEditable)),
         isTrue,
       );
       final gesture = await tester.startGesture(tapPoint);
@@ -284,15 +272,6 @@ void main() {
       expect(tester.takeException(), isNull);
     }),
   );
-}
-
-bool _renderObjectOwnsTarget(RenderObject expectedAncestor, Object target) {
-  RenderObject? current = target is RenderObject ? target : null;
-  while (current != null) {
-    if (identical(current, expectedAncestor)) return true;
-    current = current.parent;
-  }
-  return false;
 }
 
 Future<void> _withMountedApp(
