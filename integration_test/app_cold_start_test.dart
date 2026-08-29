@@ -9,6 +9,7 @@ import 'package:danggui/src/features/settings/settings_page.dart';
 import 'package:danggui/src/features/tasks/task_detail_page.dart';
 import 'package:danggui/src/features/tasks/tasks_page.dart';
 import 'package:danggui/src/ui/components/components.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -376,30 +377,85 @@ Future<void> _tapEditable(
     findsOneWidget,
     reason: '$phase requires the shared editor viewport.',
   );
-  final visibleFieldRect = tester
-      .getRect(field)
+  final tapHandler = find.descendant(
+    of: field,
+    matching: find.byWidgetPredicate((widget) {
+      if (widget is! RawGestureDetector) return false;
+      return widget.gestures.containsKey(
+            TapAndHorizontalDragGestureRecognizer,
+          ) ||
+          widget.gestures.containsKey(TapAndPanGestureRecognizer);
+    }, description: 'TextField tap gesture handler'),
+  );
+  expect(
+    tapHandler,
+    findsOneWidget,
+    reason: '$phase requires one TextField tap gesture handler.',
+  );
+  final visibleTapHandlerRect = tester
+      .getRect(tapHandler)
       .intersect(tester.getRect(editorViewport));
   expect(
-    visibleFieldRect.width,
+    visibleTapHandlerRect.width,
     greaterThanOrEqualTo(24),
     reason: '$phase must expose a tappable editor width.',
   );
   expect(
-    visibleFieldRect.height,
+    visibleTapHandlerRect.height,
     greaterThanOrEqualTo(24),
     reason: '$phase must expose a tappable editor height.',
   );
 
-  // A long multiline TextField can extend beyond its clipped scroll viewport,
-  // so its geometric center may belong to the scrollable instead of the
-  // editor. Tap the center of the actually visible intersection, then prove
-  // that the intended EditableText owns focus before direct text entry.
-  await tester.tapAt(visibleFieldRect.center);
-  await tester.pump();
+  // A long multiline TextField can extend beyond its clipped scroll viewport.
+  // RenderEditable deliberately ignores pointers inside TextField; selection
+  // and focus belong to the surrounding RawGestureDetector. Search the visible
+  // handler area for a point whose real hit path includes that detector instead
+  // of assuming the outer field's center belongs to it. The focus assertion
+  // still proves the tap won the arena before direct text entry is allowed.
+  final handlerRenderObject = tester.renderObject<RenderObject>(tapHandler);
+  final fieldView = View.of(tester.element(field));
+  final focusNode = tester.widget<EditableText>(editable).focusNode;
+  expect(
+    focusNode.hasFocus,
+    isFalse,
+    reason: '$phase must begin without the target editor already focused.',
+  );
+  final candidates = <Offset>[
+    for (final dy in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
+      for (final dx in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
+        Offset(
+          visibleTapHandlerRect.left + visibleTapHandlerRect.width * dx,
+          visibleTapHandlerRect.top + visibleTapHandlerRect.height * dy,
+        ),
+  ];
+  Offset? tapPoint;
+  for (final candidate in candidates) {
+    final hitTest = tester.hitTestOnBinding(
+      candidate,
+      viewId: fieldView.viewId,
+    );
+    if (hitTest.path.any(
+      (entry) => identical(entry.target, handlerRenderObject),
+    )) {
+      tapPoint = candidate;
+      break;
+    }
+  }
+  expect(
+    tapPoint,
+    isNotNull,
+    reason:
+        '$phase must expose a hit-test path through its TextField tap handler '
+        'within $visibleTapHandlerRect.',
+  );
+  final gesture = await tester.startGesture(tapPoint!, view: fieldView);
+  await tester.pump(const Duration(milliseconds: 16));
+  await gesture.up();
+  await tester.pump(const Duration(milliseconds: 32));
   await _waitForCondition(
     tester,
-    () => tester.widget<EditableText>(editable).focusNode.hasFocus,
-    phase: '$phase at ${visibleFieldRect.center} within $visibleFieldRect',
+    () => focusNode.hasFocus,
+    phase: '$phase at $tapPoint within $visibleTapHandlerRect',
     timeout: const Duration(seconds: 3),
   );
 }

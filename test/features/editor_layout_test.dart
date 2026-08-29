@@ -13,6 +13,7 @@ import 'package:danggui/src/features/tasks/tasks_page.dart';
 import 'package:danggui/src/services/backup/automatic_backup_coordinator.dart';
 import 'package:danggui/src/ui/components/components.dart';
 import 'package:drift/native.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -151,6 +152,82 @@ void main() {
             .controller
             ?.text,
         '现在可以正常编辑',
+      );
+    }),
+  );
+
+  testWidgets(
+    'visible note body pointer transfers focus from the title',
+    (tester) => _withMountedApp(tester, () async {
+      _setView(tester, const Size(412, 915));
+      await _pumpRealApp(tester, container, location: '/tasks');
+      await _openBranch(tester, 2);
+      await tester.tap(find.text('原笔记').hitTestable());
+      await _waitForFinder(tester, find.byType(NoteEditorPage));
+
+      final title = find.byKey(const Key('note-editor-title'));
+      final body = find.byKey(const Key('note-editor-body'));
+      final bodyEditable = find.descendant(
+        of: body,
+        matching: find.byType(EditableText),
+      );
+      final bodyTapHandler = find.descendant(
+        of: body,
+        matching: find.byWidgetPredicate((widget) {
+          if (widget is! RawGestureDetector) return false;
+          return widget.gestures.containsKey(
+                TapAndHorizontalDragGestureRecognizer,
+              ) ||
+              widget.gestures.containsKey(TapAndPanGestureRecognizer);
+        }),
+      );
+      expect(bodyTapHandler, findsOneWidget);
+      await tester.tap(title);
+      await tester.pump();
+      final titleEditable = find.descendant(
+        of: title,
+        matching: find.byType(EditableText),
+      );
+      expect(
+        tester.widget<EditableText>(titleEditable).focusNode.hasFocus,
+        isTrue,
+      );
+      expect(
+        tester.widget<EditableText>(bodyEditable).focusNode.hasFocus,
+        isFalse,
+      );
+      tester.view.viewInsets = const FakeViewPadding(bottom: 427);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.ensureVisible(body);
+      await tester.pump(const Duration(milliseconds: 250));
+
+      final visibleBodyHandler = tester
+          .getRect(bodyTapHandler)
+          .intersect(tester.getRect(find.byKey(EditorPageFrame.editorKey)));
+      expect(visibleBodyHandler.width, greaterThanOrEqualTo(24));
+      expect(visibleBodyHandler.height, greaterThanOrEqualTo(24));
+      final handlerRenderObject = tester.renderObject<RenderObject>(
+        bodyTapHandler,
+      );
+      final tapPoint = Offset(
+        visibleBodyHandler.left + visibleBodyHandler.width * 0.1,
+        visibleBodyHandler.top + visibleBodyHandler.height * 0.1,
+      );
+      final hitTest = tester.hitTestOnBinding(tapPoint);
+      expect(
+        hitTest.path.any(
+          (entry) => identical(entry.target, handlerRenderObject),
+        ),
+        isTrue,
+      );
+      final gesture = await tester.startGesture(tapPoint);
+      await tester.pump(const Duration(milliseconds: 16));
+      await gesture.up();
+      await tester.pump(const Duration(milliseconds: 32));
+      expect(
+        tester.widget<EditableText>(bodyEditable).focusNode.hasFocus,
+        isTrue,
       );
     }),
   );
