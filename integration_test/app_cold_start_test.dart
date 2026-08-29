@@ -370,17 +370,36 @@ Future<void> _tapEditable(
     matching: find.byType(EditableText),
   );
   expect(editable, findsOneWidget, reason: '$phase requires an EditableText.');
+  final editorViewport = find.byKey(EditorPageFrame.editorKey);
+  expect(
+    editorViewport,
+    findsOneWidget,
+    reason: '$phase requires the shared editor viewport.',
+  );
+  final visibleFieldRect = tester
+      .getRect(field)
+      .intersect(tester.getRect(editorViewport));
+  expect(
+    visibleFieldRect.width,
+    greaterThanOrEqualTo(24),
+    reason: '$phase must expose a tappable editor width.',
+  );
+  expect(
+    visibleFieldRect.height,
+    greaterThanOrEqualTo(24),
+    reason: '$phase must expose a tappable editor height.',
+  );
 
-  // TextField's outer RenderMouseRegion can be clipped while a large multiline
-  // EditableText inside it still receives the real pointer. Suppress only that
-  // outer-render-object warning, then prove the intended inner editor owns
-  // focus before any direct enterText call is allowed.
-  await tester.tap(field, warnIfMissed: false);
+  // A long multiline TextField can extend beyond its clipped scroll viewport,
+  // so its geometric center may belong to the scrollable instead of the
+  // editor. Tap the center of the actually visible intersection, then prove
+  // that the intended EditableText owns focus before direct text entry.
+  await tester.tapAt(visibleFieldRect.center);
   await tester.pump();
   await _waitForCondition(
     tester,
     () => tester.widget<EditableText>(editable).focusNode.hasFocus,
-    phase: phase,
+    phase: '$phase at ${visibleFieldRect.center} within $visibleFieldRect',
     timeout: const Duration(seconds: 3),
   );
 }
