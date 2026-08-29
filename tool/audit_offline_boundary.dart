@@ -1037,6 +1037,17 @@ final class _Audit {
     final workflow = _requiredText(workflowPath);
     if (workflow == null) return;
 
+    const readmeScreenshotWorkflowPath =
+        '.github/workflows/readme-screenshots.yml';
+    final readmeScreenshotWorkflow =
+        _requiredText(readmeScreenshotWorkflowPath) ?? '';
+    _expectContains(
+      readmeScreenshotWorkflowPath,
+      readmeScreenshotWorkflow,
+      '"cmake;3.22.1"',
+      'README screenshot builds must preinstall the locked native toolchain',
+    );
+
     for (final command in <String>[
       'dart run tool/audit_offline_boundary.dart',
       'flutter analyze --fatal-infos',
