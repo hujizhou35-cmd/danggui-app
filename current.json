@@ -1,41 +1,41 @@
 {
   "schemaVersion": 1,
   "repository": "hujizhou35-cmd/danggui-app",
-  "generatedAt": "2026-08-27T14:10:38.006Z",
+  "generatedAt": "2026-08-30T06:20:54.347Z",
   "stable": null,
   "preview": {
-    "releaseId": 377521996,
-    "version": "1.1.4",
-    "tag": "v1.1.4",
+    "releaseId": 379192576,
+    "version": "1.1.5",
+    "tag": "v1.1.5",
     "channel": "preview",
     "prerelease": true,
-    "publishedAt": "2026-08-27T01:57:40Z",
-    "sourceCommit": "2e6e67a2af1239bb56991f85a08c5ff64c00197f",
-    "releaseUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.4",
+    "publishedAt": "2026-08-30T05:44:07Z",
+    "sourceCommit": "a9f51251f7aefbacdd6caf5091a3dcfa6c01bea8",
+    "releaseUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5",
     "assets": {
       "android": {
         "name": "danggui-android-universal-release.apk",
-        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.4/danggui-android-universal-release.apk",
-        "size": 95478059,
-        "digest": "sha256:97193ff11a17f80d7caa83239c18d535c5c03b7f197b011a6e37bb6ad6fb9e79"
+        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.5/danggui-android-universal-release.apk",
+        "size": 95904041,
+        "digest": "sha256:3fc09574896f3d56ef1aae24eb63ef5afdf241bfeea260d255b22921c86e71b3"
       },
       "iosSource": {
-        "name": "danggui-ios-source-v1.1.4.zip",
-        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.4/danggui-ios-source-v1.1.4.zip",
-        "size": 63919127,
-        "digest": "sha256:efdbc96ba20a9e9ea40eefeddf774bcf46499171f00ee16c2be32e2729e4c61b"
+        "name": "danggui-ios-source-v1.1.5.zip",
+        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.5/danggui-ios-source-v1.1.5.zip",
+        "size": 64146348,
+        "digest": "sha256:3d2f9eefd7482078c604ff3d42100b0e90f1ebcfd5bc1a4f24b8333558ecc19b"
       },
       "developer": {
-        "name": "danggui-developer-assets-v1.1.4.zip",
-        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.4/danggui-developer-assets-v1.1.4.zip",
-        "size": 237953032,
-        "digest": "sha256:fd847bb8e373201b4e817dfd2a01686e278473942a5fa5c7a664d7e3d3df22ba"
+        "name": "danggui-developer-assets-v1.1.5.zip",
+        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.5/danggui-developer-assets-v1.1.5.zip",
+        "size": 238708259,
+        "digest": "sha256:3483fc54236b52c145688c614f4351535561fcefbd1e05f00f87e8eb9b7369f8"
       },
       "checksums": {
         "name": "SHA256SUMS",
-        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.4/SHA256SUMS",
+        "downloadUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/download/v1.1.5/SHA256SUMS",
         "size": 302,
-        "digest": "sha256:45dd9a5f8b8dca9d7fcacff83f6e0cd0e9c622ee3348b66cc9c0014605726bff"
+        "digest": "sha256:83c8c5a3e669496a71cf63f6e3da4d781120319822377e16fe3d782fd782020c"
       }
     }
   },
