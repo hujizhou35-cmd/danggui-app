@@ -67,22 +67,22 @@
 | G06 | F16 DB 损坏恢复 | 普通无 journal 启动也在仓储写入前执行一次完整 integrity/FK；journal 路径的 live/candidate/safety 和恢复后 canonical live 同样完整验证。journal 前候选失败逐项清理，无 journal 启动只按精确 app-owned 名称清孤儿；损坏候选不会覆盖良好 live | 损坏 WAL/SHM、只读/磁盘满仍需平台/VFS 注入。移动损坏 live 与 sidecar 到唯一取证前缀不是单事务；二次进程崩溃可能造成取证 sidecar 分散，这是不影响有效副本选择的已知低风险 |
 | G07 | F17 outbox | Dart stale revision/dedupe 测试强；replace 候选在交换前写入新的 `alarmGeneration`，merge 保持当前代际，v1.1.4 回退 `legacy:<dataset_id>`，portable backup 剥离设备标记，journal 前后崩溃恢复测试证明旧/新 live 各自保持对应代际；三端 schedule/Stop/Snooze/Missed/快照/取消均核对当前代际，ACK 失败不阻断同轮新 revision 排期 | 平台调用成功但 app ack 前 crash、容量 deferred 重启、乱序/重复事件仍需持续门禁。Android 为支持 replace 回滚有意保留跨代 LKG records/events；在增加共享层 finalize 握手前，频繁 replace 会增加私有 SharedPreferences，占用增长不得误报为提醒成功或通过提前 GC 牺牲回滚可靠性 |
 | G08 | F18 迁移 | schemaVersion 仍为 1，因此尚无升级链 | v1.1.5 任何 schema 改动前加入 v1.1.3/v1.1.4 真实 DB 夹具、未来版本拒绝和逐阶段 crash |
-| G09 | F19 channel | Swift 参数解析有别名和稳定错误 | malformed 类型/epoch overflow/unknown enum/fuzz，FlutterResult exactly-once，actor 并发与 iOS 18/26 双 runtime |
+| G09 | F19 channel | Xcode 16.4/iOS 18.5 与 Xcode 26.6/iOS 26.5 各通过 68 RunnerTests + 2 RunnerUITests，actor/availability 两条固定 runtime 已有证据 | malformed 类型/epoch overflow/unknown enum 的更大 fuzz、FlutterResult exactly-once 压力仍需持续扩展；app-process contract double 不证明系统通知投递 |
 | G10 | F21 日志 | journal 限 200 且设计不存正文 | 扫描 `NSLog`、Dart logger、异常字符串和证据包；确认路径、正文、口令/密钥不进入日志 |
 
 ## P1/P2 证据缺口
 
-- 编辑器：真实中文/日文 IME composing、光标/选择、长文自动保存与进程终止未覆盖；Joplin X13 表明只测短文本不足。
+- 编辑器：API 24/36 已通过真实指针命中和系统 IME inset，并同时等待祖先与字段内部 ScrollPosition；真实中文/日文 composing、复杂光标/选择、长文自动保存与进程终止仍未覆盖。
 - 搜索：replace/merge 已不信任备份投影，并从权威 task/note/past 数据原子重建，覆盖缺失、陈旧与
   重复 merge；四语规范化与删除恢复的更大模型矩阵仍待扩展。
 - 过往/anchors：缺 Unicode grapheme 边界和随机 split/merge 状态机。
 - 导出：缺磁盘满、分享取消、超长安全文件名、同名碰撞和旧版本字节夹具。
-- 导航：目标已删除、权限撤销、旧 payload、冷启动/后台 scene 的降级行为没有 XCUITest。
+- 导航：两条 RunnerUITests 已覆盖专用 Debug app-process 的事项—提醒—删除恢复与备份—恢复—提醒重建；它们不是通知中心冷启动、production UI 系统入口或后台 scene 的证明。
 - UI：快速滚动条与 Snackbar 有 Widget/Golden 证据，但没有 iPad/横屏/键盘/安全区成对矩阵。
 - 无障碍：没有 VoiceOver runner、焦点顺序、自定义动作和最大系统 Dynamic Type；44pt 组件测试不能替代。
 - 性能：已有大数据 Dart 测试，但没有 iOS 主线程、内存和临时空间阈值。
-- 供应链：需为 sqlite Simulator 动态 dylib 固定 URL/SHA/缓存，生成依赖许可证/隐私用途清单。
-- 发布：计划中的 iOS 18.5 与 26.5 CI、RunnerTests、两条 XCUITest 尚未实际运行；不能提前标 `simulator-proven`。
+- 供应链：sqlite Simulator 动态 dylib 已固定 URL、SHA-256 和缓存边界；仍需完整 SBOM、逐依赖隐私用途和持续升级审查。
+- 发布：[Mobile CI 33289990719](https://github.com/hujizhou35-cmd/danggui-app/actions/runs/33289990719) 已在 iOS 18.5/26.5 各通过 68 RunnerTests + 2 RunnerUITests，并通过 Android API 24/36；两套 iOS 证据明确 `notification_gateway=in-process-contract-double`、`system_delivery=device-unverified`，不可表述成 AlarmKit/UserNotifications 已真实投递。
 
 ## 必须持续标记为 device-unverified
 

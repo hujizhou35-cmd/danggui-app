@@ -48,19 +48,19 @@
 
 修复进入工作树后，在相应行增加：失败测试名、修复提交、CI run URL 和结论提升。没有 CI run URL 不得写 `simulator-proven`；没有可重复实体 iPhone 记录不得移除 `device-unverified`。
 
-## v1.1.5 实施追踪（PR 前本地门禁）
+## v1.1.5 实施追踪（PR 与 CI 证据）
 
-本表是上方不可变 v1.1.4 基线判断的增量，不改写基线事实。实现提交为 `d261c0c`，固定运行时与供应链门禁为 `3d355fc`，发布文案为 `a06205a`；研究台账提交为 `ffdb5de`。本地 `flutter analyze --fatal-infos`、378 项离线审计、344 项 Flutter 测试与 1 项平台限定跳过已通过。Kotlin、Swift、XCUITest、unsigned iOS build、Android API 24/36 与签名 APK 仍以 PR CI 为准，因此以下任何一行都尚未标记 `simulator-proven`。
+本表是上方不可变 v1.1.4 基线判断的增量，不改写基线事实。核心实现为 `d261c0c`，固定运行时/供应链为 `3d355fc`，发布文案为 `a06205a`，编辑器真实指针稳定化为 `a8fb35b`、`8353465`，API 24 安装传输门禁为 `ef1300b`；研究台账起点为 `ffdb5de`。实现 PR 的 [Mobile CI 33289990719](https://github.com/hujizhou35-cmd/danggui-app/actions/runs/33289990719) 通过 433 项离线审计、348 项 Flutter 测试、Android API 24/36、unsigned iOS build，以及两套各 68 项 RunnerTests + 2 项 RunnerUITests；[截图 run 33289990716](https://github.com/hujizhou35-cmd/danggui-app/actions/runs/33289990716) 的中英文作业也通过。iOS 两套 UI 场景均明确使用 app-process contract double，不能提升为系统通知实际投递证明。
 
 | ID | v1.1.5 实施/失败路径证据 | 提交 | 当前结论 / CI |
 |---|---|---|---|
-| F01 | `xcui_scenario_harness_test`、两条 `RunnerUITests` 场景、启动依赖失败后重建、通知冷启动安全降级 | `d261c0c` | 本地 contract-proven；双 Simulator pending |
-| F02 | optimistic-lock 双写冲突、640 步固定 seed 事项/笔记影子模型、删除恢复跨链 | `d261c0c` | contract-proven；Android 回归 pending |
-| F03 | 损坏镜像 LKG、generation/revision/session、A→B→A、4096 满队列终态、Stop/Snooze/Missed/15 分钟/60 容量 | `d261c0c` | Dart contract-proven；Kotlin/Swift/Simulator pending |
+| F01 | `xcui_scenario_harness_test`、两条 `RunnerUITests` 场景、启动依赖失败后重建、通知冷启动安全降级 | `d261c0c` | app-process 生命周期合同在 iOS 18.5/26.5 `simulator-proven`；真实通知冷启动仍 device-unverified |
+| F02 | optimistic-lock 双写冲突、640 步固定 seed 事项/笔记影子模型、删除恢复跨链 | `d261c0c` | contract-proven；Android API 24/36 回归通过 |
+| F03 | 损坏镜像 LKG、generation/revision/session、A→B→A、4096 满队列终态、Stop/Snooze/Missed/15 分钟/60 容量 | `d261c0c` | Dart/Kotlin/Swift 与双 Simulator app-process 合同通过；系统提醒实际投递 device-unverified |
 | F04 | alert/sound/time-sensitive 能力组合、权限撤销/恢复、两条权限写库等待共享 gate | `d261c0c` | contract-proven；系统 UI/真机仍 device-unverified |
 | F05 | anchored block split/merge/reorder、批量 3600 块编辑和固定模型交错 | `d261c0c` | contract-proven；真实 IME pending |
 | F06 | 笔记 rowVersion CAS、自动保存串行、搜索重建、固定模型删除/恢复 | `d261c0c` | contract-proven |
-| F07 | task/note/Past 自动保存重入、失败重试、返回/后台 flush、外部 revision 冲突 | `d261c0c` | contract-proven；真实进程终止/IME device-unverified |
+| F07 | task/note/Past 自动保存重入、失败重试、返回/后台 flush、外部 revision 冲突；同时观察祖先和字段内部 ScrollPosition | `d261c0c`, `a8fb35b`, `8353465` | API 24/36 单次真实指针与系统 IME inset 通过；中文/日文 composing、真实进程终止仍 device-unverified |
 | F08 | replace/merge 丢弃来源索引并由权威数据重建，模型测试持续核对查询结果 | `d261c0c` | contract-proven；更大四语规范化矩阵 pending |
 | F09 | 损坏 trash context 拒绝、30 天边界、恢复/永久删除及未来提醒重建 | `d261c0c` | contract-proven |
 | F10 | `VACUUM INTO` 一致性快照、候选/安全副本/journal 校验、busy WAL 与各交换 fault point | `d261c0c` | process-crash-consistent；power-loss-unverified |
@@ -70,17 +70,17 @@
 | F14 | settings rowVersion CAS、四语、默认提醒和备份状态真值 | `d261c0c` | contract-proven |
 | F15 | canonical IANA provider、DST 缺失/重复时刻、Snooze/重启/UTC fallback | `d261c0c` | contract-proven；手动系统改钟 Simulator pending |
 | F16 | WAL/FULL/foreign keys、完整 integrity、未来 schema 拒绝、live/candidate/safety LKG 恢复 | `d261c0c` | contract-proven；VFS 磁盘满/power loss pending |
-| F17 | business outbox 与 200 条诊断分离；ACK 一次失败仍同轮排期并由 timer 幂等重放 | `d261c0c` | contract-proven；native CI pending |
+| F17 | business outbox 与 200 条诊断分离；ACK 一次失败仍同轮排期并由 timer 幂等重放 | `d261c0c` | Dart/Kotlin/Swift 合同及双固定 Simulator 通过；平台实际投递仍 device-unverified |
 | F18 | schema 仍为 1；未来版本启动/恢复显式拒绝，v1.1.4 设备 generation 使用稳定 legacy 路径 | `d261c0c` | 当前无 schema migration；升级前夹具门禁保留 |
-| F19 | MethodChannel generation/别名/坏事件可 ACK、actor 串行、严格错误和 RunnerTests 扩展 | `d261c0c` | Dart contract-proven；Swift 双 runtime pending |
+| F19 | MethodChannel generation/别名/坏事件可 ACK、actor 串行、严格错误和 RunnerTests 扩展 | `d261c0c` | Xcode 16.4/iOS 18.5 与 Xcode 26.6/iOS 26.5 各 68 RunnerTests + 2 RunnerUITests 通过 |
 | F20 | `DangguiDataProtection` 显式 backup exclusion + first-unlock protection，失败返回稳定 unavailable | `d261c0c` | contract-proven；首次解锁/锁屏 device-unverified |
-| F21 | 378 项源码隐私审计及主动破坏 fail-closed 测试；4096 业务事件不含正文，诊断 200 条 | `d261c0c`, `3d355fc` | contract-proven；证据包 CI pending |
-| F22 | v3 通知身份、旧 payload 仅导航、目标删除回退列表、重复/陈旧动作幂等 | `d261c0c` | contract-proven；scene 系统入口 Simulator pending |
-| F23 | fast scrollbar、bounded Snackbar、键盘 inset、Golden 回归纳入 344 项全量测试 | `d261c0c` | Widget/Golden contract-proven |
+| F21 | PR CI 433 项、当前本地 438 项源码隐私/平台审计及主动破坏 fail-closed 测试；4096 业务事件不含正文，诊断 200 条 | `d261c0c`, `3d355fc`, `ef1300b` | contract-proven；正式标签证据包仍待发布 |
+| F22 | v3 通知身份、旧 payload 仅导航、目标删除回退列表、重复/陈旧动作幂等 | `d261c0c` | 两条专用 Debug app-process XCUITest 通过；通知中心/生产系统入口仍 device-unverified |
+| F23 | fast scrollbar、bounded Snackbar、键盘 inset、Golden 回归纳入 348 项全量测试；真实编辑字段命中路径覆盖 API 24/36 | `d261c0c`, `a8fb35b`, `8353465` | Widget/Golden 与 Android 模拟器交互通过 |
 | F24 | 系统 text scale 不再截断至 2 倍，最小触控、四语窄屏/语义回归 | `d261c0c` | contract-proven；VoiceOver/iPad 深矩阵 pending |
 | F25 | 2000 tasks/1000 notes/3600 Past、导出/备份/恢复指标及 1000→500 merge | `d261c0c` | Dart stress contract-proven；Instruments pending |
-| F26 | sqlite iOS dylib URL/SHA 固定、依赖/许可证/离线边界、固定 action commits | `3d355fc` | source contract-proven；CI reproducibility pending |
+| F26 | sqlite iOS dylib 固定 URL/SHA/缓存、依赖/许可证/离线边界、固定 action commits | `3d355fc` | 两套固定 macOS/Xcode runner 在本次 PR CI 均通过；完整 SBOM/持续升级审查保留 |
 | F27 | `1.1.5+6`、四语设置/帮助/已知限制和权限真值测试 | `d261c0c`, `a06205a` | contract-proven |
-| F28 | 固定 `macos-15`/16.4/18.5 与 `macos-26`/26.6/26.5、APK/源码/证据/SHA 全下载复核 | `3d355fc`, `a06205a` | 全部远端发布证据 pending；device-unverified 保留 |
+| F28 | 固定 `macos-15`/16.4/18.5 与 `macos-26`/26.6/26.5；Android API 24 使用 5 次受审计非流式安装，API 36 保持原生透传；APK/源码/证据/SHA 下载复核 | `3d355fc`, `a06205a`, `ef1300b` | PR CI 全绿；保护标签、正式签名与公开附件待发布，device-unverified 保留 |
 
-PR 创建后把最终成功 run URL 写回本节，再据真实作业将相关行提升为 `simulator-proven`；若任一原生编译或运行时门禁失败，本表保持 pending 并先修复，不能以本地 Dart 通过替代。
+保护标签发布后再把正式签名、附件哈希和公开 Release 事实写入发布检查表；不得用本节的 PR `debug-fallback` 测试签名代替正式签名证据。

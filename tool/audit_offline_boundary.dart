@@ -1560,6 +1560,26 @@ final class _Audit {
       );
     }
 
+    const emulatorSmokeSelfTestPath =
+        'integration_test/run_android_emulator_smoke_self_test.sh';
+    final emulatorSmokeSelfTest = _requiredText(emulatorSmokeSelfTestPath);
+    if (emulatorSmokeSelfTest != null) {
+      for (final negativeContract in <String>[
+        'missing-attestation',
+        'empty-install-evidence',
+        'invalid-install-evidence',
+        'run_api36_scope_case',
+        'adb-transport-scope',
+      ]) {
+        _expectContains(
+          emulatorSmokeSelfTestPath,
+          emulatorSmokeSelfTest,
+          negativeContract,
+          'ADB transport self-test must prove missing, malformed, and cross-API evidence fails closed',
+        );
+      }
+    }
+
     const adbInstallerPath =
         'integration_test/install_adb_no_streaming_wrapper.sh';
     final adbInstaller = _requiredText(adbInstallerPath);
