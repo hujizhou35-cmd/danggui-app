@@ -84,7 +84,7 @@ export default async function PrivacyPage({ params }: PageProps) {
           <h2>{ui.privacy.siteTitle}</h2>
           <div>
             <p>{ui.privacy.siteBody}</p>
-            <a className="text-link" href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('[Danggui] Privacy')}`}>
+            <a className="text-link" href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('[当归] Privacy')}`}>
               {ui.privacy.contactCta}: {SUPPORT_EMAIL}
             </a>
           </div>

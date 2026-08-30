@@ -5,7 +5,7 @@
     "title": "Little by little, grow a path of your own.",
     "description": "Connect plans, reminders, actions, Past, and Notes in one quiet, local-first workflow.",
     "image": "../01-主视觉/xiaodanggui-hero-quiet-growth.webp",
-    "alt": "In a warm paper garden, Little Danggui quietly watches a two-leaf sprout rise from a folded paper seed."
+    "alt": "In a warm paper garden, 小当归 quietly watches a two-leaf sprout rise from a folded paper seed."
   },
   "features": [
     {
@@ -13,7 +13,7 @@
       "title": "A quiet corner on your device",
       "description": "Your records stay on your device, with no account and no uploads.",
       "image": "../02-功能意境/feature-local-only.webp",
-      "alt": "Little Danggui shelters blank notes under a broad leaf while pale blue rain remains outside a paper circle."
+      "alt": "小当归 shelters blank notes under a broad leaf while pale blue rain remains outside a paper circle."
     },
     {
       "id": "growing-past",
@@ -27,7 +27,7 @@
       "title": "A gentle sound when you need it",
       "description": "Independent Notes and one local Reminder help you remember without hurrying you.",
       "image": "../02-功能意境/feature-notes-reminders.webp",
-      "alt": "Little Danggui sits beside blank notes as a bell-shaped flower releases one soft ripple."
+      "alt": "小当归 sits beside blank notes as a bell-shaped flower releases one soft ripple."
     }
   ],
   "stories": [
@@ -35,72 +35,72 @@
       "id": "story-01",
       "title": "It Sprouts Only Here",
       "excerpt": "Rain falls beyond the circle; the seed tells its secret only to the ground beneath it.",
-      "body": "小当归 found a seed on the paper ground. Instead of putting it in an envelope or asking the wind to carry it away, Little Danggui rolled over each day to shield it from hurried rain. On the third morning, two leaves appeared, their roots staying quietly below. Little Danggui watched for a long time and understood: not everything grows by traveling farther. Some things grow because they are carefully allowed to remain where they belong.",
+      "body": "小当归 found a seed on the paper ground. Instead of putting it in an envelope or asking the wind to carry it away, 小当归 rolled over each day to shield it from hurried rain. On the third morning, two leaves appeared, their roots staying quietly below. 小当归 watched for a long time and understood: not everything grows by traveling farther. Some things grow because they are carefully allowed to remain where they belong.",
       "image": "../03-故事插画/story-01-only-here-it-sprouts.webp",
-      "alt": "A circle of warm light shelters Little Danggui and a new sprout beneath a pale blue rain wash.",
+      "alt": "A circle of warm light shelters 小当归 and a new sprout beneath a pale blue rain wash.",
       "productTheme": "Local-only records; data stays on the device"
     },
     {
       "id": "story-02",
       "title": "Planting Today",
-      "excerpt": "Today was too large for a pocket, so Little Danggui folded it into paper seeds.",
-      "body": "Today was rather long: buy a light bulb, answer a letter, and remember to water the plant at dusk. Little Danggui tried to push the whole day into a pocket and rolled out first. So the day became several small slips, folded and planted one by one in warm paper soil. The Tasks did not become fewer, but they suddenly had an order. When the last slip was gently marked done, a tiny green shoot appeared from the ground.",
+      "excerpt": "Today was too large for a pocket, so 小当归 folded it into paper seeds.",
+      "body": "Today was rather long: buy a light bulb, answer a letter, and remember to water the plant at dusk. 小当归 tried to push the whole day into a pocket and rolled out first. So the day became several small slips, folded and planted one by one in warm paper soil. The Tasks did not become fewer, but they suddenly had an order. When the last slip was gently marked done, a tiny green shoot appeared from the ground.",
       "image": "../01-主视觉/xiaodanggui-hero-quiet-growth.webp",
-      "alt": "Little Danggui keeps watch beside a folded paper seed and a new sprout, with wide warm-paper space to the left.",
+      "alt": "小当归 keeps watch beside a folded paper seed and a new sprout, with wide warm-paper space to the left.",
       "productTheme": "Tasks; dates, plans, and checklists"
     },
     {
       "id": "story-03",
       "title": "Past Has Rings of Its Own",
       "excerpt": "A finished thing did not vanish; it followed the paper river into a new ring.",
-      "body": "Little Danggui placed a completed Task in the paper river, expecting it to drift away like a leaf. The next day, the paper had curled into a pale tree ring, with room beside it for another line. More finished things joined it, and the river slowly lengthened. Little Danggui sometimes returned to change a sentence or add a detail. Past, it turned out, was not a sealed box. It was one long document that could still breathe and grow.",
+      "body": "小当归 placed a completed Task in the paper river, expecting it to drift away like a leaf. The next day, the paper had curled into a pale tree ring, with room beside it for another line. More finished things joined it, and the river slowly lengthened. 小当归 sometimes returned to change a sentence or add a detail. Past, it turned out, was not a sealed box. It was one long document that could still breathe and grow.",
       "image": "../03-故事插画/story-03-past-has-rings.webp",
-      "alt": "Little Danggui stands by a paper river as a leaf settles into softly glowing concentric rings.",
+      "alt": "小当归 stands by a paper river as a leaf settles into softly glowing concentric rings.",
       "productTheme": "Past; completed Tasks in an editable long-form document"
     },
     {
       "id": "story-04",
       "title": "One Very Gentle Reminder",
       "excerpt": "The bell flower made only one ripple—just enough to bring the note back to mind.",
-      "body": "The bell flower promised to remind Little Danggui when the moon rose. It did not shout or chase anyone around the garden. At the agreed time, it released one thin circle through the air. Little Danggui tilted slightly, noticed the note by its side, and remembered to water the plant near the window. Once the Task was done, the bell flower lowered its head again. The Reminder had finished its work, and the garden returned to being quiet.",
+      "body": "The bell flower promised to remind 小当归 when the moon rose. It did not shout or chase anyone around the garden. At the agreed time, it released one thin circle through the air. 小当归 tilted slightly, noticed the note by its side, and remembered to water the plant near the window. Once the Task was done, the bell flower lowered its head again. The Reminder had finished its work, and the garden returned to being quiet.",
       "image": "../03-故事插画/story-04-gentle-reminder.webp",
-      "alt": "Under moonlight, a bell flower sends out a soft ripple while Little Danggui listens beside a folded note.",
+      "alt": "Under moonlight, a bell flower sends out a soft ripple while 小当归 listens beside a folded note.",
       "productTheme": "Reminders; one local notification"
     },
     {
       "id": "story-05",
       "title": "Even Blank Things Can Be Kept",
       "excerpt": "A note without a title may simply be waiting for a sentence that has not arrived yet.",
-      "body": "Little Danggui found a blank sheet with no title on the front and no full stop on the back. The wind said it was useless and should be allowed to fly away. Little Danggui carried it home with two very short arms and placed it among the Notes. Days later, a sentence appeared during a walk and landed neatly on that waiting page. Blankness was not a mistake after all. It had simply saved a place for something that was not ready yet.",
+      "body": "小当归 found a blank sheet with no title on the front and no full stop on the back. The wind said it was useless and should be allowed to fly away. 小当归 carried it home with two very short arms and placed it among the Notes. Days later, a sentence appeared during a walk and landed neatly on that waiting page. Blankness was not a mistake after all. It had simply saved a place for something that was not ready yet.",
       "image": "../04-透明切图/pose-holding-note.png",
-      "alt": "On a transparent background, Little Danggui holds a blank cream note with two very short arms.",
+      "alt": "On a transparent background, 小当归 holds a blank cream note with two very short arms.",
       "productTheme": "Notes; untitled Notes can be saved and continued"
     },
     {
       "id": "story-06",
       "title": "The Paper Plane That Was Not Sent",
       "excerpt": "The plane did not travel far; it rested comfortably on the same sheet of paper.",
-      "body": "Little Danggui folded a paper plane and tucked a thought meant only for itself into the crease. The wind knocked and asked whether the plane should be carried far away. After thinking, Little Danggui tied on a thin thread, let the plane make one small circle indoors, and watched it land nearby. The secret was neither taken nor made lighter. It simply stayed in place, ready to be opened again whenever Little Danggui chose.",
+      "body": "小当归 folded a paper plane and tucked a thought meant only for itself into the crease. The wind knocked and asked whether the plane should be carried far away. After thinking, 小当归 tied on a thin thread, let the plane make one small circle indoors, and watched it land nearby. The secret was neither taken nor made lighter. It simply stayed in place, ready to be opened again whenever 小当归 chose.",
       "image": "../03-故事插画/story-06-unsent-paper-plane.webp",
-      "alt": "Little Danggui holds a thread attached to a blank paper plane resting nearby, with a two-leaf plant behind it.",
+      "alt": "小当归 holds a thread attached to a blank paper plane resting nearby, with a two-leaf plant behind it.",
       "productTheme": "Privacy; no uploads and no account"
     },
     {
       "id": "story-07",
       "title": "A Bookmark for Yesterday",
-      "excerpt": "Yesterday was finished, but not locked; Little Danggui could still add one true sentence.",
-      "body": "Little Danggui opened yesterday and noticed the smell after the rain had been forgotten. Yesterday felt awkward and said it had already passed. Still, Little Danggui slipped a small bookmark from the edge of the paper roll and added: “like freshly washed bark.” Yesterday did not crack, and today did not become untidy. The record simply became a little more true. Finished Tasks, Past, and Notes could still be revisited, edited, and cared for.",
+      "excerpt": "Yesterday was finished, but not locked; 小当归 could still add one true sentence.",
+      "body": "小当归 opened yesterday and noticed the smell after the rain had been forgotten. Yesterday felt awkward and said it had already passed. Still, 小当归 slipped a small bookmark from the edge of the paper roll and added: “like freshly washed bark.” Yesterday did not crack, and today did not become untidy. The record simply became a little more true. Finished Tasks, Past, and Notes could still be revisited, edited, and cared for.",
       "image": "../02-功能意境/feature-growing-past.webp",
-      "alt": "Little Danggui watches blank slips become a long rolled paper path stretching toward a distant sprout.",
+      "alt": "小当归 watches blank slips become a long rolled paper path stretching toward a distant sprout.",
       "productTheme": "Reliable editing; Tasks, Past, and Notes remain editable"
     },
     {
       "id": "story-08",
       "title": "Rain Sounds in a Small Wooden Box",
-      "excerpt": "Little Danggui made a backup of the rain; whether the box had a lock was its own choice.",
-      "body": "The rain sounded especially good, and Little Danggui worried that tomorrow might forget it. The sound was folded into a small paper slip and placed in a wooden box. Little Danggui opened the box once more to make sure no corner of the rain was missing, then closed the lid. A lock could be added, but then its key had to be remembered. The box would not run away; it would wait locally until the rain needed to be restored.",
+      "excerpt": "小当归 made a backup of the rain; whether the box had a lock was its own choice.",
+      "body": "The rain sounded especially good, and 小当归 worried that tomorrow might forget it. The sound was folded into a small paper slip and placed in a wooden box. 小当归 opened the box once more to make sure no corner of the rain was missing, then closed the lid. A lock could be added, but then its key had to be remembered. The box would not run away; it would wait locally until the rain needed to be restored.",
       "image": "../04-透明切图/pose-guarding-seed.png",
-      "alt": "On a transparent background, Little Danggui leans gently toward a small seed as if guarding it.",
+      "alt": "On a transparent background, 小当归 leans gently toward a small seed as if guarding it.",
       "productTheme": "Local backup; optional encryption and validation before restore"
     }
   ]
