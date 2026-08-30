@@ -1,14 +1,13 @@
 {
   "schemaVersion": 1,
   "repository": "hujizhou35-cmd/danggui-app",
-  "generatedAt": "2026-08-30T06:20:54.347Z",
-  "stable": null,
-  "preview": {
+  "generatedAt": "2026-08-30T07:45:46.916Z",
+  "stable": {
     "releaseId": 379192576,
     "version": "1.1.5",
     "tag": "v1.1.5",
-    "channel": "preview",
-    "prerelease": true,
+    "channel": "stable",
+    "prerelease": false,
     "publishedAt": "2026-08-30T05:44:07Z",
     "sourceCommit": "a9f51251f7aefbacdd6caf5091a3dcfa6c01bea8",
     "releaseUrl": "https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5",
@@ -39,5 +38,6 @@
       }
     }
   },
-  "recommended": "preview"
+  "preview": null,
+  "recommended": "stable"
 }
