@@ -385,22 +385,33 @@ danggui_xml_has_system_component_anr() {
   local xml_path="$1"
   local component_pattern='(System UI|Permission Controller) (isn.t|is not) responding'
 
+  danggui_xml_has_android_anr_dialog "${xml_path}" &&
+    grep -Eqi "text=\"${component_pattern}\"" "${xml_path}"
+}
+
+danggui_xml_has_android_anr_dialog() {
+  local xml_path="$1"
+
   [[ -s "${xml_path}" ]] &&
     grep -Fq 'package="android"' "${xml_path}" &&
     grep -Fq 'resource-id="android:id/aerr_close"' "${xml_path}" &&
-    grep -Fq 'resource-id="android:id/aerr_wait"' "${xml_path}" &&
-    grep -Eqi "text=\"${component_pattern}\"" "${xml_path}"
+    grep -Fq 'resource-id="android:id/aerr_wait"' "${xml_path}"
 }
 
 danggui_classify_system_component_anr() {
   local xml_path="$1"
   local evidence_name="$2"
   local reason="${3:-health-gate-anr-dialog}"
+  local focus_evidence_name="${4:-}"
   local component=''
   local required_package_evidence=''
+  local launcher_package=''
+  local launcher_package_pattern=''
+  local classification_path="${evidence_dir}/infrastructure-classification.json"
+  local classification_partial="${classification_path}.partial"
   local copy_status
 
-  danggui_xml_has_system_component_anr "${xml_path}" || return 1
+  danggui_xml_has_android_anr_dialog "${xml_path}" || return 1
   if grep -Eqi 'text="System UI (isn.t|is not) responding"' "${xml_path}"; then
     component='system-ui'
     required_package_evidence="${evidence_dir}/systemui-package-path.txt"
@@ -408,6 +419,29 @@ danggui_classify_system_component_anr() {
     'text="Permission Controller (isn.t|is not) responding"' "${xml_path}"; then
     component='permission-controller'
     required_package_evidence="${evidence_dir}/permission-controller-package-path.txt"
+  elif [[ "${reason}" == 'health-gate-anr-dialog' &&
+          -n "${focus_evidence_name}" ]] &&
+       jq -e '.phase == "system-component-health-gate"' \
+         "${workflow_phase}" >/dev/null 2>&1; then
+    # Quickstep's user-visible label is localized and does not equal its
+    # package name. Attribute this otherwise-generic ANR only when the default
+    # HOME activity, its read-only system package path, and the currently
+    # focused ANR window all identify the same package.
+    [[ "${focus_evidence_name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+    [[ -s "${evidence_dir}/launcher-package.txt" ]] || return 1
+    launcher_package="$(tr -d '\r[:space:]' \
+      < "${evidence_dir}/launcher-package.txt")"
+    [[ "${launcher_package}" =~ ^[A-Za-z0-9._]+$ ]] || return 1
+    launcher_package_pattern="${launcher_package//./\\.}"
+    grep -Eq "^${launcher_package_pattern}/[A-Za-z0-9._\$]+[[:space:]]*$" \
+      "${evidence_dir}/launcher-selection.txt" || return 1
+    grep -Eq '^package:/(system|system_ext|product|vendor|odm|apex)/.+' \
+      "${evidence_dir}/launcher-package-path.txt" || return 1
+    grep -Eq \
+      "(mCurrentFocus|mFocusedWindow)=.*Application Not Responding: ${launcher_package_pattern}([/}:[:space:]]|$)" \
+      "${evidence_dir}/${focus_evidence_name}" || return 1
+    component='launcher'
+    required_package_evidence="${evidence_dir}/launcher-package-path.txt"
   else
     return 1
   fi
@@ -428,6 +462,27 @@ danggui_classify_system_component_anr() {
   fi
   danggui_mark_retryable_infrastructure_failure \
     "${component}" "${reason}" "${evidence_name}" 0
+  if [[ "${component}" == 'launcher' ]]; then
+    if jq \
+         --arg systemPackage "${launcher_package}" \
+         --arg focusEvidenceFile "${focus_evidence_name}" \
+         '. + {
+           systemPackage: $systemPackage,
+           launcherSelectionEvidence: "launcher-selection.txt",
+           launcherPackagePathEvidence: "launcher-package-path.txt",
+           focusEvidenceFile: $focusEvidenceFile
+         }' "${classification_path}" > "${classification_partial}" &&
+       mv -- "${classification_partial}" "${classification_path}"; then
+      :
+    else
+      copy_status=$?
+      rm -f -- "${classification_partial}"
+      danggui_mark_nonretryable_health_failure \
+        launcher 'launcher-classification-write-failed' \
+        "${evidence_name}" "${copy_status}"
+      return 2
+    fi
+  fi
   return 0
 }
 
@@ -535,6 +590,7 @@ danggui_capture_responsive_ui() {
   local max_polls=10
   local classification_path
   local classification_partial
+  local focus_evidence_name
 
   for (( poll = 1; poll <= max_polls; poll += 1 )); do
     # The just-booted SystemUI can acknowledge an expansion before its shade
@@ -578,14 +634,36 @@ danggui_capture_responsive_ui() {
       return "${command_status}"
     fi
 
+    focus_evidence_name=''
+    if danggui_xml_has_android_anr_dialog "${host_xml}" &&
+       ! danggui_xml_has_system_component_anr "${host_xml}"; then
+      focus_evidence_name="${component}-anr-focus-${sample}-${poll}.txt"
+      if danggui_metadata_command "${focus_evidence_name}" \
+        shell dumpsys window windows; then
+        :
+      else
+        command_status=$?
+        return "${command_status}"
+      fi
+    fi
     if danggui_classify_system_component_anr \
-      "${host_xml}" "${component}-anr-${sample}.xml"; then
+      "${host_xml}" "${component}-anr-${sample}.xml" \
+      'health-gate-anr-dialog' "${focus_evidence_name}"; then
       return "${DANGGUI_INFRA_RETRY_EXIT_STATUS}"
     else
       command_status=$?
       if (( command_status > 1 )); then
         return 1
       fi
+    fi
+    if danggui_xml_has_android_anr_dialog "${host_xml}"; then
+      # Never turn an arbitrary app ANR into a SystemUI observation timeout.
+      # Only the three explicitly attributed system components above may mint
+      # the one fresh-AVD retry token.
+      danggui_mark_nonretryable_health_failure \
+        untrusted-anr-dialog 'untrusted-anr-dialog' \
+        "${component}-health-${sample}.xml" 0
+      return 1
     fi
     if grep -Fq "package=\"${expected_package}\"" "${host_xml}"; then
       return 0
@@ -624,6 +702,7 @@ danggui_capture_responsive_ui() {
 
 danggui_run_system_component_health_gate() {
   local status
+  local launcher_package
   local permission_controller_package
   local sample
 
@@ -667,6 +746,37 @@ danggui_run_system_component_health_gate() {
     shell pm path com.android.systemui; then :; else status=$?; return "${status}"; fi
   danggui_expect_health_evidence system-ui systemui-package-path.txt \
     '^package:.+' || return $?
+
+  if danggui_health_command launcher launcher-selection.txt \
+    shell cmd package resolve-activity --brief \
+      -a android.intent.action.MAIN \
+      -c android.intent.category.HOME; then
+    :
+  else
+    status=$?
+    return "${status}"
+  fi
+  launcher_package="$(
+    tr -d '\r' < "${evidence_dir}/launcher-selection.txt" |
+      sed -n -E 's#^([A-Za-z0-9._]+)/[A-Za-z0-9._$]+$#\1#p' |
+      head -n 1
+  )"
+  if [[ ! "${launcher_package}" =~ ^[A-Za-z0-9._]+$ ]]; then
+    danggui_mark_nonretryable_health_failure launcher \
+      'invalid-selected-package' launcher-selection.txt 0
+    return 1
+  fi
+  printf '%s\n' "${launcher_package}" \
+    > "${evidence_dir}/launcher-package.txt"
+  if danggui_health_command launcher launcher-package-path.txt \
+    shell pm path "${launcher_package}"; then
+    :
+  else
+    status=$?
+    return "${status}"
+  fi
+  danggui_expect_health_evidence launcher launcher-package-path.txt \
+    '^package:/(system|system_ext|product|vendor|odm|apex)/.+' || return $?
 
   if danggui_health_command permission-controller \
     permission-controller-selection.txt \
@@ -760,6 +870,7 @@ danggui_run_system_component_health_gate() {
   jq -n \
     --argjson apiLevel "${api_level}" \
     --argjson attempt "${emulator_attempt}" \
+    --arg launcherPackage "${launcher_package}" \
     --arg permissionControllerPackage "${permission_controller_package}" \
     --arg avdName "$(tr -d '\r\n' < "${evidence_dir}/emulator-avd-name.txt")" \
     --arg buildFingerprint "$(tr -d '\r\n' < "${evidence_dir}/emulator-build-fingerprint.txt")" \
@@ -773,6 +884,7 @@ danggui_run_system_component_health_gate() {
       stableSamples: 2,
       sampleIntervalSeconds: 5,
       systemUiPackage: "com.android.systemui",
+      launcherPackage: $launcherPackage,
       permissionControllerPackage: $permissionControllerPackage,
       emulator: {
         avdName: $avdName,

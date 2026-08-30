@@ -13,7 +13,7 @@ body:
     id: version
     attributes:
       label: App version / 应用版本
-      placeholder: 1.1.4+5
+      placeholder: 1.1.5+6
     validations:
       required: true
   - type: dropdown

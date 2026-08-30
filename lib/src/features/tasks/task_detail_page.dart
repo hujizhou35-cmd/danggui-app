@@ -63,6 +63,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   var _persistedRevision = 0;
   var _showSaveErrors = false;
   var _controllersReady = false;
+  StateConflictException? _versionConflict;
 
   @override
   void initState() {
@@ -184,6 +185,13 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
+                  if (_versionConflict != null)
+                    _EditorVersionConflictBanner(
+                      key: const Key('task-editor-version-conflict'),
+                      message: l10n.editorVersionConflict,
+                      reloadLabel: l10n.reload,
+                      onReload: _reloadAfterVersionConflict,
+                    ),
                   TextField(
                     key: const Key('task-title-field'),
                     controller: _titleController,
@@ -545,6 +553,8 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
     _pendingDraft = null;
     _nextRevision = 0;
     _persistedRevision = 0;
+    _versionConflict = null;
+    _showSaveErrors = false;
     _lastObservedSignature = _draftSignature();
     _controllersReady = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -566,6 +576,29 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   }
 
   void _mergeExternalTask(TaskViewModel task) {
+    final template = _taskTemplate;
+    if (template == null) {
+      _hydrate(task);
+      return;
+    }
+    if (task.rowVersion != template.rowVersion) {
+      // While our own write is in flight, AppStore can publish its refreshed
+      // value before the awaiting save loop resumes. The successful save path
+      // below performs the only safe rebase. If no write is active, a dirty
+      // editor must keep its old CAS baseline so an external update cannot be
+      // silently overwritten.
+      if (_saveOperation != null) return;
+      if (_pendingDraft != null) {
+        _autosaveTimer?.cancel();
+        _versionConflict ??= const StateConflictException(
+          '事项已在其他操作中更新，请重新加载后再编辑。',
+        );
+        return;
+      }
+      _hydrate(task);
+      return;
+    }
+
     _taskTemplate = task;
     if (_reminderFieldsDirty) return;
 
@@ -617,6 +650,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
       ),
     );
     _autosaveTimer?.cancel();
+    if (_versionConflict != null) return;
     _autosaveTimer = Timer(widget.autosaveDelay, () {
       unawaited(_startSaveLoop());
     });
@@ -625,10 +659,22 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
   Future<bool> _flushSave({required bool interactive}) {
     _autosaveTimer?.cancel();
     if (interactive) _showSaveErrors = true;
+    final conflict = _versionConflict;
+    if (conflict != null) {
+      if (interactive && mounted) {
+        showDangguiSnackBar(
+          context,
+          message: AppLocalizations.of(context).editorVersionConflict,
+          duration: dangguiSnackBarErrorDuration,
+        );
+      }
+      return Future<bool>.value(false);
+    }
     return _startSaveLoop();
   }
 
   Future<bool> _startSaveLoop() {
+    if (_versionConflict != null) return Future<bool>.value(false);
     final currentOperation = _saveOperation;
     if (currentOperation != null) return currentOperation;
     final operation = _runSaveLoop();
@@ -659,6 +705,18 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
       }
       try {
         await _persistDraft(draft);
+      } on StateConflictException catch (error) {
+        _autosaveTimer?.cancel();
+        _versionConflict = error;
+        if (mounted) {
+          setState(() {});
+          showDangguiSnackBar(
+            context,
+            message: AppLocalizations.of(context).editorVersionConflict,
+            duration: dangguiSnackBarErrorDuration,
+          );
+        }
+        return false;
       } on Object catch (error) {
         if (_showSaveErrors && mounted) {
           showDangguiSnackBar(
@@ -700,6 +758,10 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
     } else {
       await persist(task);
     }
+    // Keep callback-backed editors consistent with the production AppStore
+    // path when the callback delegates to it. Pure test collectors leave the
+    // provider rowVersion unchanged, making this a no-op.
+    _rebaseAfterOwnTaskSave(draft);
 
     ReminderAuthorizationResult? authorization;
     if (authorizesFutureReminder) {
@@ -755,6 +817,44 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage>
       // channel immediately so the editor does not show stale diagnostics.
       await _refreshReminderCapabilities();
     }
+  }
+
+  void _rebaseAfterOwnTaskSave(_TaskSaveDraft committedDraft) {
+    final latest = ref
+        .read(appStoreProvider)
+        .value
+        ?.tasks
+        .cast<TaskViewModel?>()
+        .firstWhere(
+          (candidate) => candidate?.id == widget.taskId,
+          orElse: () => null,
+        );
+    if (latest == null || latest.rowVersion <= committedDraft.task.rowVersion) {
+      return;
+    }
+    _taskTemplate = latest;
+    final pending = _pendingDraft;
+    if (pending != null && pending.revision > committedDraft.revision) {
+      _pendingDraft = _TaskSaveDraft(
+        revision: pending.revision,
+        reminderFieldsDirty: pending.reminderFieldsDirty,
+        task: pending.task.copyWith(rowVersion: latest.rowVersion),
+      );
+    }
+  }
+
+  void _reloadAfterVersionConflict() {
+    final latest = ref
+        .read(appStoreProvider)
+        .value
+        ?.tasks
+        .cast<TaskViewModel?>()
+        .firstWhere(
+          (candidate) => candidate?.id == widget.taskId,
+          orElse: () => null,
+        );
+    if (latest == null) return;
+    setState(() => _hydrate(latest));
   }
 
   Future<void> _saveAndClose() async {
@@ -992,6 +1092,43 @@ class _SmartField extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _EditorVersionConflictBanner extends StatelessWidget {
+  const _EditorVersionConflictBanner({
+    super.key,
+    required this.message,
+    required this.reloadLabel,
+    required this.onReload,
+  });
+
+  final String message;
+  final String reloadLabel;
+  final VoidCallback onReload;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: colors.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(color: colors.onErrorContainer),
+            ),
+          ),
+          TextButton(onPressed: onReload, child: Text(reloadLabel)),
+        ],
       ),
     );
   }

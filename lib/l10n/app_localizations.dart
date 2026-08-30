@@ -108,6 +108,12 @@ abstract class AppLocalizations {
   /// **'当归'**
   String get appName;
 
+  /// No description provided for @brandSeal.
+  ///
+  /// In zh, this message translates to:
+  /// **'当归印章'**
+  String get brandSeal;
+
   /// No description provided for @privacyTagline.
   ///
   /// In zh, this message translates to:
@@ -131,6 +137,18 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'重试'**
   String get retry;
+
+  /// No description provided for @reload.
+  ///
+  /// In zh, this message translates to:
+  /// **'重新加载'**
+  String get reload;
+
+  /// No description provided for @editorVersionConflict.
+  ///
+  /// In zh, this message translates to:
+  /// **'内容已在其他操作中更新。请重新加载后再继续编辑。'**
+  String get editorVersionConflict;
 
   /// No description provided for @tasksTab.
   ///

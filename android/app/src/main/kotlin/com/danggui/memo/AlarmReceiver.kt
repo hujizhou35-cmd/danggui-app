@@ -14,6 +14,13 @@ class AlarmReceiver : BroadcastReceiver() {
         val scheduleRevision =
             intent.getLongExtra(AlarmScheduler.EXTRA_SCHEDULE_REVISION, Long.MIN_VALUE)
         if (scheduleRevision == Long.MIN_VALUE) return
+        val rawDeviceGeneration =
+            intent.getStringExtra(AlarmScheduler.EXTRA_DEVICE_GENERATION)
+        val deviceGeneration = rawDeviceGeneration?.let {
+            AlarmIdentityPolicy.canonicalDeviceGeneration(it) ?: return
+        }
+        val store = AlarmStore(context.applicationContext)
+        if (!store.isActiveDeviceGeneration(deviceGeneration)) return
 
         val pendingResult = goAsync()
         val applicationContext = context.applicationContext
@@ -34,9 +41,17 @@ class AlarmReceiver : BroadcastReceiver() {
             val serviceIntent =
                 Intent(applicationContext, AlarmRingingService::class.java).apply {
                     action = AlarmRingingService.ACTION_FIRE
-                    data = AlarmScheduler.alarmIdentityUri(reminderId, scheduleRevision)
+                    data =
+                        AlarmScheduler.alarmIdentityUri(
+                            reminderId,
+                            scheduleRevision,
+                            deviceGeneration,
+                        )
                     putExtra(AlarmScheduler.EXTRA_REMINDER_ID, reminderId)
                     putExtra(AlarmScheduler.EXTRA_SCHEDULE_REVISION, scheduleRevision)
+                    deviceGeneration?.let {
+                        putExtra(AlarmScheduler.EXTRA_DEVICE_GENERATION, it)
+                    }
                 }
             val started =
                 runCatching {
@@ -47,17 +62,19 @@ class AlarmReceiver : BroadcastReceiver() {
                     }
                 }.getOrNull() != null
             if (!started) {
-                AlarmStore(applicationContext).get(reminderId, scheduleRevision)?.let { record ->
-                    AlarmStore(applicationContext).appendEvent(
-                        AlarmEvent(
-                            reminderId = record.reminderId,
-                            taskId = record.taskId,
-                            scheduleRevision = record.scheduleRevision,
-                            type = "error",
-                            detailCode = "service_handoff_failed",
-                        ),
-                    )
-                }
+                store.get(reminderId, scheduleRevision, deviceGeneration)
+                    ?.let { record ->
+                        store.appendEvent(
+                            AlarmEvent(
+                                reminderId = record.reminderId,
+                                taskId = record.taskId,
+                                scheduleRevision = record.scheduleRevision,
+                                deviceGeneration = record.deviceGeneration,
+                                type = "error",
+                                detailCode = "service_handoff_failed",
+                            ),
+                        )
+                    }
             }
         } finally {
             pendingResult.finish()

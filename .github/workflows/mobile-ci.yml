@@ -19,6 +19,8 @@ env:
   JAVA_VERSION: "21"
   ANDROID_COMPILE_SDK: "36"
   ANDROID_BUILD_TOOLS: 36.0.0
+  IOS_FALLBACK_XCODE: /Applications/Xcode_16.4.app/Contents/Developer
+  IOS_ALARMKIT_XCODE: /Applications/Xcode_26.6.app/Contents/Developer
   ANDROID_NDK_VERSION: 28.2.13676358
   BUNDLETOOL_VERSION: 1.18.3
   BUNDLETOOL_SHA256: a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29
@@ -86,12 +88,16 @@ jobs:
         run: |
           bash tool/assemble_release_assets.sh --self-test
           bash tool/render_release_notes.sh --self-test
+          bash tool/run_ios_simulator_tests.sh --self-test
 
       - name: Test Android emulator retry gate
         run: bash integration_test/run_android_emulator_smoke_self_test.sh
 
       - name: Test Android emulator infrastructure gate
-        run: bash integration_test/android_emulator_infrastructure_self_test.sh
+        run: |
+          bash integration_test/android_emulator_infrastructure_self_test.sh
+          bash integration_test/adb_no_streaming_wrapper_self_test.sh
+          bash integration_test/install_adb_no_streaming_wrapper_self_test.sh
 
       - name: Analyze
         run: flutter analyze --fatal-infos
@@ -285,7 +291,7 @@ jobs:
           name: danggui-android-${{ github.sha }}
           path: dist/android/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
       - name: Remove temporary signing material
         if: always()
@@ -397,7 +403,8 @@ jobs:
             "platforms;android-${ANDROID_COMPILE_SDK}" \
             "build-tools;${ANDROID_BUILD_TOOLS}" \
             "platform-tools" \
-            "ndk;${ANDROID_NDK_VERSION}"
+            "ndk;${ANDROID_NDK_VERSION}" \
+            "cmake;3.22.1"
 
       - name: Configure toolchain and resolve dependencies
         shell: bash
@@ -453,6 +460,9 @@ jobs:
             -no-boot-anim -camera-back none -camera-front none
           disable-animations: true
           disable-spellchecker: true
+          pre-emulator-launch-script: >-
+            bash integration_test/install_adb_no_streaming_wrapper.sh
+            "${{ matrix.api-level }}"
           script: bash integration_test/run_android_emulator_smoke.sh "${{ matrix.api-level }}"
 
       - name: Classify primary emulator failure
@@ -489,6 +499,9 @@ jobs:
             -no-boot-anim -camera-back none -camera-front none
           disable-animations: true
           disable-spellchecker: true
+          pre-emulator-launch-script: >-
+            bash integration_test/install_adb_no_streaming_wrapper.sh
+            "${{ matrix.api-level }}"
           script: bash integration_test/run_android_emulator_smoke.sh "${{ matrix.api-level }}"
 
       - name: Enforce emulator acceptance result
@@ -510,13 +523,82 @@ jobs:
           name: danggui-emulator-api-${{ matrix.api-level }}-acceptance-${{ github.sha }}
           path: ${{ runner.temp }}/danggui-emulator-api-${{ matrix.api-level }}/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
+
+  ios-fallback:
+    name: iOS 18.5 fallback contract (Xcode 16.4)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select the fixed fallback Xcode
+        shell: bash
+        run: |
+          sudo xcode-select --switch "${IOS_FALLBACK_XCODE}"
+          xcodebuild -version
+          xcrun simctl list runtimes available
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Configure toolchain
+        shell: bash
+        run: |
+          flutter config --no-analytics --enable-swift-package-manager
+          dart --disable-analytics
+          flutter --version
+
+      - name: Resolve dependencies and prefetch verified native assets
+        shell: bash
+        run: |
+          flutter pub get --enforce-lockfile
+          bash tool/prefetch_sqlite_ios.sh
+
+      - name: Compile the iOS 15-25 device fallback without signing
+        run: flutter build ios --release --no-codesign
+
+      - name: Run only RunnerTests and representative UI contracts on iOS 18.5
+        shell: bash
+        run: |
+          evidence_dir="${RUNNER_TEMP}/danggui-ios-fallback"
+          bash tool/run_ios_simulator_tests.sh \
+            18.5 "${evidence_dir}" ios-18.5-fallback
+          cp "${evidence_dir}/ios-18.5-fallback.summary.txt" \
+            "${evidence_dir}/IOS_FALLBACK_TESTS.txt"
+          xcodebuild -version > "${evidence_dir}/IOS_FALLBACK_XCODE.txt"
+
+      - name: Upload compact fallback evidence
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: danggui-ios-fallback-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/danggui-ios-fallback/*.txt
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload fallback diagnostics only after failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: danggui-ios-fallback-failure-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/danggui-ios-fallback/*.xcresult
+            ${{ runner.temp }}/danggui-ios-fallback/*.log
+            ${{ runner.temp }}/danggui-ios-fallback/*.json
+          if-no-files-found: warn
+          retention-days: 7
 
   ios-unsigned:
-    name: Unsigned iOS source build
+    name: iOS 26.5 AlarmKit API contract and unsigned source build (Xcode 26.6)
     runs-on: macos-26
     timeout-minutes: 60
-    needs: [android-linux, android-emulator-smoke]
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -534,58 +616,31 @@ jobs:
       - name: Configure toolchain
         shell: bash
         run: |
+          sudo xcode-select --switch "${IOS_ALARMKIT_XCODE}"
           flutter config --no-analytics --enable-swift-package-manager
           dart --disable-analytics
           xcodebuild -version
           flutter --version
 
-      - name: Resolve dependencies
-        run: flutter pub get --enforce-lockfile
+      - name: Resolve dependencies and prefetch verified native assets
+        shell: bash
+        run: |
+          flutter pub get --enforce-lockfile
+          bash tool/prefetch_sqlite_ios.sh
 
       - name: Build unsigned iOS app
         run: bash tool/build_ios_unsigned.sh
 
-      - name: Run iOS RunnerTests on the newest available simulator
+      - name: Run only RunnerTests and representative UI contracts on iOS 26.5
         shell: bash
         run: |
-          set -euo pipefail
-          runtime_identifier="$(
-            xcrun simctl list runtimes available -j |
-              jq -r '
-                .runtimes
-                | map(select(.identifier | startswith("com.apple.CoreSimulator.SimRuntime.iOS-")))
-                | sort_by(.version | split(".") | map(tonumber))
-                | reverse
-                | .[0].identifier // empty
-              '
-          )"
-          if [[ -z "${runtime_identifier}" ]]; then
-            echo "No available iOS simulator runtime was found." >&2
-            exit 1
-          fi
-          simulator_udid="$(
-            xcrun simctl list devices available -j |
-              jq -r --arg runtime "${runtime_identifier}" '
-                (.devices[$runtime] // [])
-                | map(select(.name | startswith("iPhone")))
-                | .[0].udid // empty
-              '
-          )"
-          if [[ -z "${simulator_udid}" ]]; then
-            echo "No available iPhone simulator was found." >&2
-            exit 1
-          fi
-          xcrun simctl boot "${simulator_udid}" 2>/dev/null || true
-          {
-            printf 'runtime=%s\nsimulator_udid=%s\n' \
-              "${runtime_identifier}" "${simulator_udid}"
-            xcodebuild test \
-              -workspace ios/Runner.xcworkspace \
-              -scheme Runner \
-              -destination "platform=iOS Simulator,id=${simulator_udid}" \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO
-          } 2>&1 | tee dist/ios/RUNNER_TESTS.txt
+          evidence_dir="${RUNNER_TEMP}/danggui-ios-alarmkit"
+          bash tool/run_ios_simulator_tests.sh \
+            26.5 "${evidence_dir}" ios-26.5-alarmkit
+          cp "${evidence_dir}/ios-26.5-alarmkit.summary.txt" \
+            dist/ios/RUNNER_TESTS.txt
+          cp "${evidence_dir}/ios-26.5-alarmkit.summary.txt" \
+            dist/ios/IOS_ALARMKIT_SUMMARY.txt
 
       - name: Finalize iOS archive checksums
         shell: bash
@@ -602,14 +657,44 @@ jobs:
           name: danggui-ios-unsigned-${{ github.sha }}
           path: dist/ios/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
+
+      - name: Upload AlarmKit diagnostics only after failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: danggui-ios-alarmkit-failure-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/danggui-ios-alarmkit/*.xcresult
+            ${{ runner.temp }}/danggui-ios-alarmkit/*.log
+            ${{ runner.temp }}/danggui-ios-alarmkit/*.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  ios-unsigned-contract:
+    # Keep this display name stable: protected main requires the legacy context.
+    name: Unsigned iOS source build
+    needs: [ios-fallback, ios-unsigned]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Confirm both fixed iOS contracts passed
+        shell: bash
+        env:
+          FALLBACK_RESULT: ${{ needs.ios-fallback.result }}
+          ALARMKIT_RESULT: ${{ needs.ios-unsigned.result }}
+        run: |
+          set -euo pipefail
+          [[ "${FALLBACK_RESULT}" == 'success' ]]
+          [[ "${ALARMKIT_RESULT}" == 'success' ]]
+          echo 'Both fixed iOS build and Simulator contract jobs passed.'
 
   publish-prerelease:
     name: Publish protected tag pre-release
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    needs: [android-linux, android-emulator-smoke, ios-unsigned]
+    timeout-minutes: 30
+    needs: [android-linux, android-emulator-smoke, ios-unsigned-contract]
     permissions:
       actions: read
       contents: write
@@ -651,12 +736,17 @@ jobs:
           gh run download "${GITHUB_RUN_ID}" \
             --name "danggui-ios-unsigned-${GITHUB_SHA}" \
             --dir staging/ios
+          gh run download "${GITHUB_RUN_ID}" \
+            --name "danggui-ios-fallback-${GITHUB_SHA}" \
+            --dir staging/ios
 
       - name: Assemble pre-release assets
         shell: bash
         run: |
           set -euo pipefail
-          bash tool/assemble_release_assets.sh \
+          expected_source_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          EXPECTED_SOURCE_COMMIT="${expected_source_commit}" \
+            bash tool/assemble_release_assets.sh \
             "${GITHUB_REF_NAME}" staging/android staging/ios release
           bash tool/render_release_notes.sh \
             "${GITHUB_REF_NAME}" \
@@ -723,6 +813,9 @@ jobs:
 
           published_verification="$(mktemp -d)"
           gh release download "${GITHUB_REF_NAME}" \
-            --pattern SHA256SUMS \
             --dir "${published_verification}"
+          expected_source_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          EXPECTED_SOURCE_COMMIT="${expected_source_commit}" \
+            bash tool/verify_release_assets.sh \
+            "${GITHUB_REF_NAME}" "${published_verification}"
           cmp release/SHA256SUMS "${published_verification}/SHA256SUMS"

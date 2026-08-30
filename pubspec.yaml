@@ -1,7 +1,7 @@
 name: danggui
 description: "当归：本地优先、无账号、无广告的事项、过往与笔记应用。"
 publish_to: "none"
-version: 1.1.4+5
+version: 1.1.5+6
 
 environment:
   sdk: ^3.13.1

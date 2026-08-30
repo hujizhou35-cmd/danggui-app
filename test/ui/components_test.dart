@@ -1,4 +1,7 @@
 import 'package:danggui/src/core/theme/theme.dart';
+
+import 'dart:ui' show SemanticsAction;
+
 import 'package:danggui/src/ui/components/components.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -90,6 +93,30 @@ void main() {
     );
 
     expect(tester.getSize(find.byType(DangguiSwitch)), const Size(45, 44));
+  });
+
+  testWidgets('DangguiIconButton exposes an actionable semantic button', (
+    tester,
+  ) async {
+    var pressed = false;
+    await _pump(
+      tester,
+      Center(
+        child: DangguiIconButton(
+          icon: const Icon(Icons.add),
+          semanticLabel: 'Add item',
+          onPressed: () => pressed = true,
+        ),
+      ),
+    );
+
+    final semantics = tester.ensureSemantics();
+    final node = tester.getSemantics(find.bySemanticsLabel('Add item'));
+    expect(node.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+    tester.semantics.tap(find.semantics.byLabel('Add item'));
+    await tester.pump();
+    expect(pressed, isTrue);
+    semantics.dispose();
   });
 
   testWidgets('TaskCard swaps schedule for pending actions', (tester) async {

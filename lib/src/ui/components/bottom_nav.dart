@@ -40,8 +40,8 @@ class DangguiBottomNav extends StatelessWidget {
       child: SafeArea(
         top: false,
         minimum: const EdgeInsets.only(bottom: 4),
-        child: SizedBox(
-          height: 77,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 77),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
             child: Row(

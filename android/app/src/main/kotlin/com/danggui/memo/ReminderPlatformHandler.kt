@@ -12,6 +12,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.util.TimeZone
 
 internal class ReminderPlatformHandler(private val activity: Activity) : MethodChannel.MethodCallHandler {
     private val store = AlarmStore(activity)
@@ -20,12 +21,14 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "getCapabilities" -> result.success(getCapabilities())
+            "getLocalTimeZoneIdentifier" -> result.success(TimeZone.getDefault().id)
             "requestExactAlarmPermission" -> result.success(requestExactAlarmPermission())
             "requestFullScreenPermission" -> result.success(requestFullScreenPermission())
             "openNotificationSettings" -> openNotificationSettings(result)
             "openAlarmSoundSettings" -> openAlarmSoundSettings(result)
             "openOemAutostartSettings" ->
                 result.success(OemSettingsLauncher(activity).open().opened)
+            "activateDeviceGeneration" -> activateDeviceGeneration(call.arguments, result)
             "scheduleAlarm" -> scheduleAlarm(call.arguments, result)
             "cancelAlarm" -> cancelAlarm(call.arguments, result)
             "stopAlarm" -> stopAlarm(call.arguments, result)
@@ -60,7 +63,8 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
         val oemLauncher = OemSettingsLauncher(activity)
         val alarmVolume = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
         val maxAlarmVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-        val notificationsEnabled = notificationManager.areNotificationsEnabled()
+        val notificationManagerEnabled = notificationManager.areNotificationsEnabled()
+        val notificationsEnabled = notificationPermissionGranted && notificationManagerEnabled
         val alarmChannelImportance =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 channel?.importance ?: NotificationManager.IMPORTANCE_HIGH
@@ -87,6 +91,7 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
             "brand" to Build.BRAND,
             "model" to Build.MODEL,
             "notificationsEnabled" to notificationsEnabled,
+            "notificationManagerEnabled" to notificationManagerEnabled,
             "notificationPermissionGranted" to notificationPermissionGranted,
             "exactAlarmAllowed" to exactAlarmAllowed,
             "fullScreenAllowed" to fullScreenAllowed,
@@ -141,6 +146,7 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
                         reminderId = record.reminderId,
                         taskId = record.taskId,
                         scheduleRevision = record.scheduleRevision,
+                        deviceGeneration = record.deviceGeneration,
                         type = "error",
                         sessionId = record.sessionId,
                         detailCode = "ringing_service_recovery_failed",
@@ -210,10 +216,22 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
         completeScheduleResult(scheduled, result)
     }
 
+    private fun activateDeviceGeneration(arguments: Any?, result: MethodChannel.Result) {
+        val argumentsMap = arguments.asOptionalArguments(result) ?: return
+        val parsedGeneration = argumentsMap.optionalDeviceGeneration(result) ?: return
+        val deviceGeneration = parsedGeneration.value
+        completeScheduleResult(
+            scheduler.activateDeviceGeneration(deviceGeneration).result,
+            result,
+        )
+    }
+
     private fun cancelAlarm(arguments: Any?, result: MethodChannel.Result) {
         val argumentsMap = arguments.asArguments(result) ?: return
         val reminderId = argumentsMap.requiredString("reminderId", result) ?: return
-        completeScheduleResult(scheduler.cancel(reminderId).result, result)
+        val parsedGeneration = argumentsMap.optionalDeviceGeneration(result) ?: return
+        val deviceGeneration = parsedGeneration.value
+        completeScheduleResult(scheduler.cancel(reminderId, deviceGeneration).result, result)
     }
 
     private fun stopAlarm(arguments: Any?, result: MethodChannel.Result) {
@@ -287,6 +305,7 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
                 reminderId = "__danggui_test_alarm_$now",
                 taskId = "__danggui_test_alarm",
                 scheduleRevision = now,
+                deviceGeneration = store.activeDeviceGeneration(),
                 triggerAtEpochMs = now + delaySeconds * 1_000L,
                 title = (argumentsMap["title"] as? String)?.trim().orEmpty().ifBlank {
                     activity.getString(R.string.alarm_test_title)
@@ -317,14 +336,22 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
         val taskId = arguments.requiredString("taskId", result) ?: return null
         val scheduleRevision = arguments.requiredLong("scheduleRevision", result) ?: return null
         val triggerAtEpochMs = arguments.requiredLong("triggerAtEpochMs", result) ?: return null
-        if (triggerAtEpochMs <= System.currentTimeMillis()) {
-            result.error("invalid_trigger_time", "triggerAtEpochMs must be in the future", null)
+        val parsedGeneration = arguments.optionalDeviceGeneration(result) ?: return null
+        val deviceGeneration = parsedGeneration.value
+        val now = System.currentTimeMillis()
+        if (triggerAtEpochMs < now - AlarmDeliveryPolicy.MISSED_ALARM_GRACE_MILLIS) {
+            result.error(
+                "invalid_trigger_time",
+                "triggerAtEpochMs is outside the 15-minute delivery window",
+                null,
+            )
             return null
         }
         return AlarmRecord(
             reminderId = reminderId,
             taskId = taskId,
             scheduleRevision = scheduleRevision,
+            deviceGeneration = deviceGeneration,
             triggerAtEpochMs = triggerAtEpochMs,
             title = (arguments["title"] as? String)?.trim().orEmpty(),
             body = (arguments["body"] as? String)?.trim().orEmpty(),
@@ -369,11 +396,16 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
         result.error(
             scheduleResult.errorCode ?: "alarm_operation_failed",
             when (scheduleResult) {
-                AlarmScheduleResult.INVALID_TRIGGER_TIME -> "The alarm trigger time must be in the future."
+                AlarmScheduleResult.INVALID_TRIGGER_TIME ->
+                    "The alarm trigger time is outside the 15-minute delivery window."
                 AlarmScheduleResult.EXACT_ALARM_PERMISSION_REQUIRED ->
                     "Exact alarm access is required before scheduling a strong alarm."
+                AlarmScheduleResult.INACTIVE_DEVICE_GENERATION ->
+                    "The alarm belongs to an inactive restored-data generation."
                 AlarmScheduleResult.STALE_SCHEDULE_REVISION ->
                     "The alarm revision or ringing session is no longer current."
+                AlarmScheduleResult.BUSINESS_EVENT_CAPACITY_EXCEEDED ->
+                    "Alarm event processing is backlogged; acknowledge pending events before retrying."
                 AlarmScheduleResult.DURABLE_STORE_WRITE_FAILED,
                 AlarmScheduleResult.DURABLE_COMMIT_FAILED ->
                     "The alarm could not be committed to durable storage."
@@ -408,5 +440,45 @@ internal class ReminderPlatformHandler(private val activity: Activity) : MethodC
         val value = (this[name] as? Number)?.toLong()
         if (value == null) result.error("invalid_arguments", "$name is required", null)
         return value
+    }
+
+    private data class ParsedDeviceGeneration(val value: String?)
+
+    private fun Map<*, *>.optionalDeviceGeneration(
+        result: MethodChannel.Result,
+    ): ParsedDeviceGeneration? {
+        val hasPrimary = containsKey("deviceGeneration")
+        val hasAlias = containsKey("generation")
+        val rawPrimary = this["deviceGeneration"]
+        val rawAlias = this["generation"]
+
+        fun canonical(raw: Any?): String? =
+            when (raw) {
+                null -> null
+                is String -> AlarmIdentityPolicy.canonicalDeviceGeneration(raw)
+                else -> null
+            }
+
+        val primary = canonical(rawPrimary)
+        val alias = canonical(rawAlias)
+        if ((hasPrimary && rawPrimary != null && primary == null) ||
+            (hasAlias && rawAlias != null && alias == null)
+        ) {
+            result.error(
+                "invalid_device_generation",
+                "deviceGeneration must be a canonical UUID or null",
+                null,
+            )
+            return null
+        }
+        if (hasPrimary && hasAlias && primary != alias) {
+            result.error(
+                "invalid_device_generation",
+                "deviceGeneration and generation must identify the same database generation",
+                null,
+            )
+            return null
+        }
+        return ParsedDeviceGeneration(if (hasPrimary) primary else alias)
     }
 }

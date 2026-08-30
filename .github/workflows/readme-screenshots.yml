@@ -68,7 +68,8 @@ jobs:
             "platforms;android-${ANDROID_COMPILE_SDK}" \
             "build-tools;${ANDROID_BUILD_TOOLS}" \
             "platform-tools" \
-            "ndk;${ANDROID_NDK_VERSION}"
+            "ndk;${ANDROID_NDK_VERSION}" \
+            "cmake;3.22.1"
 
       - name: Configure tools and resolve locked dependencies
         shell: bash

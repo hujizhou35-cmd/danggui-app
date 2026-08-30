@@ -8,14 +8,36 @@ repository_root="$(cd "${script_dir}/.." && pwd)"
 run_case() {
   local scenario="$1"
   local case_root output status retry_log event_log release_apk events expected_events
+  local sdk_root
   local expected_status=124 failed=0
   case_root="$(mktemp -d "${TMPDIR:-/tmp}/danggui-smoke-gate.XXXXXX")" || return 1
   retry_log="${case_root}/danggui-emulator-api-24/retry-after-adb-recovery.log"
   event_log="${case_root}/events.log"
   release_apk="${case_root}/danggui-android-universal-debug-fallback.apk"
+  sdk_root="${case_root}/android-sdk"
   : > "${event_log}"
   : > "${release_apk}"
-
+  mkdir -p "${sdk_root}/platform-tools"
+  cat > "${sdk_root}/platform-tools/adb" <<'FAKE_ADB'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == version ]]; then
+  printf '%s\n' 'Android Debug Bridge version 1.0.41 smoke-self-test'
+  exit 0
+fi
+exit 0
+FAKE_ADB
+  chmod +x "${sdk_root}/platform-tools/adb"
+  printf '%s\n' 'Pkg.Revision = 36.0.0' \
+    > "${sdk_root}/platform-tools/source.properties"
+  ANDROID_SDK_ROOT="${sdk_root}" RUNNER_TEMP="${case_root}" \
+    DANGGUI_EMULATOR_ATTEMPT=1 \
+    bash "${repository_root}/integration_test/install_adb_no_streaming_wrapper.sh" \
+      24 >/dev/null || return 1
+  if [[ "${scenario}" == 'missing-attestation' ]]; then
+    rm -f -- \
+      "${case_root}/danggui-emulator-api-24/adb-install-mode.json"
+  fi
   output="$(
     cd "${repository_root}" || exit 98
     SCENARIO="${scenario}" RUNNER_TEMP="${case_root}" \
@@ -23,7 +45,10 @@ run_case() {
       DANGGUI_RELEASE_APK="${release_apk}" \
       DANGGUI_RELEASE_APK_SHA256='0000000000000000000000000000000000000000000000000000000000000000' \
       DANGGUI_RELEASE_SIGNING_MODE='debug-fallback' \
-      DANGGUI_RELEASE_ARTIFACT_SHA='self-test-sha' bash -c '
+      DANGGUI_RELEASE_ARTIFACT_SHA='self-test-sha' \
+      DANGGUI_EMULATOR_ATTEMPT=1 \
+      ANDROID_SDK_ROOT="${sdk_root}" \
+      PATH="${sdk_root}/platform-tools:${PATH}" bash -c '
       timeout() {
         case " $* " in
           *" flutter test "*)
@@ -31,7 +56,9 @@ run_case() {
             flutter_invocations="$(grep -c "^flutter-test$" "${EVENT_LOG}")"
             if [[ "${SCENARIO}" == "clean" ||
                   "${SCENARIO}" == "acceptance-failure" ||
-                  "${SCENARIO}" == "release-binary-failure" ]] &&
+                  "${SCENARIO}" == "release-binary-failure" ||
+                  "${SCENARIO}" == "empty-install-evidence" ||
+                  "${SCENARIO}" == "invalid-install-evidence" ]] &&
                (( flutter_invocations == 2 )); then
               printf "%s\n" "All tests passed!"
               return 0
@@ -96,7 +123,7 @@ run_case() {
           *" pm list packages com.danggui.memo "*)
             printf "%s\n" "target-package-query" >> "${EVENT_LOG}"
             case "${SCENARIO}" in
-              clean|retry-failure|acceptance-failure|release-binary-failure)
+              clean|retry-failure|acceptance-failure|release-binary-failure|empty-install-evidence|invalid-install-evidence)
                 # The historical bug queried the target through the unhealthy
                 # daemon before restart. Make that ordering fail closed.
                 grep -Fqx "start-server" "${EVENT_LOG}" || return 42
@@ -122,11 +149,25 @@ run_case() {
       bash() {
         if [[ "$1" == "integration_test/run_android_release_acceptance.sh" ]]; then
           printf "%s\n" "release-acceptance" >> "${EVENT_LOG}"
+          if [[ "${SCENARIO}" != "empty-install-evidence" ]]; then
+            printf "%s\n" \
+              "top_level_command=install mode=no-streaming" \
+              >> "${DANGGUI_ADB_MODE_EVIDENCE}"
+          fi
           [[ "${SCENARIO}" == "acceptance-failure" ]] && return 1
           return 0
         fi
         if [[ "$1" == "integration_test/run_android_release_binary_smoke.sh" ]]; then
           printf "%s\n" "release-binary-smoke" >> "${EVENT_LOG}"
+          if [[ "${SCENARIO}" == "invalid-install-evidence" ]]; then
+            printf "%s\n" \
+              "top_level_command=install mode=no-streaming apk=/tmp/private.apk" \
+              >> "${DANGGUI_ADB_MODE_EVIDENCE}"
+          elif [[ "${SCENARIO}" != "empty-install-evidence" ]]; then
+            printf "%s\n" \
+              "top_level_command=install mode=no-streaming" \
+              >> "${DANGGUI_ADB_MODE_EVIDENCE}"
+          fi
           [[ "${SCENARIO}" == "release-binary-failure" ]] && return 1
           return 0
         fi
@@ -143,6 +184,8 @@ run_case() {
     ordinary-failure|retry-failure|acceptance-failure|release-binary-failure)
       expected_status=1
       ;;
+    missing-attestation) expected_status=65 ;;
+    empty-install-evidence|invalid-install-evidence) expected_status=65 ;;
   esac
   if (( status != expected_status )); then
     failed=1
@@ -187,6 +230,15 @@ run_case() {
       [[ ! -f "${retry_log}" ]] || failed=1
       [[ "${output}" != *'performing one bounded ADB recovery'* ]] || failed=1
       ;;
+    missing-attestation)
+      [[ -z "${events}" ]] || failed=1
+      [[ "${output}" == *'refusing to start product tests'* ]] || failed=1
+      ;;
+    empty-install-evidence|invalid-install-evidence)
+      expected_events=$'flutter-test\nkill-server\nstart-server\nwait-for-device\nboot-query\nsystem-package-query\ntarget-package-query\nuninstall\ntarget-package-query\nflutter-test\nrelease-acceptance\nrelease-binary-smoke'
+      [[ "${events}" == "${expected_events}" ]] || failed=1
+      [[ "${output}" == *'install invocation evidence failed'* ]] || failed=1
+      ;;
   esac
 
   rm -rf -- "${case_root}"
@@ -197,10 +249,59 @@ run_case() {
   fi
 }
 
+run_api36_scope_case() {
+  local case_root sdk_root output status
+  case_root="$(mktemp -d "${TMPDIR:-/tmp}/danggui-api36-scope.XXXXXX")" ||
+    return 1
+  sdk_root="${case_root}/android-sdk"
+  mkdir -p "${sdk_root}/platform-tools"
+  cat > "${sdk_root}/platform-tools/adb" <<'FAKE_ADB'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == version ]]; then
+  printf '%s\n' 'Android Debug Bridge version 1.0.41 api36-scope-self-test'
+  exit 0
+fi
+exit 0
+FAKE_ADB
+  chmod +x "${sdk_root}/platform-tools/adb"
+  printf '%s\n' 'Pkg.Revision = 36.0.0' \
+    > "${sdk_root}/platform-tools/source.properties"
+  ANDROID_SDK_ROOT="${sdk_root}" RUNNER_TEMP="${case_root}" \
+    DANGGUI_EMULATOR_ATTEMPT=1 \
+    bash "${repository_root}/integration_test/install_adb_no_streaming_wrapper.sh" \
+      36 >/dev/null || return 1
+  : > "${case_root}/danggui-emulator-api-36/adb-install-invocations.txt"
+  set +e
+  output="$(
+    cd "${repository_root}" || exit 98
+    RUNNER_TEMP="${case_root}" \
+      DANGGUI_EMULATOR_ATTEMPT=1 \
+      ANDROID_SDK_ROOT="${sdk_root}" \
+      PATH="${sdk_root}/platform-tools:${PATH}" \
+      bash integration_test/run_android_emulator_smoke.sh 36 2>&1
+  )"
+  status=$?
+  set -e
+  if (( status != 65 )) ||
+     [[ "${output}" != *'unexpectedly inherited API 24 install-mode evidence'* ]] ||
+     ! jq -e '
+       .status == "failed" and .phase == "adb-transport-scope" and
+       .attempt == 1 and .exitStatus == 65
+     ' "${case_root}/danggui-emulator-api-36/workflow-phase.json" >/dev/null; then
+    echo "API 36 ADB scope self-test failed (status ${status}): ${output}" >&2
+    rm -rf -- "${case_root}"
+    return 1
+  fi
+  rm -rf -- "${case_root}"
+}
+
 for scenario in \
   clean acceptance-failure release-binary-failure retry-failure installed unknown system-pm-failure non-install-timeout \
-  missing-built missing-installing missing-no-tests ordinary-failure; do
+  missing-built missing-installing missing-no-tests ordinary-failure \
+  missing-attestation empty-install-evidence invalid-install-evidence; do
   run_case "${scenario}" || exit 1
 done
+run_api36_scope_case || exit 1
 
 echo 'Android emulator smoke retry gate self-test passed.'

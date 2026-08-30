@@ -9,7 +9,9 @@ import 'package:share_plus/share_plus.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../application/app_state.dart';
 import '../../application/app_store.dart';
+import '../../domain/models.dart';
 import '../../services/export/portable_export_service.dart';
+import '../../services/export/temporary_share_artifact.dart';
 import '../../ui/components/components.dart';
 import '../tasks/task_creation_sheet.dart';
 
@@ -52,6 +54,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   var _persistedRevision = 0;
   var _showSaveErrors = false;
   var _controllersReady = false;
+  StateConflictException? _versionConflict;
 
   @override
   void initState() {
@@ -110,7 +113,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       if (_loadedId != note.id) {
         _hydrate(note);
       } else {
-        _noteTemplate = note;
+        _mergeExternalNote(note);
       }
     }
     if (note == null) {
@@ -180,6 +183,13 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
+                  if (_versionConflict != null)
+                    _NoteVersionConflictBanner(
+                      key: const Key('note-editor-version-conflict'),
+                      message: l10n.editorVersionConflict,
+                      reloadLabel: l10n.reload,
+                      onReload: _reloadAfterVersionConflict,
+                    ),
                   TextField(
                     key: const Key('note-editor-title'),
                     controller: _titleController,
@@ -303,8 +313,31 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     _pendingDraft = null;
     _nextRevision = 0;
     _persistedRevision = 0;
+    _versionConflict = null;
+    _showSaveErrors = false;
     _lastObservedSignature = _draftSignature();
     _controllersReady = true;
+  }
+
+  void _mergeExternalNote(NoteViewModel note) {
+    final template = _noteTemplate;
+    if (template == null) {
+      _hydrate(note);
+      return;
+    }
+    if (note.rowVersion == template.rowVersion) {
+      _noteTemplate = note;
+      return;
+    }
+    if (_saveOperation != null) return;
+    if (_pendingDraft != null) {
+      _autosaveTimer?.cancel();
+      _versionConflict ??= const StateConflictException(
+        '笔记已在其他操作中更新，请重新加载后再编辑。',
+      );
+      return;
+    }
+    _hydrate(note);
   }
 
   Object _draftSignature() =>
@@ -326,6 +359,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       ),
     );
     _autosaveTimer?.cancel();
+    if (_versionConflict != null) return;
     _autosaveTimer = Timer(widget.autosaveDelay, () {
       unawaited(_startSaveLoop());
     });
@@ -334,10 +368,22 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
   Future<bool> _flushSave({required bool interactive}) {
     _autosaveTimer?.cancel();
     if (interactive) _showSaveErrors = true;
+    final conflict = _versionConflict;
+    if (conflict != null) {
+      if (interactive && mounted) {
+        showDangguiSnackBar(
+          context,
+          message: AppLocalizations.of(context).editorVersionConflict,
+          duration: dangguiSnackBarErrorDuration,
+        );
+      }
+      return Future<bool>.value(false);
+    }
     return _startSaveLoop();
   }
 
   Future<bool> _startSaveLoop() {
+    if (_versionConflict != null) return Future<bool>.value(false);
     final currentOperation = _saveOperation;
     if (currentOperation != null) return currentOperation;
     final operation = _runSaveLoop();
@@ -359,6 +405,18 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
       if (draft == null || draft.revision <= _persistedRevision) return true;
       try {
         await _persistDraft(draft);
+      } on StateConflictException catch (error) {
+        _autosaveTimer?.cancel();
+        _versionConflict = error;
+        if (mounted) {
+          setState(() {});
+          showDangguiSnackBar(
+            context,
+            message: AppLocalizations.of(context).editorVersionConflict,
+            duration: dangguiSnackBarErrorDuration,
+          );
+        }
+        return false;
       } on Object catch (error) {
         if (_showSaveErrors && mounted) {
           showDangguiSnackBar(
@@ -384,9 +442,43 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
     final persist = widget.onPersist;
     if (persist != null) {
       await persist(draft.note);
+    } else {
+      await _store.updateNote(draft.note);
+    }
+    // A test or embedding callback may delegate to the real AppStore. Rebase
+    // from the authoritative provider after either persistence path so a
+    // second draft captured during the first write receives the committed
+    // rowVersion instead of retrying forever with a stale CAS token.
+    _rebaseAfterOwnNoteSave(draft);
+  }
+
+  void _rebaseAfterOwnNoteSave(_NoteSaveDraft committedDraft) {
+    NoteViewModel? latest;
+    for (final candidate
+        in ref.read(appStoreProvider).value?.notes ?? const <NoteViewModel>[]) {
+      if (candidate.id == widget.noteId) latest = candidate;
+    }
+    if (latest == null || latest.rowVersion <= committedDraft.note.rowVersion) {
       return;
     }
-    await _store.updateNote(draft.note);
+    _noteTemplate = latest;
+    final pending = _pendingDraft;
+    if (pending != null && pending.revision > committedDraft.revision) {
+      _pendingDraft = _NoteSaveDraft(
+        revision: pending.revision,
+        note: pending.note.copyWith(rowVersion: latest.rowVersion),
+      );
+    }
+  }
+
+  void _reloadAfterVersionConflict() {
+    NoteViewModel? latest;
+    for (final candidate
+        in ref.read(appStoreProvider).value?.notes ?? const <NoteViewModel>[]) {
+      if (candidate.id == widget.noteId) latest = candidate;
+    }
+    if (latest == null) return;
+    setState(() => _hydrate(latest!));
   }
 
   Future<void> _saveAndClose() async {
@@ -492,11 +584,17 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage>
         final result = await ref
             .read(portableExportServiceProvider)
             .export(PortableExportRequest.notesByIds(<String>[note.id]));
-        await SharePlus.instance.share(
-          ShareParams(
-            subject: _titleController.text,
-            files: <XFile>[XFile(result.file.path)],
-          ),
+        await withDangguiTemporaryShareArtifact(
+          file: result.file,
+          action: () async {
+            if (!mounted) return;
+            await SharePlus.instance.share(
+              ShareParams(
+                subject: _titleController.text,
+                files: <XFile>[XFile(result.file.path)],
+              ),
+            );
+          },
         );
       case 'task':
         await _convertSelectionToTask();
@@ -514,4 +612,41 @@ final class _NoteSaveDraft {
 
   final int revision;
   final NoteViewModel note;
+}
+
+class _NoteVersionConflictBanner extends StatelessWidget {
+  const _NoteVersionConflictBanner({
+    super.key,
+    required this.message,
+    required this.reloadLabel,
+    required this.onReload,
+  });
+
+  final String message;
+  final String reloadLabel;
+  final VoidCallback onReload;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: colors.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(color: colors.onErrorContainer),
+            ),
+          ),
+          TextButton(onPressed: onReload, child: Text(reloadLabel)),
+        ],
+      ),
+    );
+  }
 }

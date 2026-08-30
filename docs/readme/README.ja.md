@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img alt="バージョン：v1.1.4 公開プレリリース" src="https://img.shields.io/badge/version-v1.1.4%20pre--release-B5684C?style=flat-square" />
+  <img alt="バージョン：v1.1.5 公開プレリリース" src="https://img.shields.io/badge/version-v1.1.5%20pre--release-B5684C?style=flat-square" />
   <img alt="プラットフォーム：Android と iOS ソース" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20source-6F8068?style=flat-square" />
   <img alt="データ：ローカルファースト、可搬" src="https://img.shields.io/badge/data-local--first%20%7C%20portable-81786F?style=flat-square" />
   <img alt="ライセンス：Apache 2.0" src="https://img.shields.io/badge/code-Apache--2.0-2E2925?style=flat-square" />
@@ -88,10 +88,10 @@
 
 | プラットフォーム | 推奨入口 | 現在の提供内容 |
 | --- | --- | --- |
-| Android 7.0 以降 | [v1.1.4 公開プレリリース](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.4) | 正式署名済み汎用 APK。通常は `danggui-android-universal-release.apk` を選択 |
+| Android 7.0 以降 | [v1.1.5 公開プレリリース](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5) | 正式署名済み汎用 APK。通常は `danggui-android-universal-release.apk` を選択 |
 | iOS | [ソースビルド手順](../architecture/ios-source-build.md) | 完全な Xcode ソースと未署名ビルド証跡。IPA/TestFlight は提供しない |
 
-v1.1.4 は **Pre-release** です。Android の自動検証と iOS の未署名ビルドを通過してから公開しますが、ロック画面、音、触覚、夜間の配信は Android 実機と iPhone で引き続き検証が必要です。Release の `SHA256SUMS` で照合してください。開発者向け証跡は `danggui-developer-assets-v1.1.4.zip` に収録します。詳細は[配布ガイド](../architecture/platform-delivery.md)と [v1.1.4 チェックリスト](../release/v1.1.4-release-checklist.md)を参照してください。
+v1.1.5 は **Pre-release** です。Android 自動検証、固定した 2 系統の iOS Simulator、未署名 iOS ビルドを通過してから公開します。結果は `contract-proven`、`simulator-proven`、`device-unverified` を区別し、実機 iPhone の音、触覚、消音/集中モード、夜間ロック画面、再起動、プロセス終了後の配信は未検証です。`SHA256SUMS` で照合してください。開発者向け証跡は `danggui-developer-assets-v1.1.5.zip` に収録します。詳細は[配布ガイド](../architecture/platform-delivery.md)と [v1.1.5 チェックリスト](../release/v1.1.5-release-checklist.md)を参照してください。
 
 ## バージョンの歩み
 
@@ -102,6 +102,7 @@ v1.1.4 は **Pre-release** です。Android の自動検証と iOS の未署名�
 | [v1.1.2](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2) | 1 分単位の通知選択と明確な保存フィードバックを追加し、「過往」をコンパクトにして重複する起動画面を解消。 |
 | [v1.1.3](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.3) | 音付きリマインダーをネイティブアラームへ移行し、権限ガイド、長いページの高速スクロールバー、消えないフィードバックの修正を追加。 |
 | [v1.1.4](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.4) | Android の直接アラーム経路、両プラットフォームの revision 取引、15 分の期限切れ語義、監査可能なスナップショットを強化。 |
+| [v1.1.5](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5) | 固定した参照資料で iOS 全機能を監査し、通知 ID、復旧、タイムゾーン、保護されたローカルデータを強化。2 系統の Simulator ゲートを追加。 |
 
 全変更は [CHANGELOG](../../CHANGELOG.md) をご覧ください。
 

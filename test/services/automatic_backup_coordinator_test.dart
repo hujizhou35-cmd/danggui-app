@@ -129,6 +129,33 @@ void main() {
   });
 
   test(
+    'temporarily unavailable Keychain fails closed without backup',
+    () async {
+      harness
+        ..now = DateTime(2026, 8, 22, 3)
+        ..settings = const AppSettingsModel(
+          autoBackupEnabled: true,
+          autoBackupHourLocal: 2,
+          autoBackupMinuteLocal: 0,
+          backupEncryptionEnabled: true,
+        )
+        ..passphraseReadError = const FileSystemException(
+          'simulated protected-data lock',
+        );
+
+      final result = await harness.coordinator().onStartup();
+
+      expect(
+        result.status,
+        AutomaticBackupStatus.skippedEncryptionKeyUnavailable,
+      );
+      expect(result.keyErrorCode, 'FileSystemException');
+      expect(harness.createCalls, 0);
+      expect(await _dailyBackups(dailyDirectory), isEmpty);
+    },
+  );
+
+  test(
     're-enabling before schedule does not catch up disabled dates',
     () async {
       harness
@@ -228,13 +255,18 @@ final class _Harness {
   Directory? lastOutputDirectory;
   int createCalls = 0;
   bool failNextCreation = false;
+  Object? passphraseReadError;
   Completer<void>? pauseCreation;
   Completer<void> creationStarted = Completer<void>();
 
   AutomaticBackupCoordinator coordinator() => AutomaticBackupCoordinator(
     clock: () => now,
     readSettings: () async => settings,
-    readPassphrase: () async => passphrase,
+    readPassphrase: () async {
+      final error = passphraseReadError;
+      if (error != null) throw error;
+      return passphrase;
+    },
     readDirectory: () async => directory,
     createBackup: _create,
   );

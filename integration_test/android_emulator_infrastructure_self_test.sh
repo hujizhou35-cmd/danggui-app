@@ -86,6 +86,10 @@ run_health_case() {
             ;;
           *" shell pm path com.android.systemui "*)
             printf "%s\n" "package:/system_ext/priv-app/SystemUI/SystemUI.apk" ;;
+          *" shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME "*)
+            printf "%s\n" "com.android.launcher3/.uioverrides.QuickstepLauncher" ;;
+          *" shell pm path com.android.launcher3 "*)
+            printf "%s\n" "package:/system_ext/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk" ;;
           *" shell cmd package resolve-activity --brief -a android.intent.action.MANAGE_PERMISSIONS "*)
             printf "%s\n" "com.android.permissioncontroller/.permission.ui.ManagePermissionsActivity" ;;
           *" shell pm path com.android.permissioncontroller "*)
@@ -117,8 +121,25 @@ run_health_case() {
           *" exec-out cat /sdcard/danggui-permission-controller"*)
             if [[ "${SCENARIO}" == "permission-anr" ]]; then
               printf "%s\n" "<hierarchy><node package=\"android\" text=\"Permission Controller is not responding\" resource-id=\"android:id/aerr_close\"/><node package=\"android\" resource-id=\"android:id/aerr_wait\"/></hierarchy>"
+            elif [[ "${SCENARIO}" == "launcher-anr" ]]; then
+              printf "%s\n" "<hierarchy><node package=\"android\" text=\"Quickstep is not responding\" resource-id=\"android:id/aerr_close\"/><node package=\"android\" resource-id=\"android:id/aerr_wait\"/></hierarchy>"
+            elif [[ "${SCENARIO}" == "danggui-anr" ]]; then
+              printf "%s\n" "<hierarchy><node package=\"android\" text=\"Danggui is not responding\" resource-id=\"android:id/aerr_close\"/><node package=\"android\" resource-id=\"android:id/aerr_wait\"/></hierarchy>"
+            elif [[ "${SCENARIO}" == "arbitrary-app-anr" ]]; then
+              printf "%s\n" "<hierarchy><node package=\"android\" text=\"Example is not responding\" resource-id=\"android:id/aerr_close\"/><node package=\"android\" resource-id=\"android:id/aerr_wait\"/></hierarchy>"
             else
               printf "%s\n" "<hierarchy><node package=\"com.android.permissioncontroller\"/></hierarchy>"
+            fi
+            ;;
+          *" shell dumpsys window windows "*)
+            if [[ "${SCENARIO}" == "launcher-anr" ]]; then
+              printf "%s\n" "mCurrentFocus=Window{123 u0 Application Not Responding: com.android.launcher3}"
+            elif [[ "${SCENARIO}" == "danggui-anr" ]]; then
+              printf "%s\n" "mCurrentFocus=Window{123 u0 Application Not Responding: com.danggui.memo}"
+            elif [[ "${SCENARIO}" == "arbitrary-app-anr" ]]; then
+              printf "%s\n" "mCurrentFocus=Window{123 u0 Application Not Responding: com.example.unrelated}"
+            else
+              printf "%s\n" "mCurrentFocus=Window{123 u0 com.android.permissioncontroller/.ManagePermissionsActivity}"
             fi
             ;;
           *" shell cmd statusbar collapse "*|*" shell input keyevent KEYCODE_HOME "*) ;;
@@ -189,6 +210,20 @@ run_health_case() {
   elif [[ "${scenario}" == 'generic-failure' ]]; then
     jq -e '.status == "health-gate-failure" and
       .retryEligible == false' \
+      "${evidence_dir}/infrastructure-classification.json" >/dev/null
+  elif [[ "${scenario}" == 'launcher-anr' ]]; then
+    jq -e '.status == "confirmed-infrastructure-failure" and
+      .component == "launcher" and .reason == "health-gate-anr-dialog" and
+      .systemPackage == "com.android.launcher3" and
+      .launcherSelectionEvidence == "launcher-selection.txt" and
+      .launcherPackagePathEvidence == "launcher-package-path.txt" and
+      (.focusEvidenceFile | test("^permission-controller-anr-focus-1-[0-9]+[.]txt$"))' \
+      "${evidence_dir}/infrastructure-classification.json" >/dev/null
+  elif [[ "${scenario}" == 'danggui-anr' ||
+          "${scenario}" == 'arbitrary-app-anr' ]]; then
+    jq -e '.status == "health-gate-failure" and
+      .component == "untrusted-anr-dialog" and
+      .reason == "untrusted-anr-dialog" and .retryEligible == false' \
       "${evidence_dir}/infrastructure-classification.json" >/dev/null
   elif [[ "${scenario}" == 'copy-failure' ]]; then
     jq -e '.status == "health-gate-failure" and
@@ -379,10 +414,13 @@ run_product_failure_precedence_tests() {
       "${completion_path}" "${log_path}" "${partial_path}" 3
     [[ "${DANGGUI_SEED_FAILURE_STATUS}" == "42" ]]
     danggui_revoke_retry_authorization "delayed-product-self-test"
-    set +e
-    wait "${delayed_pid}"
-    delayed_status=$?
-    set -e
+    delayed_status="${DANGGUI_SEED_FAILURE_STATUS}"
+    if [[ "${DANGGUI_SEED_PROCESS_REAPED}" != "true" ]]; then
+      set +e
+      wait "${delayed_pid}"
+      delayed_status=$?
+      set -e
+    fi
     [[ "${delayed_status}" == "42" ]]
     [[ ! -e "${evidence_dir}/retry-on-fresh-avd.signal" ]]
     jq -e ".retryEligible == false and .freshAvdRequired == false and
@@ -457,6 +495,31 @@ write_observation_retry_fixture() {
     > "${evidence_dir}/infrastructure-classification.json"
 }
 
+write_launcher_retry_fixture() {
+  local evidence_dir="$1"
+  mkdir -p "${evidence_dir}"
+  printf '%s\n' '75' > "${evidence_dir}/script-exit-status.txt"
+  printf '%s\n' 'DANGGUI_FRESH_AVD_RETRY_V1' \
+    > "${evidence_dir}/retry-on-fresh-avd.signal"
+  : > "${evidence_dir}/app-package-before-health.txt"
+  printf '%s\n' 'com.android.launcher3/.uioverrides.QuickstepLauncher' \
+    > "${evidence_dir}/launcher-selection.txt"
+  printf '%s\n' 'com.android.launcher3' \
+    > "${evidence_dir}/launcher-package.txt"
+  printf '%s\n' \
+    'package:/system_ext/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk' \
+    > "${evidence_dir}/launcher-package-path.txt"
+  printf '%s\n' \
+    'mCurrentFocus=Window{123 u0 Application Not Responding: com.android.launcher3}' \
+    > "${evidence_dir}/permission-controller-anr-focus-1-1.txt"
+  printf '%s\n' \
+    '<hierarchy><node package="android" text="Quickstep is not responding" resource-id="android:id/aerr_close"/><node package="android" resource-id="android:id/aerr_wait"/></hierarchy>' \
+    > "${evidence_dir}/permission-controller-anr-1.xml"
+  printf '%s\n' \
+    '{"status":"confirmed-infrastructure-failure","scope":"system-ui-permission-controller","apiLevel":36,"attempt":1,"component":"launcher","reason":"health-gate-anr-dialog","evidenceFile":"permission-controller-anr-1.xml","phase":"system-component-health-gate","exitStatus":75,"freshAvdRequired":true,"retryEligible":true,"ordinaryProductFailure":false,"appAbsentBeforeHealth":true,"systemPackage":"com.android.launcher3","launcherSelectionEvidence":"launcher-selection.txt","launcherPackagePathEvidence":"launcher-package-path.txt","focusEvidenceFile":"permission-controller-anr-focus-1-1.txt"}' \
+    > "${evidence_dir}/infrastructure-classification.json"
+}
+
 write_permission_retry_fixture() {
   local evidence_dir="$1"
   mkdir -p "${evidence_dir}"
@@ -518,6 +581,50 @@ run_retry_gate_tests() {
     >/dev/null
   [[ "$(<"${output_file}")" == 'retry-authorized=true' ]]
   [[ -s "${evidence_dir}/attempt-1/system-ui-health-1.xml" ]]
+
+  rm -rf -- "${evidence_dir}"
+  : > "${output_file}"
+  write_launcher_retry_fixture "${evidence_dir}"
+  RUNNER_TEMP="${case_root}" GITHUB_OUTPUT="${output_file}" \
+    bash "${script_dir}/android_emulator_retry_gate.sh" prepare 36 \
+    >/dev/null
+  [[ "$(<"${output_file}")" == 'retry-authorized=true' ]]
+  [[ -s "${evidence_dir}/attempt-1/launcher-package-path.txt" ]]
+
+  for launcher_tamper in \
+    'focus' \
+    'selection' \
+    'data-path' \
+    'app-present' \
+    'generic-app-evidence'; do
+    rm -rf -- "${evidence_dir}"
+    write_launcher_retry_fixture "${evidence_dir}"
+    case "${launcher_tamper}" in
+      focus)
+        printf '%s\n' \
+          'mCurrentFocus=Window{123 u0 Application Not Responding: com.danggui.memo}' \
+          > "${evidence_dir}/permission-controller-anr-focus-1-1.txt"
+        ;;
+      selection)
+        printf '%s\n' 'com.example.unrelated/.MainActivity' \
+          > "${evidence_dir}/launcher-selection.txt"
+        ;;
+      data-path)
+        printf '%s\n' 'package:/data/app/com.android.launcher3/base.apk' \
+          > "${evidence_dir}/launcher-package-path.txt"
+        ;;
+      app-present)
+        printf '%s\n' 'package:com.danggui.memo' \
+          > "${evidence_dir}/app-package-before-health.txt"
+        ;;
+      generic-app-evidence)
+        printf '%s\n' \
+          '<hierarchy><node package="com.danggui.memo" text="Danggui is not responding" resource-id="android:id/aerr_close"/><node package="com.danggui.memo" resource-id="android:id/aerr_wait"/></hierarchy>' \
+          > "${evidence_dir}/permission-controller-anr-1.xml"
+        ;;
+    esac
+    assert_prepare_denied "${case_root}" "${output_file}"
+  done
 
   for tamper_filter in \
     '.component = "permission-controller"' \
@@ -805,6 +912,10 @@ run_health_case all-launcher 1 75 true
 run_health_case all-launcher 2 75 false
 run_health_case systemui-anr 1 75 true
 run_health_case permission-anr 1 75 true
+run_health_case launcher-anr 1 75 true
+run_health_case launcher-anr 2 75 false
+run_health_case danggui-anr 1 1 false
+run_health_case arbitrary-app-anr 1 1 false
 run_health_case timeout 1 75 true
 run_health_case generic-failure 1 1 false
 run_health_case copy-failure 1 1 false

@@ -13,6 +13,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get appName => '当归';
 
   @override
+  String get brandSeal => '当帰の印章';
+
+  @override
   String get privacyTagline => '端末内だけ · アップロードなし · AI 不使用';
 
   @override
@@ -23,6 +26,12 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get retry => '再試行';
+
+  @override
+  String get reload => '再読み込み';
+
+  @override
+  String get editorVersionConflict => 'この内容は別の操作で更新されました。編集を続ける前に再読み込みしてください。';
 
   @override
   String get tasksTab => '事項';

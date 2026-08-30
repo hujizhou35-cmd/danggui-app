@@ -1,6 +1,6 @@
-# 当归 1.1.4 隐私与平台发布前审计
+# 当归 1.1.5 隐私与平台发布前审计
 
-- 审计日期：2026-08-25
+- 审计日期：2026-08-28
 - 审计对象：Android 与 iOS 的已检入源配置、Dart 生产源码、`pubspec.lock`，以及执行 `flutter pub get` 后解析到的移动端原生插件元数据。
 - 产品边界：本地优先；应用自身不联网，不包含账号、广告、分析、遥测、远程推送或云同步。
 
@@ -15,14 +15,14 @@
 | 范围 | 验证结果 | 自动化门禁 |
 | --- | --- | --- |
 | 应用身份 | Android `namespace`/`applicationId` 与 iOS bundle ID 均为 `com.danggui.memo` | Dart 审计 + 平台静态测试 + APK 检查 |
-| 版本 | `1.1.4+5`；帮助与隐私和许可页显示产品版本 `1.1.4`，备份/导出记录技术版本；Android 通用/AAB versionCode 为 `5`，三分架构为 `1005`/`2005`/`4005`，iOS 构建值均从 `pubspec.yaml` 派生 | Dart 审计 + APK 检查 + iOS 构建脚本 |
+| 版本 | `1.1.5+6`；帮助与隐私和许可页显示产品版本 `1.1.5`，备份/导出记录技术版本；Android 通用/AAB versionCode 为 `6`，三分架构为 `1006`/`2006`/`4006`，iOS 构建值均从 `pubspec.yaml` 派生 | Dart 审计 + APK 检查 + iOS 构建脚本 |
 | Android SDK | min 24、target 36、compile 36；Java/Kotlin 17 | Dart 审计 + APK 检查 |
 | iOS 目标 | iOS 15.0；iPhone/iPad 均只允许竖屏 | Dart 审计 + iOS 构建脚本 |
 | Android 权限 | 精确为 `POST_NOTIFICATIONS`、`VIBRATE`、`RECEIVE_BOOT_COMPLETED`、`SCHEDULE_EXACT_ALARM`、`USE_FULL_SCREEN_INTENT`、`WAKE_LOCK`、`FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_MEDIA_PLAYBACK`；继续禁止 `USE_EXACT_ALARM`、INTERNET 与勿扰政策访问 | 源清单精确集合 + 解析插件清单 + 最终 APK 精确集合 |
 | 提醒能力 | 有声提醒在精确访问允许时使用原生 `setAlarmClock`、闹钟音频流、循环振动、媒体播放前台服务和锁屏界面/通知回退；无声提醒及受限兼容路径仍使用普通本地通知。应用发起通知、精确闹钟与全屏提醒系统页，但用户必须确认 | 源码模式检查 + 最终 APK 权限/组件检查 |
 | iOS 通知 | iOS 26+ 有声提醒使用 AlarmKit；iOS 15–25 使用 Time Sensitive 本地通知回退；只声明 `com.apple.developer.usernotifications.time-sensitive`，无 Critical Alerts、`aps-environment`、远程注册或 `remote-notification` 后台模式 | plist/pbxproj/entitlement/原生源码扫描 + macOS 构建门禁 |
 | 网络边界 | 无 INTERNET/网络状态权限，无 ATS 放宽，无 Dart/Android/iOS 网络 API，无远端端点 | 多语言静态扫描 + 最终 APK 权限检查 |
-| 数据备份 | Android 系统云备份和设备迁移覆盖 root/file/database/sharedpref/external 全部排除；iOS 每次启动对 Application Support/danggui 设置排除提示 | 清单/XML、AppDelegate 与负向篡改检查 |
+| 数据备份 | Android 系统云备份和设备迁移覆盖 root/file/database/sharedpref/external 全部排除；iOS 每次启动对 Application Support/danggui 递归设置排除提示与 `completeUntilFirstUserAuthentication` 文件保护 | 清单/XML、AppDelegate、原生单测与负向篡改检查 |
 | 依赖 | 运行时依赖显式允许名单；锁文件无 Firebase/分析/广告/推送 SDK；托管依赖均有 SHA-256 | `pubspec.yaml`/`pubspec.lock` 解析 + 已解析原生插件扫描 |
 | 原生暴露面 | 三个原生闹钟 receiver、三个插件通知 receiver、响铃 service 与锁屏 AlarmActivity 均不导出；唯一导出 Activity 是系统启动入口 | 源清单检查 + 最终合并清单检查 |
 | 清晰文本 | `usesCleartextTraffic=false`，且应用无联网权限 | 源清单 + 最终 APK 合并清单 |
@@ -45,7 +45,7 @@
 
 AlarmKit 和 Time Sensitive 都是本地提醒能力。应用会在用户明确开启未来提醒或在设置页操作时发起系统授权；用户拒绝后应用保留本地数据并显示受限状态，不能自行更改 Focus、静音模式或系统通知策略。
 
-iOS 没有启用 iCloud container/CloudKit 能力，应用代码也不调用上传 API。应用每次启动都会创建/定位 `Application Support/danggui`，并通过 `URLResourceValues.isExcludedFromBackup=true` 向系统标记整个应用私有数据目录；数据库和自动备份子目录均位于该目录下。自动备份口令使用 `first_unlock_this_device` Keychain 可访问性并明确 `synchronizable=false`，避免口令同步到 iCloud Keychain 或迁移到另一设备。
+iOS 没有启用 iCloud container/CloudKit 能力，应用代码也不调用上传 API。应用每次启动都会创建/定位 `Application Support/danggui`，递归应用 `URLResourceValues.isExcludedFromBackup=true` 和 `FileProtectionType.completeUntilFirstUserAuthentication`；数据库、自动备份、原生提醒镜像及诊断均位于该受保护边界。自动备份口令使用 `first_unlock_this_device` Keychain 可访问性并明确 `synchronizable=false`，避免口令同步到 iCloud Keychain 或迁移到另一设备。临时明文快照只进入临时目录，所有成功与失败路径都执行清理。
 
 `isExcludedFromBackup` 是应用向 iOS 提交的最佳努力资源属性，不是对所有操作系统版本、用户工具或物理取证场景的绝对保证。审计器证明排除动作仍被调用并配置正确，未来还应在真机设备备份流程中抽查；产品文案应保持“应用自身不上载、尽力排除系统备份”，不应宣称能够控制系统和用户的所有备份行为。
 
@@ -70,7 +70,7 @@ dart run tool/audit_offline_boundary.dart
 flutter test test/platform/privacy_platform_config_test.dart --reporter expanded
 ```
 
-静态测试还会在临时副本中主动注入 INTERNET/`USE_EXACT_ALARM`、Firebase 依赖、未受控通知调度 API、HTTPS 端点和未经审阅的 iOS entitlement，并破坏 iOS 系统备份排除及 Keychain 本机限定选项，确认审计器会失败关闭，而不是只验证当前“恰好通过”的文件。v1.1.4 标签的 Android/iOS 编译、最终二进制和实体机门禁在真实完成前仍保持未签署状态。
+静态测试还会在临时副本中主动注入 INTERNET/`USE_EXACT_ALARM`、Firebase 依赖、未受控通知调度 API、HTTPS 端点和未经审阅的 iOS entitlement，并破坏 iOS 系统备份排除、文件保护及 Keychain 本机限定选项，确认审计器会失败关闭，而不是只验证当前“恰好通过”的文件。v1.1.5 标签的 Android/iOS 编译、最终二进制和实体机门禁在真实完成前仍保持未签署状态。
 
 ## 源配置与最终产物的边界
 
@@ -95,4 +95,4 @@ flutter test test/platform/privacy_platform_config_test.dart --reporter expanded
 - 源配置门禁：通过后才允许构建。
 - Android 安装包：只有最终 APK 检查和签名指纹检查均通过，才可称为官方安装包。
 - Android AAB：与已检查 APK 同一锁定源码/构建运行生成，并通过签名、证书与 bundletool base manifest 独立验证。
-- iOS：当前仅源码与未签名编译证据；不把 `.app.zip` 描述为可安装 IPA，也不声称已完成 App Store/TestFlight 发布审计。
+- iOS：当前仅源码、固定 iOS 18.5/26.5 Simulator 与未签名编译证据；不把 `.app.zip` 描述为可安装 IPA，也不声称已完成 App Store/TestFlight 或实体机发布审计。

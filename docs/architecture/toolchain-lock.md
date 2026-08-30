@@ -21,10 +21,12 @@
 | CMake | 3.22.1 | 本地 SDK 与 CI |
 | desugar JDK libs | 2.1.4 | 本地通知插件要求 |
 | iOS deployment target | 15.0 | Xcode project 与 App framework plist 同时锁定 |
-| CI macOS / Xcode | `macos-26` / runner 默认 Xcode 26+ | 每次产物附带 `XCODE.txt` |
+| iOS 回退门禁 | `macos-15` / `/Applications/Xcode_16.4.app` / iOS 18.5 Simulator | 不依赖 runner 默认 Xcode；覆盖 iOS 15–25 普通通知路径 |
+| iOS AlarmKit 门禁 | `macos-26` / `/Applications/Xcode_26.6.app` / iOS 26.5 Simulator | 不依赖 runner 默认 Xcode；覆盖 iOS 26+ AlarmKit 路径 |
 | GitHub checkout action | 7.0.1 | `3d3c42e5aac5ba805825da76410c181273ba90b1` |
 | GitHub setup-java action | 5.7.0 | `b6effb05e454b25005698d916606bdc6ffcbf961` |
 | GitHub upload-artifact action | 7.0.1 | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` |
+| GitHub download-artifact action | 8.0.1 | `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` |
 | Flutter setup action | 2.23.0 | `1a449444c387b1966244ae4d4f8c696479add0b2` |
 | Android emulator runner action | 2.38.0 | `a421e43855164a8197daf9d8d40fe71c6996bb0d` |
 
@@ -79,6 +81,9 @@ android\gradlew.bat --version
 ```
 
 期待 Flutter 为 3.47.1、Dart 为 3.13.1、Java 主版本为 21、Gradle 为 9.3.1，并且 Android SDK 36/Build Tools 36.0.0/NDK 28.2.13676358 全部存在。
+两条 macOS CI 还分别设置 `DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer`
+和 `DEVELOPER_DIR=/Applications/Xcode_26.6.app/Contents/Developer`，并以 `xcodebuild -version`、
+`xcrun simctl list runtimes` 及精确创建的 iOS 18.5/26.5 临时 Simulator 记录复现证据。
 
 ## 升级流程
 

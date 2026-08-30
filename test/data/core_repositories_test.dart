@@ -1,7 +1,9 @@
 import 'package:danggui/src/data/database.dart';
+import 'package:danggui/src/data/data_support.dart';
 import 'package:danggui/src/data/repositories/core_repositories.dart';
 import 'package:danggui/src/domain/models.dart';
 import 'package:danggui/src/domain/repositories.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -328,6 +330,25 @@ void main() {
       expect(items.single.displayTitle, '复习生理学');
       expect((await tasks.getReminder(task.id))!.status, ReminderStatus.paused);
 
+      // Emulate the authenticated restore context written by v1.1.4, before
+      // reminder intent was included in the payload.
+      final legacyContext = <String, Object?>{
+        'status': TaskStatus.active.name,
+        'manualRank': task.manualRank,
+        'closedAtUtc': null,
+        'closedLocalDate': null,
+        'closedLocalTime': null,
+        'closedZoneId': null,
+      };
+      await (db.update(
+        db.trashEntries,
+      )..where((row) => row.id.equals(items.single.id.value))).write(
+        TrashEntriesCompanion(
+          restoreContextJson: Value(canonicalJson(legacyContext)),
+          snapshotSha256: Value(await sha256Hex(legacyContext)),
+        ),
+      );
+
       await trash.restore(items.single.id);
 
       expect((await tasks.getTask(task.id))!.status, TaskStatus.active);
@@ -338,6 +359,77 @@ void main() {
       expect(await trash.watchTrash().first, isEmpty);
     },
   );
+
+  test(
+    'trash restore preserves a reminder that was already user-paused',
+    () async {
+      final task = await tasks.createTask(const TaskDraft(title: '暂停后再整理'));
+      await tasks.setReminder(
+        ReminderDraft(
+          taskId: task.id,
+          scheduledLocalDateTime: '2026-08-24T19:50:00',
+          scheduledZoneId: 'Asia/Shanghai',
+          scheduledAtUtc: DateTime.utc(2026, 8, 24, 11, 50),
+        ),
+      );
+      final reminder = await (db.select(
+        db.reminders,
+      )..where((row) => row.taskId.equals(task.id.value))).getSingle();
+      await (db.update(
+        db.reminders,
+      )..where((row) => row.id.equals(reminder.id))).write(
+        const RemindersCompanion(
+          status: Value(ReminderStatus.paused),
+          pauseReason: Value(ReminderPauseReason.user),
+        ),
+      );
+      await db.delete(db.platformJobs).go();
+
+      await tasks.moveTaskToTrash(task.id);
+      await trash.restore((await trash.watchTrash().first).single.id);
+
+      final restored = await tasks.getReminder(task.id);
+      expect(restored!.status, ReminderStatus.paused);
+      expect(restored.pauseReason, ReminderPauseReason.user);
+      expect(
+        await (db.select(db.platformJobs)..where(
+              (row) => row.kind.equalsValue(PlatformJobKind.scheduleReminder),
+            ))
+            .get(),
+        isEmpty,
+      );
+    },
+  );
+
+  test('damaged trash context is rejected without restoring data', () async {
+    final task = await tasks.createTask(const TaskDraft(title: '不能误恢复'));
+    final note = await notes.createNote(
+      const NoteDraft(title: '也不能误恢复', body: '保留原始内容'),
+    );
+    await tasks.moveTaskToTrash(task.id);
+    await notes.moveNoteToTrash(note.id);
+    await db.customStatement(
+      "UPDATE trash_entries SET restore_context_json = '{}'",
+    );
+
+    final entries = await db.select(db.trashEntries).get();
+    for (final entry in entries) {
+      await expectLater(
+        trash.restore(TrashId(entry.id)),
+        throwsA(isA<StateConflictException>()),
+      );
+    }
+
+    expect((await tasks.getTask(task.id))!.status, TaskStatus.trashed);
+    expect(
+      (await (db.select(
+            db.notes,
+          )..where((row) => row.id.equals(note.id.value))).getSingle())
+          .deletedAtUtc,
+      isNotNull,
+    );
+    expect(await db.select(db.trashEntries).get(), hasLength(2));
+  });
 
   test(
     'settings use optimistic locking and preserve explicit locale',

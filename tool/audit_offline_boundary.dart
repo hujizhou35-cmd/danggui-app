@@ -679,6 +679,16 @@ final class _Audit {
     final project = _requiredText(projectPath);
     final frameworkInfo = _requiredText('ios/Flutter/AppFrameworkInfo.plist');
     final appDelegate = _requiredText('ios/Runner/AppDelegate.swift');
+    final dataProtection = _requiredText(
+      'ios/Runner/DangguiDataProtection.swift',
+    );
+    final dartDataProtection = _requiredText(
+      'lib/src/data/data_protection.dart',
+    );
+    final databaseProvider = _requiredText(
+      'lib/src/data/database_provider.dart',
+    );
+    final appSource = _requiredText('lib/src/app.dart');
     final secureStorageSource = _requiredText(
       'lib/src/services/backup/automatic_backup_coordinator.dart',
     );
@@ -740,7 +750,7 @@ final class _Audit {
         r'IPHONEOS_DEPLOYMENT_TARGET\s*=\s*([^;]+);',
       ).allMatches(project).map((match) => match.group(1)!.trim()).toList();
       _expect(
-        deploymentTargets.length == 3 &&
+        deploymentTargets.length >= 3 &&
             deploymentTargets.every(
               (target) => target == expectedIosDeploymentTarget,
             ),
@@ -813,8 +823,10 @@ final class _Audit {
         'excludeDangguiDataFromSystemBackups()',
         'for: .applicationSupportDirectory',
         'appendingPathComponent("danggui", isDirectory: true)',
-        'values.isExcludedFromBackup = true',
-        'dangguiURL.setResourceValues(values)',
+        'DangguiDataProtection.apply(to: dangguiURL',
+        'com.danggui.memo/data_protection',
+        'getDataProtectionStatus',
+        'retryDataProtection',
       ]) {
         _expectContains(
           'ios/Runner/AppDelegate.swift',
@@ -822,6 +834,76 @@ final class _Audit {
           marker,
           'iOS must attempt to exclude Application Support/danggui from '
               'system backups',
+        );
+      }
+    }
+
+    if (dataProtection != null) {
+      for (final marker in <String>[
+        'FileProtectionType.completeUntilFirstUserAuthentication',
+        'rootValues.isExcludedFromBackup = true',
+        'readBackupExclusion(rootURL) == true',
+        'fileManager.setAttributes(',
+        '.protectionKey: protectionType',
+        '.isSymbolicLinkKey',
+        'recordUnavailable(errorCode: "policy-pending")',
+      ]) {
+        _expectContains(
+          'ios/Runner/DangguiDataProtection.swift',
+          dataProtection,
+          marker,
+          'iOS private data must use explicit file protection and remain '
+              'excluded from system backups',
+        );
+      }
+    }
+
+    if (dartDataProtection != null) {
+      for (final marker in <String>[
+        'DataProtectionUnavailableException',
+        'getDataProtectionStatus',
+        'retryDataProtection',
+        "DataProtectionStatus.unavailable('channel-error')",
+        "DataProtectionStatus.unavailable('invalid-response')",
+      ]) {
+        _expectContains(
+          'lib/src/data/data_protection.dart',
+          dartDataProtection,
+          marker,
+          'Dart must fail closed and expose only stable iOS data-protection '
+              'status codes',
+        );
+      }
+    }
+
+    if (databaseProvider != null) {
+      for (final marker in <String>[
+        'dataProtectionPlatformProvider',
+        '.ensureAvailable()',
+        'throw DataProtectionUnavailableException(',
+      ]) {
+        _expectContains(
+          'lib/src/data/database_provider.dart',
+          databaseProvider,
+          marker,
+          'the SQLite path must remain unavailable until the iOS private-data '
+              'policy is confirmed',
+        );
+      }
+    }
+
+    if (appSource != null) {
+      for (final marker in <String>[
+        '_retryDataProtectionIfNeeded()',
+        'final retried = await platform.retry()',
+        'ref.invalidate(databaseFileProvider)',
+      ]) {
+        _expectContains(
+          'lib/src/app.dart',
+          appSource,
+          marker,
+          'foreground resume must retry and rebuild a previously unavailable '
+              'iOS data path',
         );
       }
     }
@@ -955,6 +1037,39 @@ final class _Audit {
     final workflow = _requiredText(workflowPath);
     if (workflow == null) return;
 
+    const readmeScreenshotWorkflowPath =
+        '.github/workflows/readme-screenshots.yml';
+    final readmeScreenshotWorkflow =
+        _requiredText(readmeScreenshotWorkflowPath) ?? '';
+    _expectContains(
+      readmeScreenshotWorkflowPath,
+      readmeScreenshotWorkflow,
+      '"cmake;3.22.1"',
+      'README screenshot builds must preinstall the locked native toolchain',
+    );
+    final androidLinuxJob = _workflowJobBlock(
+      workflow,
+      'android-linux',
+      nextJobName: 'android-emulator-smoke',
+    );
+    final androidEmulatorJob = _workflowJobBlock(
+      workflow,
+      'android-emulator-smoke',
+      nextJobName: 'ios-fallback',
+    );
+    _expectContains(
+      '$workflowPath#android-linux',
+      androidLinuxJob,
+      '"cmake;3.22.1"',
+      'Android artifact builds must preinstall the locked native toolchain',
+    );
+    _expectContains(
+      '$workflowPath#android-emulator-smoke',
+      androidEmulatorJob,
+      '"cmake;3.22.1"',
+      'Android device acceptance must preinstall the locked native toolchain',
+    );
+
     for (final command in <String>[
       'dart run tool/audit_offline_boundary.dart',
       'flutter analyze --fatal-infos',
@@ -964,9 +1079,12 @@ final class _Audit {
       'bash tool/render_release_notes.sh --self-test',
       'bash integration_test/run_android_emulator_smoke_self_test.sh',
       'bash integration_test/android_emulator_infrastructure_self_test.sh',
+      'bash integration_test/adb_no_streaming_wrapper_self_test.sh',
+      'bash integration_test/install_adb_no_streaming_wrapper_self_test.sh',
       'bash tool/verify_android_artifacts.sh',
       'bash tool/build_ios_unsigned.sh',
       'bash tool/build_ios_source_zip.sh',
+      'bash tool/run_ios_simulator_tests.sh',
       'bash tool/assemble_release_assets.sh',
       'bash tool/render_release_notes.sh',
     ]) {
@@ -1088,6 +1206,173 @@ final class _Audit {
         'release verification must fail closed on allowlist or checksum drift',
       );
     }
+    for (final releaseEvidenceContract in <String>[
+      'EXPECTED_SOURCE_COMMIT',
+      'SOURCE_COMMIT.txt does not match the protected tag commit',
+      'ui_test_count=2',
+      'testTaskReminderDeleteAndRestoreContract',
+      'testBackupRestoreRebuildsReminderContract',
+      'system_delivery=device-unverified',
+      'notification_gateway=in-process-contract-double',
+    ]) {
+      _expectContains(
+        releaseEvidenceContract == 'EXPECTED_SOURCE_COMMIT'
+            ? workflowPath
+            : releaseVerifierPath,
+        releaseEvidenceContract == 'EXPECTED_SOURCE_COMMIT'
+            ? workflow
+            : releaseVerifier,
+        releaseEvidenceContract,
+        'release evidence must match the tag and exact two UI contracts',
+      );
+    }
+
+    const simulatorScriptPath = 'tool/run_ios_simulator_tests.sh';
+    final simulatorScript = _requiredText(simulatorScriptPath) ?? '';
+    for (final simulatorContract in <String>[
+      'xcrun simctl create',
+      'xcrun simctl delete',
+      '-only-testing:RunnerTests',
+      '-only-testing:RunnerUITests',
+      'xcresulttool get test-results summary',
+      'total_test_count',
+      'ui_test_count=2',
+      'runner_image_version=',
+      'runner_arch=',
+      'runtime_build=',
+      'system_delivery=device-unverified',
+      '--config-only',
+      'lib/xcui_main.dart',
+      r'FLUTTER_TARGET="${validated_xcui_flutter_target}"',
+      '-configuration Debug',
+    ]) {
+      _expectContains(
+        simulatorScriptPath,
+        simulatorScript,
+        simulatorContract,
+        'iOS Simulator CI must be disposable, explicit, and fail closed',
+      );
+    }
+    _expect(
+      !simulatorScript.contains('simctl erase') &&
+          !simulatorScript.contains('mapfile'),
+      'iOS simulator runner neither erases existing devices nor requires Bash 4',
+      '$simulatorScriptPath must create/delete only its disposable device and '
+          'remain compatible with macOS Bash 3',
+    );
+    const productionMainPath = 'lib/main.dart';
+    final productionMain = _requiredText(productionMainPath) ?? '';
+    const xcuiMainPath = 'lib/xcui_main.dart';
+    final xcuiMain = _requiredText(xcuiMainPath) ?? '';
+    const xcuiTestsPath = 'ios/RunnerUITests/RunnerUITests.swift';
+    final xcuiTests = _requiredText(xcuiTestsPath) ?? '';
+    _expect(
+      !productionMain.contains('xcui_scenario_harness.dart') &&
+          !productionMain.contains('DANGGUI_XCUITEST_SCENARIO') &&
+          !productionMain.contains('xcui-scenario'),
+      'production Dart entrypoint excludes the XCUITest harness',
+      '$productionMainPath must not import or select the destructive test harness',
+    );
+    for (final xcuiGate in <String>[
+      'if (!kDebugMode)',
+      'DangguiXcuiScenarioSelectorApp',
+      "identifier: 'xcui-scenario-\$scenario'",
+      'excludeSemantics: true',
+      'enabled: true',
+      'onTap: () => onSelected(scenario)',
+      'onSelected: runDangguiXcuiScenario',
+    ]) {
+      _expectContains(
+        xcuiMainPath,
+        xcuiMain,
+        xcuiGate,
+        'dedicated XCUITest entrypoint must retain Debug and scenario gates',
+      );
+    }
+    _expectContains(
+      xcuiTestsPath,
+      xcuiTests,
+      'xcui-scenario-\\(scenario)',
+      'XCUITest must select an explicit allow-listed scenario control',
+    );
+    _expectContains(
+      xcuiTestsPath,
+      xcuiTests,
+      'label BEGINSWITH %@',
+      'XCUITest must fail promptly when the app exposes a contract failure',
+    );
+    for (final selectorReadinessGate in <String>[
+      'exists == true AND hittable == true',
+      'guard XCTWaiter().wait',
+    ]) {
+      _expectContains(
+        xcuiTestsPath,
+        xcuiTests,
+        selectorReadinessGate,
+        'XCUITest must not tap a missing or inaccessible scenario selector',
+      );
+    }
+    _expect(
+      !xcuiTests.contains('launchEnvironment') &&
+          !xcuiMain.contains('Platform.environment') &&
+          !xcuiMain.contains('Platform.executableArguments'),
+      'XCUITest scenario selection avoids runtime-dependent environment bridging',
+      'XCUITest scenario selection must not depend on process metadata reaching Dart',
+    );
+
+    const deepAuditPath = '.github/workflows/ios-deep-audit.yml';
+    final deepAudit = _requiredText(deepAuditPath) ?? '';
+    for (final fixedMacContract in <String>[
+      'runs-on: macos-15',
+      'runs-on: macos-26',
+      '/Applications/Xcode_16.4.app/Contents/Developer',
+      '/Applications/Xcode_26.6.app/Contents/Developer',
+      'runtime: "18.5"',
+      'runtime: "26.5"',
+    ]) {
+      final source = fixedMacContract.startsWith('runs-on:')
+          ? '$workflow\n$deepAudit'
+          : deepAudit;
+      _expectContains(
+        fixedMacContract.startsWith('runs-on:')
+            ? 'iOS workflow contracts'
+            : deepAuditPath,
+        source,
+        fixedMacContract,
+        'free iOS CI must pin standard runner, Xcode, and runtime versions',
+      );
+    }
+    final combinedWorkflows = '$workflow\n$deepAudit';
+    for (final protectedIosContext in <String>[
+      'name: Unsigned iOS source build',
+      'needs: [ios-fallback, ios-unsigned]',
+      'needs: [android-linux, android-emulator-smoke, ios-unsigned-contract]',
+    ]) {
+      _expectContains(
+        workflowPath,
+        workflow,
+        protectedIosContext,
+        'protected-main iOS context must aggregate both fixed iOS contracts',
+      );
+    }
+    _expect(
+      !combinedWorkflows.contains('macos-latest') &&
+          !RegExp(r'runs-on:\s*[^\n]*(large|xlarge)')
+              .hasMatch(combinedWorkflows),
+      'iOS CI uses no floating or paid large macOS runner',
+      'mobile and deep-audit workflows must use fixed standard runners',
+    );
+    for (final match in RegExp(
+      r'^\s*uses:\s*[^@\s]+@([^\s#]+)',
+      multiLine: true,
+    ).allMatches(combinedWorkflows)) {
+      final reference = match.group(1) ?? '';
+      _expect(
+        RegExp(r'^[0-9a-f]{40}$').hasMatch(reference),
+        'GitHub Action dependency is pinned to an immutable commit',
+        'workflow action reference is mutable: $reference',
+      );
+    }
     _expect(
       !workflow.contains('cp staging/android/*.apk release/') &&
           !workflow.contains('cp staging/android/*.aab release/') &&
@@ -1173,6 +1458,34 @@ final class _Audit {
       _expectContains(
         smokePath,
         smoke,
+        'DANGGUI_ADB_FORCE_NO_STREAMING=1',
+        'API 24 device acceptance must opt into deterministic ADB push installs',
+      );
+      _expectContains(
+        smokePath,
+        smoke,
+        'DANGGUI_ADB_MODE_EVIDENCE',
+        'ADB install-mode overrides must leave content-free evidence',
+      );
+      for (final transportContract in <String>[
+        'validate_adb_transport_setup()',
+        'Post-SDK ADB transport attestation failed',
+        'validate_adb_install_invocations()',
+        'adb-install-invocations.txt',
+        'top_level_command=(install|install-multiple|install-multi-package) mode=no-streaming',
+        'ADB install invocation evidence failed the release gate',
+        'native-default-pass-through',
+      ]) {
+        _expectContains(
+          smokePath,
+          smoke,
+          transportContract,
+          'device smoke must fail closed on deployed and exercised ADB transport evidence',
+        );
+      }
+      _expectContains(
+        smokePath,
+        smoke,
         'show_ime_with_hard_keyboard',
         'device editor acceptance must expose a real soft-keyboard inset',
       );
@@ -1219,6 +1532,113 @@ final class _Audit {
         '$smokePath must not let an unbounded diagnostic mask exit status 75',
       );
     }
+
+    const adbWrapperPath = 'integration_test/adb_no_streaming_wrapper.sh';
+    final adbWrapper = _requiredText(adbWrapperPath);
+    if (adbWrapper != null) {
+      for (final contract in <String>[
+        'DANGGUI_ADB_FORCE_NO_STREAMING',
+        'DANGGUI_REAL_ADB',
+        'install|install-multiple|install-multi-package',
+        '--no-streaming',
+        '--streaming',
+        '--incremental|--incr',
+        'DANGGUI_ADB_MODE_EVIDENCE',
+        r'exec "${real_adb_path}" "${args[@]}"',
+      ]) {
+        _expectContains(
+          adbWrapperPath,
+          adbWrapper,
+          contract,
+          'API 24 ADB install shim must be scoped, fail-closed, and transparent',
+        );
+      }
+      _expect(
+        !adbWrapper.contains('eval ') && !adbWrapper.contains(r'"$*"'),
+        'ADB install shim preserves argument boundaries',
+        '$adbWrapperPath must not evaluate or flatten tool arguments',
+      );
+    }
+
+    const emulatorSmokeSelfTestPath =
+        'integration_test/run_android_emulator_smoke_self_test.sh';
+    final emulatorSmokeSelfTest = _requiredText(emulatorSmokeSelfTestPath);
+    if (emulatorSmokeSelfTest != null) {
+      for (final negativeContract in <String>[
+        'missing-attestation',
+        'empty-install-evidence',
+        'invalid-install-evidence',
+        'run_api36_scope_case',
+        'adb-transport-scope',
+      ]) {
+        _expectContains(
+          emulatorSmokeSelfTestPath,
+          emulatorSmokeSelfTest,
+          negativeContract,
+          'ADB transport self-test must prove missing, malformed, and cross-API evidence fails closed',
+        );
+      }
+    }
+
+    const adbInstallerPath =
+        'integration_test/install_adb_no_streaming_wrapper.sh';
+    final adbInstaller = _requiredText(adbInstallerPath);
+    if (adbInstaller != null) {
+      for (final contract in <String>[
+        r'^(24|36)$',
+        'DANGGUI_EMULATOR_ATTEMPT',
+        'post-sdk-install-pre-emulator-launch',
+        'native-default-pass-through',
+        'script-scoped-no-streaming',
+        'sourceWrapperSha256',
+        'installedWrapperSha256',
+        'platformToolsRevision',
+        'adb-install-mode.json',
+        r'mv -f -- "${attestation_next}" "${attestation}"',
+      ]) {
+        _expectContains(
+          adbInstallerPath,
+          adbInstaller,
+          contract,
+          'post-SDK ADB setup must be scoped, atomic, and independently attested',
+        );
+      }
+      _expect(
+        !adbInstaller.contains(r'GITHUB_ENV') &&
+            !adbInstaller.contains(r'rm -rf'),
+        'ADB wrapper deployment avoids cross-step environment assumptions and recursive deletion',
+        '$adbInstallerPath must be local to the action invocation and recoverable',
+      );
+    }
+
+    for (final workflowContract in <String>[
+      'pre-emulator-launch-script:',
+      'integration_test/install_adb_no_streaming_wrapper.sh',
+    ]) {
+      _expectContains(
+        '$workflowPath#android-emulator-smoke',
+        androidEmulatorJob,
+        workflowContract,
+        'emulator CI must install and attest the scoped ADB transport shim',
+      );
+    }
+    _expect(
+      RegExp(
+            r'^\s*pre-emulator-launch-script:',
+            multiLine: true,
+          ).allMatches(androidEmulatorJob).length ==
+          2,
+      'both primary and sole fresh-AVD action deploy ADB policy after SDK setup',
+      '$workflowPath must contain exactly two post-SDK ADB setup hooks',
+    );
+    _expect(
+      !androidEmulatorJob.contains(
+            'Force deterministic non-streaming ADB installs',
+          ) &&
+          !androidEmulatorJob.contains('DANGGUI_REAL_ADB='),
+      'emulator CI has no stale pre-action ADB deployment',
+      '$workflowPath must not attest a wrapper before the action updates platform-tools',
+    );
 
     const releaseBinarySmokePath =
         'integration_test/run_android_release_binary_smoke.sh';
@@ -1950,6 +2370,19 @@ final class _Audit {
     }
     return found;
   }
+}
+
+String _workflowJobBlock(
+  String workflow,
+  String jobName, {
+  required String nextJobName,
+}) {
+  final startMarker = '\n  $jobName:';
+  final endMarker = '\n  $nextJobName:';
+  final start = workflow.indexOf(startMarker);
+  if (start < 0) return '';
+  final end = workflow.indexOf(endMarker, start + startMarker.length);
+  return workflow.substring(start, end < 0 ? workflow.length : end);
 }
 
 final class _ForbiddenPattern {

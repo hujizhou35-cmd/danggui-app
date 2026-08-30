@@ -13,6 +13,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get appName => '当归';
 
   @override
+  String get brandSeal => '当归印章';
+
+  @override
   String get privacyTagline => '本地记录 · 不上传 · 不调用 AI';
 
   @override
@@ -23,6 +26,12 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get retry => '重试';
+
+  @override
+  String get reload => '重新加载';
+
+  @override
+  String get editorVersionConflict => '内容已在其他操作中更新。请重新加载后再继续编辑。';
 
   @override
   String get tasksTab => '事项';

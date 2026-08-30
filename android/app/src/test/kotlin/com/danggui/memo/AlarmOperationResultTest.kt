@@ -25,6 +25,14 @@ class AlarmOperationResultTest {
             AlarmScheduleResult.SYSTEM_ALARM_CANCEL_FAILED.errorCode,
         )
         assertEquals(
+            "alarm_event_capacity_exceeded",
+            AlarmScheduleResult.BUSINESS_EVENT_CAPACITY_EXCEEDED.errorCode,
+        )
+        assertEquals(
+            "inactive_device_generation",
+            AlarmScheduleResult.INACTIVE_DEVICE_GENERATION.errorCode,
+        )
+        assertEquals(
             "alarm_storage_failed",
             AlarmScheduleResult.DURABLE_COMMIT_FAILED.errorCode,
         )

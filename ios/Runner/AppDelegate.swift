@@ -6,13 +6,25 @@ import flutter_local_notifications
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var notificationSettingsChannel: FlutterMethodChannel?
+  private var dataProtectionChannel: FlutterMethodChannel?
   private var reminderPlatformBridge: ReminderPlatformBridge?
+  private lazy var dataProtectionCoordinator = DangguiDataProtectionCoordinator {
+    let fileManager = FileManager.default
+    let supportURL = try fileManager.url(
+      for: .applicationSupportDirectory,
+      in: .userDomainMask,
+      appropriateFor: nil,
+      create: true
+    )
+    let dangguiURL = supportURL.appendingPathComponent("danggui", isDirectory: true)
+    try DangguiDataProtection.apply(to: dangguiURL, fileManager: fileManager)
+  }
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    excludeDangguiDataFromSystemBackups()
+    _ = excludeDangguiDataFromSystemBackups()
     UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
@@ -21,30 +33,8 @@ import flutter_local_notifications
   /// this device. Application Support participates in iOS device backups by
   /// default, so mark the app-owned directory as excludable on every launch.
   /// Users can still create an explicit portable backup from inside the app.
-  private func excludeDangguiDataFromSystemBackups() {
-    do {
-      let fileManager = FileManager.default
-      let supportURL = try fileManager.url(
-        for: .applicationSupportDirectory,
-        in: .userDomainMask,
-        appropriateFor: nil,
-        create: true
-      )
-      var dangguiURL = supportURL.appendingPathComponent("danggui", isDirectory: true)
-      try fileManager.createDirectory(
-        at: dangguiURL,
-        withIntermediateDirectories: true,
-        attributes: nil
-      )
-      var values = URLResourceValues()
-      values.isExcludedFromBackup = true
-      try dangguiURL.setResourceValues(values)
-    } catch {
-      // Do not make the local database unavailable if the filesystem refuses
-      // this advisory resource value. The static release audit ensures the
-      // exclusion attempt remains wired into every build.
-      NSLog("Danggui could not mark its private data directory as excluded from system backup.")
-    }
+  private func excludeDangguiDataFromSystemBackups() -> DangguiDataProtectionStatus {
+    dataProtectionCoordinator.retry()
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
@@ -95,6 +85,25 @@ import flutter_local_notifications
       }
     }
     notificationSettingsChannel = channel
+    let protectionChannel = FlutterMethodChannel(
+      name: "com.danggui.memo/data_protection",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    protectionChannel.setMethodCallHandler { [weak self] call, result in
+      guard let self = self else {
+        result(["status": "unavailable", "errorCode": "bridge-unavailable"])
+        return
+      }
+      switch call.method {
+      case "getDataProtectionStatus":
+        result(self.dataProtectionCoordinator.currentStatus().flutterPayload)
+      case "retryDataProtection":
+        result(self.excludeDangguiDataFromSystemBackups().flutterPayload)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    dataProtectionChannel = protectionChannel
     reminderPlatformBridge = ReminderPlatformBridge(
       messenger: engineBridge.applicationRegistrar.messenger()
     )

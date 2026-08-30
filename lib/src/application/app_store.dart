@@ -3,13 +3,16 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
+import 'package:timezone/data/latest.dart' as tz_data;
+import 'package:timezone/timezone.dart' as tz;
 
 import '../data/data_support.dart';
 import '../data/database.dart';
 import '../data/database_provider.dart';
 import '../data/repositories/core_repositories.dart';
 import '../domain/models.dart';
+import '../domain/repositories.dart';
+import '../services/notifications/local_time_zone.dart';
 import '../services/notifications/notification_coordinator.dart';
 import 'app_state.dart';
 
@@ -20,8 +23,22 @@ final appStoreProvider =
       AppStoreController.new,
     );
 
+/// Test seams for every durable timestamp and identifier created by the
+/// shared application layer. Platform clocks and UUID implementations remain
+/// the production defaults, while contract and fault-injection tests can
+/// replace them without changing public repository or MethodChannel fields.
+final appClockProvider = Provider<Clock>((ref) => const SystemClock());
+final appIdGeneratorProvider = Provider<IdGenerator>(
+  (ref) => const UuidIdGenerator(),
+);
+final appLocalTimeZoneResolverProvider = Provider<LocalTimeZoneResolver>(
+  (ref) => const MethodChannelLocalTimeZoneResolver(),
+);
+
 final class AppStoreController extends AsyncNotifier<DangguiAppState> {
-  static const _uuid = Uuid();
+  DateTime _nowUtc() => ref.read(appClockProvider).nowUtc().toUtc();
+
+  String _nextId() => ref.read(appIdGeneratorProvider).next();
 
   @override
   Future<DangguiAppState> build() async {
@@ -80,7 +97,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         currentIds.toSet().difference(orderedIds.toSet()).isNotEmpty) {
       throw StateError('Task order changed while it was being edited.');
     }
-    final nowMicros = utcMicros(DateTime.now());
+    final nowMicros = utcMicros(_nowUtc());
     await database.transaction(() async {
       for (var index = 0; index < orderedIds.length; index++) {
         await database.customStatement(
@@ -120,10 +137,15 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       resolvedSound ??= defaults.read<bool>('default_sound_enabled');
       resolvedVibration ??= defaults.read<bool>('default_vibration_enabled');
     }
-    final taskId = _uuid.v4();
-    final documentId = _uuid.v4();
-    final now = DateTime.now().toUtc();
+    final taskId = _nextId();
+    final documentId = _nextId();
+    final now = _nowUtc();
     final nowMicros = utcMicros(now);
+    final reminderZoneId = reminderAt == null
+        ? null
+        : await ref
+              .read(appLocalTimeZoneResolverProvider)
+              .currentIdentifier(reminderAt.toLocal());
     var notificationJobQueued = false;
     final semanticHash = await sha256Hex(<String, Object?>{
       'title': cleanTitle,
@@ -202,6 +224,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           reminderAt: reminderAt,
           soundEnabled: resolvedSound ?? true,
           vibrationEnabled: resolvedVibration ?? true,
+          scheduledZoneId: reminderZoneId!,
           nowMicros: nowMicros,
         );
       }
@@ -219,7 +242,12 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       throw const FormatException('Task title must not be empty.');
     }
     final database = await ref.read(databaseProvider.future);
-    final nowMicros = utcMicros(DateTime.now());
+    final reminderZoneId = !updateReminder || task.reminderAt == null
+        ? null
+        : await ref
+              .read(appLocalTimeZoneResolverProvider)
+              .currentIdentifier(task.reminderAt!.toLocal());
+    final nowMicros = utcMicros(_nowUtc());
     var notificationJobQueued = false;
     final semanticHash = await sha256Hex(<String, Object?>{
       'title': cleanTitle,
@@ -230,12 +258,16 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
     await database.transaction(() async {
       final row = await database
           .customSelect(
-            'SELECT document_id, status, title, plan_text FROM tasks '
+            'SELECT document_id, status, title, plan_text, row_version '
+            'FROM tasks '
             'WHERE id = ?',
             variables: <Variable<Object>>[Variable.withString(task.id)],
           )
           .getSingleOrNull();
       if (row == null) throw StateError('Task no longer exists.');
+      if (row.read<int>('row_version') != task.rowVersion) {
+        throw const StateConflictException('事项已在其他操作中更新。');
+      }
       final documentId = row.read<String>('document_id');
       final persistedTaskStatus = _enumByName(
         TaskStatus.values,
@@ -245,20 +277,25 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       final notificationContentChanged =
           row.read<String>('title') != cleanTitle ||
           row.read<String>('plan_text') != task.plan;
-      await _snapshotDocument(database, documentId, nowMicros);
-      await database.customStatement(
+      final taskChanged = await database.customUpdate(
         'UPDATE tasks SET title = ?, due_local_date = ?, plan_text = ?, '
         'semantic_hash = ?, updated_at_utc = ?, row_version = row_version + 1 '
-        'WHERE id = ?',
-        <Object?>[
-          cleanTitle,
-          _isoDate(task.dueDate),
-          task.plan,
-          semanticHash,
-          nowMicros,
-          task.id,
+        'WHERE id = ? AND row_version = ?',
+        variables: <Variable<Object>>[
+          Variable.withString(cleanTitle),
+          Variable<String>(_isoDate(task.dueDate)),
+          Variable.withString(task.plan),
+          Variable.withString(semanticHash),
+          Variable.withInt(nowMicros),
+          Variable.withString(task.id),
+          Variable.withInt(task.rowVersion),
         ],
+        updates: <TableInfo<Table, Object?>>{database.tasks},
       );
+      if (taskChanged != 1) {
+        throw const StateConflictException('事项已在其他操作中更新。');
+      }
+      await _snapshotDocument(database, documentId, nowMicros);
       await _replaceDocumentText(
         database,
         documentId: documentId,
@@ -280,6 +317,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
             reminderAt: task.reminderAt!,
             soundEnabled: task.soundEnabled,
             vibrationEnabled: task.vibrationEnabled,
+            scheduledZoneId: reminderZoneId!,
             nowMicros: nowMicros,
           );
         }
@@ -321,8 +359,16 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
 
   Future<void> setTaskActive(String taskId, bool active) async {
     final database = await ref.read(databaseProvider.future);
-    final now = DateTime.now();
-    final nowMicros = utcMicros(now);
+    final nowUtc = _nowUtc();
+    final nowMicros = utcMicros(nowUtc);
+    final completion = active
+        ? null
+        : _completionInstant(
+            nowUtc,
+            await ref
+                .read(appLocalTimeZoneResolverProvider)
+                .currentIdentifier(nowUtc.toLocal()),
+          );
     var notificationJobQueued = false;
     await database.transaction(() async {
       if (!active) {
@@ -334,9 +380,9 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           <Object?>[
             TaskStatus.completionPending.name,
             nowMicros,
-            _isoDate(now),
-            _localTime(now),
-            now.timeZoneName,
+            _calendarDate(completion!.localDateTime),
+            _wallTime(completion.localDateTime),
+            completion.zoneId,
             nowMicros,
             taskId,
             TaskStatus.active.name,
@@ -409,7 +455,14 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
 
   Future<void> addTaskToPast(String taskId) async {
     final database = await ref.read(databaseProvider.future);
-    final nowMicros = utcMicros(DateTime.now());
+    final now = _nowUtc();
+    final fallbackCompletion = _completionInstant(
+      now,
+      await ref
+          .read(appLocalTimeZoneResolverProvider)
+          .currentIdentifier(now.toLocal()),
+    );
+    final nowMicros = utcMicros(now);
     var notificationJobQueued = false;
     await database.transaction(() async {
       final task = await database
@@ -444,13 +497,16 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           )
           .getSingle();
       final sequence = sequenceRow.read<int>('sequence');
+      final completedAt = task.readNullable<int>('closed_at_utc') ?? nowMicros;
+      final completedInstant = _completionInstant(
+        DateTime.fromMicrosecondsSinceEpoch(completedAt, isUtc: true),
+        task.readNullable<String>('closed_zone_id') ??
+            fallbackCompletion.zoneId,
+      );
       final completionDate =
           task.readNullable<String>('closed_local_date') ??
-          _isoDate(DateTime.now())!;
-      final completionZone =
-          task.readNullable<String>('closed_zone_id') ??
-          DateTime.now().timeZoneName;
-      final completedAt = task.readNullable<int>('closed_at_utc') ?? nowMicros;
+          _calendarDate(completedInstant.localDateTime);
+      final completionZone = completedInstant.zoneId;
       final lastEvent = await database
           .customSelect(
             'SELECT completion_local_date FROM past_events '
@@ -476,16 +532,11 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           nowMicros: nowMicros,
         );
       }
-      final eventId = _uuid.v4();
+      final eventId = _nextId();
       final completionTime =
           task.readNullable<String>('closed_local_time') ??
-          _localTime(
-            DateTime.fromMicrosecondsSinceEpoch(
-              completedAt,
-              isUtc: true,
-            ).toLocal(),
-          );
-      final timeBlockId = _uuid.v4();
+          _wallTime(completedInstant.localDateTime);
+      final timeBlockId = _nextId();
       rank += 1024;
       await _insertBlock(
         database,
@@ -496,7 +547,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         sortRank: rank,
         nowMicros: nowMicros,
       );
-      final titleBlockId = _uuid.v4();
+      final titleBlockId = _nextId();
       rank += 1024;
       await _insertBlock(
         database,
@@ -518,7 +569,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       for (final source in sourceBlocks) {
         final text = source.read<String>('plain_text');
         if (text.trim().isEmpty) continue;
-        final blockId = _uuid.v4();
+        final blockId = _nextId();
         rank += 1024;
         final typeName = source.read<String>('block_type');
         final type = DocumentBlockType.values.firstWhere(
@@ -547,7 +598,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       }
       final dueDate = task.readNullable<String>('due_local_date');
       if (dueDate != null) {
-        final blockId = _uuid.v4();
+        final blockId = _nextId();
         final text = '📅 $dueDate';
         rank += 1024;
         await _insertBlock(
@@ -563,7 +614,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       }
       final sourcePlan = task.read<String>('plan_text').trim();
       if (sourcePlan.isNotEmpty) {
-        final blockId = _uuid.v4();
+        final blockId = _nextId();
         rank += 1024;
         await _insertBlock(
           database,
@@ -612,7 +663,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       );
       for (var index = 0; index < linked.length; index++) {
         final item = linked[index];
-        final partId = _uuid.v4();
+        final partId = _nextId();
         final partHash = await sha256Hex(item.text);
         await database.customStatement(
           'INSERT INTO past_event_parts '
@@ -634,7 +685,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           'link_state, current_sha256, updated_at_utc) '
           'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
           <Object?>[
-            _uuid.v4(),
+            _nextId(),
             partId,
             item.blockId,
             item.blockId,
@@ -694,7 +745,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
 
   Future<void> deleteTask(String taskId) async {
     final database = await ref.read(databaseProvider.future);
-    final nowMicros = utcMicros(DateTime.now());
+    final nowMicros = utcMicros(_nowUtc());
     final purgeMicros = nowMicros + const Duration(days: 30).inMicroseconds;
     var notificationJobQueued = false;
     await database.transaction(() async {
@@ -720,7 +771,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         '(id, entity_type, entity_id, deleted_at_utc, purge_after_utc, '
         'restore_context_json, snapshot_sha256) VALUES (?, ?, ?, ?, ?, ?, ?)',
         <Object?>[
-          _uuid.v4(),
+          _nextId(),
           TrashEntityType.task.name,
           taskId,
           nowMicros,
@@ -744,7 +795,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
 
   Future<void> restoreTask(String taskId) async {
     final database = await ref.read(databaseProvider.future);
-    final nowMicros = utcMicros(DateTime.now());
+    final nowMicros = utcMicros(_nowUtc());
     var notificationJobQueued = false;
     await database.transaction(() async {
       final trash = await database
@@ -853,9 +904,9 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
     String? folderId,
   }) async {
     final database = await ref.read(databaseProvider.future);
-    final noteId = _uuid.v4();
-    final documentId = _uuid.v4();
-    final nowMicros = utcMicros(DateTime.now());
+    final noteId = _nextId();
+    final documentId = _nextId();
+    final nowMicros = utcMicros(_nowUtc());
     final semanticHash = await sha256Hex(<String, Object?>{
       'title': title,
       'body': body,
@@ -916,7 +967,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
 
   Future<void> updateNote(NoteViewModel note) async {
     final database = await ref.read(databaseProvider.future);
-    final nowMicros = utcMicros(DateTime.now());
+    final nowMicros = utcMicros(_nowUtc());
     final semanticHash = await sha256Hex(<String, Object?>{
       'title': note.title,
       'body': note.body,
@@ -926,26 +977,35 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
     await database.transaction(() async {
       final row = await database
           .customSelect(
-            'SELECT document_id FROM notes WHERE id = ? AND deleted_at_utc IS NULL',
+            'SELECT document_id, row_version FROM notes '
+            'WHERE id = ? AND deleted_at_utc IS NULL',
             variables: <Variable<Object>>[Variable.withString(note.id)],
           )
           .getSingleOrNull();
       if (row == null) throw StateError('Note no longer exists.');
+      if (row.read<int>('row_version') != note.rowVersion) {
+        throw const StateConflictException('笔记已在其他操作中更新。');
+      }
       final documentId = row.read<String>('document_id');
-      await _snapshotDocument(database, documentId, nowMicros);
-      await database.customStatement(
+      final noteChanged = await database.customUpdate(
         'UPDATE notes SET title = ?, folder_id = ?, pinned_at_utc = ?, '
         'semantic_hash = ?, updated_at_utc = ?, row_version = row_version + 1 '
-        'WHERE id = ?',
-        <Object?>[
-          note.title.trim(),
-          note.folderId,
-          note.pinned ? nowMicros : null,
-          semanticHash,
-          nowMicros,
-          note.id,
+        'WHERE id = ? AND row_version = ?',
+        variables: <Variable<Object>>[
+          Variable.withString(note.title.trim()),
+          Variable<String>(note.folderId),
+          Variable<int>(note.pinned ? nowMicros : null),
+          Variable.withString(semanticHash),
+          Variable.withInt(nowMicros),
+          Variable.withString(note.id),
+          Variable.withInt(note.rowVersion),
         ],
+        updates: <TableInfo<Table, Object?>>{database.notes},
       );
+      if (noteChanged != 1) {
+        throw const StateConflictException('笔记已在其他操作中更新。');
+      }
+      await _snapshotDocument(database, documentId, nowMicros);
       await _replaceDocumentText(
         database,
         documentId: documentId,
@@ -968,7 +1028,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
 
   Future<void> deleteNote(String noteId) async {
     final database = await ref.read(databaseProvider.future);
-    final nowMicros = utcMicros(DateTime.now());
+    final nowMicros = utcMicros(_nowUtc());
     await database.transaction(() async {
       final row = await database
           .customSelect(
@@ -987,7 +1047,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         '(id, entity_type, entity_id, deleted_at_utc, purge_after_utc, '
         'restore_context_json, snapshot_sha256) VALUES (?, ?, ?, ?, ?, ?, ?)',
         <Object?>[
-          _uuid.v4(),
+          _nextId(),
           TrashEntityType.note.name,
           noteId,
           nowMicros,
@@ -1011,8 +1071,8 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
     final cleanName = name.trim();
     if (cleanName.isEmpty) throw const FormatException('Folder name is empty.');
     final database = await ref.read(databaseProvider.future);
-    final id = _uuid.v4();
-    final nowMicros = utcMicros(DateTime.now());
+    final id = _nextId();
+    final nowMicros = utcMicros(_nowUtc());
     final rank = state.value?.folders.length ?? 0;
     await database.customStatement(
       'INSERT INTO folders '
@@ -1048,7 +1108,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
 
   Future<void> updatePastBlock(String blockId, String text) async {
     final database = await ref.read(databaseProvider.future);
-    final nowMicros = utcMicros(DateTime.now());
+    final nowMicros = utcMicros(_nowUtc());
     await database.transaction(() async {
       final row = await database
           .customSelect(
@@ -1186,7 +1246,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
     for (final lineIndex in unmatchedLineIndexes) {
       final parsed = _parsePastProjectedLine(editedLines[lineIndex]);
       newBlocksByLine[lineIndex] = DocumentBlockModel(
-        id: _uuid.v4(),
+        id: _nextId(),
         documentId: DocumentId(documentId),
         sortRank: 0,
         blockType: parsed.type,
@@ -1301,7 +1361,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           .read<String>('id');
     }
     for (var index = prefix; index < parsed.length - suffix; index++) {
-      ids[index] = _uuid.v4();
+      ids[index] = _nextId();
     }
 
     final blocks = <DocumentBlockModel>[];
@@ -1352,8 +1412,8 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
 
   Future<String> appendPastParagraph([String text = '']) async {
     final database = await ref.read(databaseProvider.future);
-    final nowMicros = utcMicros(DateTime.now());
-    final blockId = _uuid.v4();
+    final nowMicros = utcMicros(_nowUtc());
+    final blockId = _nextId();
     await database.transaction(() async {
       final document = await database
           .customSelect(
@@ -1391,36 +1451,46 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
 
   Future<void> saveSettings(AppSettingsModel settings) async {
     final database = await ref.read(databaseProvider.future);
-    final nowMicros = utcMicros(DateTime.now());
+    final nowMicros = utcMicros(_nowUtc());
     var notificationJobQueued = false;
     await database.transaction(() async {
       final previous = await database
-          .customSelect('SELECT locale_mode FROM app_settings WHERE id = 1')
+          .customSelect(
+            'SELECT locale_mode, row_version FROM app_settings WHERE id = 1',
+          )
           .getSingle();
-      await database.customStatement(
+      if (previous.read<int>('row_version') != settings.rowVersion) {
+        throw const StateConflictException('设置已在其他操作中更新。');
+      }
+      final settingsChanged = await database.customUpdate(
         'UPDATE app_settings SET locale_mode = ?, font_mode = ?, '
         'text_scale_percent = ?, density = ?, default_sound_enabled = ?, '
         'default_vibration_enabled = ?, default_snooze_minutes = ?, '
         'auto_backup_enabled = ?, auto_backup_hour_local = ?, '
         'auto_backup_minute_local = ?, backup_encryption_enabled = ?, '
         'help_seen_version = ?, updated_at_utc = ?, '
-        'row_version = row_version + 1 WHERE id = 1',
-        <Object?>[
-          settings.localeMode.name,
-          settings.fontMode.name,
-          settings.textScalePercent,
-          settings.density.name,
-          settings.defaultSoundEnabled ? 1 : 0,
-          settings.defaultVibrationEnabled ? 1 : 0,
-          settings.defaultSnoozeMinutes,
-          settings.autoBackupEnabled ? 1 : 0,
-          settings.autoBackupHourLocal,
-          settings.autoBackupMinuteLocal,
-          settings.backupEncryptionEnabled ? 1 : 0,
-          settings.helpSeenVersion,
-          nowMicros,
+        'row_version = row_version + 1 WHERE id = 1 AND row_version = ?',
+        variables: <Variable<Object>>[
+          Variable.withString(settings.localeMode.name),
+          Variable.withString(settings.fontMode.name),
+          Variable.withInt(settings.textScalePercent),
+          Variable.withString(settings.density.name),
+          Variable.withBool(settings.defaultSoundEnabled),
+          Variable.withBool(settings.defaultVibrationEnabled),
+          Variable.withInt(settings.defaultSnoozeMinutes),
+          Variable.withBool(settings.autoBackupEnabled),
+          Variable.withInt(settings.autoBackupHourLocal),
+          Variable.withInt(settings.autoBackupMinuteLocal),
+          Variable.withBool(settings.backupEncryptionEnabled),
+          Variable.withInt(settings.helpSeenVersion),
+          Variable.withInt(nowMicros),
+          Variable.withInt(settings.rowVersion),
         ],
+        updates: <TableInfo<Table, Object?>>{database.appSettingsTable},
       );
+      if (settingsChanged != 1) {
+        throw const StateConflictException('设置已在其他操作中更新。');
+      }
       if (previous.read<String>('locale_mode') != settings.localeMode.name) {
         final reminders = await database
             .customSelect(
@@ -1500,6 +1570,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
             ReminderPauseReason.values,
             row.readNullable<String>('reminder_pause_reason'),
           ),
+          rowVersion: row.read<int>('row_version'),
         ),
     ];
 
@@ -1522,6 +1593,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           folderId: row.readNullable<String>('folder_id'),
           pinned: row.readNullable<int>('pinned_at_utc') != null,
           updatedAt: _fromMicros(row.read<int>('updated_at_utc'))!,
+          rowVersion: row.read<int>('row_version'),
         ),
     ];
 
@@ -1674,6 +1746,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
     required DateTime reminderAt,
     required bool soundEnabled,
     required bool vibrationEnabled,
+    required String scheduledZoneId,
     required int nowMicros,
   }) async {
     final existing = await database
@@ -1683,7 +1756,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
           variables: <Variable<Object>>[Variable.withString(taskId)],
         )
         .getSingleOrNull();
-    final id = existing?.read<String>('id') ?? _uuid.v4();
+    final id = existing?.read<String>('id') ?? _nextId();
     final revision = (existing?.read<int>('schedule_revision') ?? 0) + 1;
     final local = reminderAt.toLocal();
     final isTaskClosed = taskStatus == TaskStatus.completionPending;
@@ -1726,7 +1799,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
         id,
         taskId,
         local.toIso8601String(),
-        local.timeZoneName,
+        scheduledZoneId,
         utcMicros(reminderAt),
         soundEnabled ? 1 : 0,
         vibrationEnabled ? 1 : 0,
@@ -1832,7 +1905,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       'status, attempts, next_attempt_at_utc, created_at_utc, updated_at_utc) '
       'VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
       <Object?>[
-        _uuid.v4(),
+        _nextId(),
         kind.name,
         reminderId,
         revision,
@@ -1920,7 +1993,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       '(id, document_id, revision, reason, codec, snapshot_blob, '
       'snapshot_sha256, created_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       <Object?>[
-        _uuid.v4(),
+        _nextId(),
         documentId,
         nextRevision,
         'editorClose',
@@ -1932,7 +2005,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
     );
   }
 
-  static Future<void> _insertBlock(
+  Future<void> _insertBlock(
     DangguiDatabase database, {
     String? id,
     required String documentId,
@@ -1954,7 +2027,7 @@ final class AppStoreController extends AsyncNotifier<DangguiAppState> {
       'created_at_utc, updated_at_utc, row_version) '
       'VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
       <Object?>[
-        id ?? _uuid.v4(),
+        id ?? _nextId(),
         documentId,
         sortRank,
         type.name,
@@ -2015,18 +2088,46 @@ T? _nullableEnumByName<T extends Enum>(List<T> values, String? name) {
   return null;
 }
 
+bool _appTimeZoneDatabaseInitialized = false;
+
+({DateTime localDateTime, String zoneId}) _completionInstant(
+  DateTime instant,
+  String zoneId,
+) {
+  final normalizedZoneId = zoneId.trim();
+  try {
+    if (!_appTimeZoneDatabaseInitialized) {
+      tz_data.initializeTimeZones();
+      _appTimeZoneDatabaseInitialized = true;
+    }
+    final location = switch (normalizedZoneId) {
+      'UTC' || 'GMT' || 'Etc/UTC' => tz.UTC,
+      _ => tz.getLocation(normalizedZoneId),
+    };
+    return (
+      localDateTime: tz.TZDateTime.from(instant.toUtc(), location),
+      zoneId: normalizedZoneId,
+    );
+  } on Object {
+    return (localDateTime: instant.toUtc(), zoneId: 'Etc/UTC');
+  }
+}
+
+String _calendarDate(DateTime value) =>
+    '${value.year.toString().padLeft(4, '0')}-'
+    '${value.month.toString().padLeft(2, '0')}-'
+    '${value.day.toString().padLeft(2, '0')}';
+
+String _wallTime(DateTime value) =>
+    '${value.hour.toString().padLeft(2, '0')}:'
+    '${value.minute.toString().padLeft(2, '0')}';
+
 String? _isoDate(DateTime? value) {
   if (value == null) return null;
   final local = value.toLocal();
   return '${local.year.toString().padLeft(4, '0')}-'
       '${local.month.toString().padLeft(2, '0')}-'
       '${local.day.toString().padLeft(2, '0')}';
-}
-
-String _localTime(DateTime value) {
-  final local = value.toLocal();
-  return '${local.hour.toString().padLeft(2, '0')}:'
-      '${local.minute.toString().padLeft(2, '0')}';
 }
 
 DateTime? _parseIsoDate(String? value) {

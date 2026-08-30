@@ -177,12 +177,16 @@ orphaned 保留给导入或异常修复时无法解析来源的情况。
 
 - `manifest.json`：规范键序 JSON，含 app ID、应用版本、创建 UTC、dataset ID、数据库 Schema、
   记录数、数据库路径和数据库 SHA-256；
-- `data/danggui.sqlite`：执行 `wal_checkpoint(TRUNCATE)` 后生成的可移植 SQLite 快照。导出副本会
+- `data/danggui.sqlite`：通过 SQLite `VACUUM INTO` 生成的一致、可移植 SQLite 快照。导出副本会
   清除通知注册、平台 outbox、备份目标 locator 和密钥包装 profile，避免把设备能力带进归档；
-  事项、笔记、过往、设置、逻辑提醒、搜索投影与审计仍保留。
+  事项、笔记、过往、设置、逻辑提醒、搜索投影与审计仍保留；其中搜索投影只是缓存，恢复时
+  必须从事项、笔记和过往权威表重建，不能信任来源包中的投影。
 
-codec 拒绝额外条目、目录、符号链接、重复条目、非法 SQLite 头、manifest/数据库 SHA 不一致，
-并启用 ZIP CRC 校验。当前限制为包/数据库最多 512 MiB、manifest 256 KiB、加密头 16 KiB。
+读取包体前先以文件元数据限制为 512 MiB 并拒绝非普通文件；随后分块读取，每次追加前重复总量
+上限，并要求实际长度等于先前 stat，拒绝读取期间替换/增长。codec 在解压前手工预检 EOCD、
+central/local headers、精确的两项名称、条目数、声明展开大小、压缩方法、加密位、磁盘号、
+重叠区间和 Unix/DOS 文件类型；随后仍拒绝非法 SQLite 头、manifest/数据库 SHA 不一致并验证
+ZIP CRC。当前限制为包/数据库最多 512 MiB、manifest 256 KiB、加密头 16 KiB。
 
 ### 7.2 口令加密
 
@@ -198,17 +202,21 @@ codec 拒绝额外条目、目录、符号链接、重复条目、非法 SQLite 
 
 ### 7.3 创建流程
 
-1. 写 `backup_runs(started)`，随后进入 writing；
-2. checkpoint WAL，将主文件复制为 staging snapshot，在副本内清除设备态并再次执行
-   quick/FK/checkpoint 校验，然后生成 manifest 和包；
+1. 同一 `BackupService` 实例把 create、replace 和 merge 放入同一异步互斥队列；写
+   `backup_runs(started)`，随后进入 writing；
+2. 通过 `VACUUM INTO` 生成 staging snapshot，在副本内清除设备态并执行完整
+   `integrity_check`、`foreign_key_check` 和自包含 WAL 校验，然后生成 manifest 和包；
 3. 写同目录 `.partial` 文件，进入 verifying，回读并比较长度及 SHA-256；
 4. 原子 rename 为 `.dgbak`，审计状态置 succeeded；
-5. 任一步失败删除临时/输出文件，审计置 failed 并保存稳定错误码。
+5. 任一步失败独立、best-effort 地清除 snapshot、WAL/SHM/journal、partial 和最终输出；单个清理
+   失败不能跳过其他敏感文件或掩盖原始错误，审计置 failed 并保存稳定错误码。
 
 ### 7.4 只读 inspect 与 replace 恢复流程
 
-`inspect(file, passphrase)` 会完整执行解密、ZIP/CRC、manifest、数据库 SHA-256、SQLite
-`quick_check`、外键、schema、dataset singleton 和 manifest 记录数核对。它只打开系统临时目录中的
+`inspect(file, passphrase)` 会完整执行解密、解压前 ZIP 资源预检、ZIP CRC、manifest、数据库
+SHA-256、SQLite `integrity_check`、外键、dataset singleton 和 manifest 记录数核对；同时把
+`sqlite_schema` 中全部应用表、列/约束 SQL、显式索引、trigger 和 view 与本构建生成的精确 schema
+签名比较。仅 `user_version` 相同不足以通过。它只打开系统临时目录中的
 隔离副本，绝不读取或修改 live database；因此选择文件后可先安全展示数据集、创建时间、是否加密
 及各类记录数，再由用户决定 replace 或 merge。损坏包、错误口令和未来 schema 都在接触 live
 database 前拒绝。
@@ -216,19 +224,29 @@ database 前拒绝。
 replace 流程：
 
 1. 先解密、验证 ZIP、manifest 和数据库 SHA；只接受当前支持的 app ID 与 Schema；
-2. 写唯一 staging 文件，用独立 Drift 连接执行 `quick_check`、`foreign_key_check`、
-   `user_version`、dataset ID 和两个 singleton 检查；
-3. 在 staging 中清除来源设备的通知注册、平台任务、备份目标和密钥包装；重建提醒 outbox；
-   将被备份在进行中状态的审计标为 interruptedByRestore，并写成功 restore audit；
-4. checkpoint/关闭 staging；关闭当前数据库并清理 sidecar；
-5. 将当前主文件 rename 为带时间戳的 `.pre-restore-*` 安全副本，再把 staging 原子 rename 为
-   正式数据库；第二次 rename 失败时把安全副本回滚；
-6. 失效数据库和应用状态 provider，确保不继续使用已关闭连接。
+2. 写唯一 staging 文件，用独立 Drift 连接执行完整 `integrity_check`、`foreign_key_check`、
+   精确 schema 签名、`user_version`、dataset ID 和两个 singleton 检查；
+3. 在 staging 中清除来源设备的通知注册、平台任务、备份目标和密钥包装；从权威业务表重建
+   search_records，并重建提醒 outbox；
+   随后再次验证 schema、完整性、singleton 与 manifest 记录数，才将被备份在进行中状态的审计
+   标为 interruptedByRestore 并写成功 restore audit；
+4. 把 staging 变成自包含候选并关闭；等待 live 连接排队写结束后关闭它，再从 live 路径用新的
+   SQLite 连接执行 `VACUUM INTO`，生成并完整验证 `.pre-restore-*` 安全副本；
+5. 候选、安全副本均通过完整 integrity/FK/schema 验证后写入已 flush 的恢复 journal；同目录 rename
+   候选到 canonical live 路径，flush 后再次完整验证，成功才删除 journal；
+6. 启动时若 journal 存在，完整验证 live/candidate/safety 后保留有效 live，或从候选/安全副本恢复；
+   若无 journal，则只清理由精确 app-owned 前缀和安全 operation ID 构成的孤儿 candidate/sidecar；
+   失效数据库和应用状态 provider，确保不继续使用已关闭连接。
+
+候选的旧文件删除、复制、flush 和完整验证均处于同一失败清理边界内；journal 写入前失败会逐项
+best-effort 清 candidate/WAL/SHM/journal，任何清理错误都不能替换首个业务或 I/O 异常。来自包内容
+的格式/schema/语义拒绝使用稳定 `FormatException`；权限、磁盘满、flush、close 和 SQLite 运行时
+错误保留其原始类别，不能伪装成“备份格式错误”。
 
 ### 7.5 merge 恢复流程与冲突政策
 
-merge 在源包完成上述全部只读验证后，先 checkpoint 当前 WAL，把 live 主文件复制为
-`.pre-merge-*` 并重新执行 SQLite 完整性验证，然后写 `restore_runs(started)`。实际导入在一个
+merge 在源包完成上述全部只读验证后，以 `VACUUM INTO` 创建并完整验证 `.pre-merge-*` 安全副本，
+然后写 `restore_runs(started)`。实际导入在一个
 SQLite 事务内完成；任一实体、外键、outbox 或审计明细失败，所有导入内容、provenance 和 conflict
 一起回滚，原有用户实体始终不被 UPDATE/DELETE。
 
@@ -244,7 +262,8 @@ SQLite 事务内完成；任一实体、外键、outbox 或审计明细失败，
    task/block/part 引用；无法解析的 current block 链接标为 orphaned；
 5. 最近删除条目随 task/note/folder ID 重写；本地已经存在同一实体的 trash entry 时保留本地条目；
 6. 当前 `app_settings`、backup target/encryption profile、notification registrations 与既有 outbox
-   完全保留。导入的任务/笔记搜索投影复制，Past 搜索投影从合并后的 blocks 重建。
+   完全保留。merge 提交前删除来源或现有投影，并从合并后的权威 task/note/past 数据原子重建全部
+   search_records；重复 merge 不产生陈旧或重复搜索结果。
 
 `import_provenance(origin_dataset_id, entity_type, origin_entity_id, origin_hash)` 是幂等键。同一来源
 实体同一版本再次 merge 会跳过；来源同一实体出现新语义哈希时作为新版本导入，不覆盖先前版本。
@@ -283,8 +302,21 @@ SQLite 事务内完成；任一实体、外键、outbox 或审计明细失败，
 - 备份/恢复审计默认保留；可以按数量清理旧成功记录，但失败记录应保留到用户确认问题解决。
 - `.pre-restore-*` 是最后一道本地回滚保护。v1 不自动删除；后续清理策略必须至少保留最近一次
   成功恢复前副本，并在删除前确认当前数据库通过完整性检查。
-- 数据库启用 foreign_keys、WAL、synchronous=NORMAL、5 秒 busy timeout 和 secure_delete=FAST。
-  NORMAL 在移动端提供合理耐久性/性能平衡；关键导出文件仍使用 flush、哈希和原子 rename。
+- 数据库启用 foreign_keys、WAL、synchronous=FULL、5 秒 busy timeout 和 secure_delete=FAST。
+  关键候选、快照、journal 与导出文件显式 flush、哈希并使用同目录 rename。由于 Dart 没有父目录
+  fsync，本合同只达到 `process-crash-consistent`，不得宣称 sudden-power-loss safe；真实断电保持
+  `power-loss-unverified`。损坏 live 的主文件及 sidecar 会移入同一唯一取证前缀；逐个移动期间再次
+  崩溃可能只造成取证集合不完整，不会把未验证文件当作良好数据库，此低风险边界仍需设备验证。
+- 每次 `databaseProvider` 生命周期只在仓储获得连接前执行一次完整 `integrity_check` 和 FK 检查，
+  不在每次前后台切换重复扫描。即使普通无 journal 启动也不会把 `quick_check=ok`、但 UNIQUE 索引
+  已损坏的 canonical live 数据库交给业务写入。
+- 设备闹钟代际不新增 schema 或公开备份字段。v1.1.5 的成功 replace 审计在 `summary_json` 中写入
+  与该行合法 UUID `id` 完全相同的 `alarmGeneration`；读取端只接受这种 succeeded replace 标记，
+  v1.1.4 和任何无效/错配标记均回退到稳定的 `legacy:<dataset_id>`。replace 在候选库交换前生成新
+  代际，merge 保持当前代际；portable snapshot 会剥离标记，因此 `.dgbak` 不会把源设备代际带到
+  另一设备。journal 恢复选择旧 live 或新 candidate 时，也会自然选择对应数据库内的旧/新代际。
+- 启动先以 no-follow 规则清理系统临时目录内四个精确 app-owned 明文根，再检查 Application
+  Support 的 iOS 数据保护状态；保护策略 unavailable 不能让旧 staging 永久残留。
 - 所有备份均包含用户正文和提醒内容，应按敏感个人数据处理。日志只允许记录 run ID、阶段、
   大小和稳定错误码，不记录标题、正文、口令、密钥、完整文件路径或 manifest 内容。
 
@@ -298,9 +330,11 @@ SQLite 事务内完成；任一实体、外键、outbox 或审计明细失败，
 - 设置：乐观锁、四种语言、字号边界、稍后提醒集合、备份时分 00:00/23:59 与越界拒绝；
 - 保留：删除后第 29/30/31 天、时区变化、清理中断和文档外键顺序；
 - 备份：未加密往返、加密往返、空/短/错口令、nonce/tag/密文/ZIP/数据库篡改、额外条目、
-  超限包、写盘失败和审计状态；
-- 恢复：inspect 零 live 修改，错误 app/schema/dataset、quick/FK/记录数失败、staging 清理、replace
-  两次 rename 各自失败与回滚副本、设备态清除、未来提醒 outbox 重建和 provider 重新打开；merge
+  解压炸弹声明、符号链接/type、central/local 不一致、读取前 stat 超限、写盘失败、并发互斥、
+  全量 best-effort 清理和审计状态；
+- 恢复：inspect 零 live 修改，错误 app/schema/dataset、完整 integrity/FK/记录数失败、能骗过
+  quick_check 的索引损坏、staging 清理、WAL busy、journal/rename 前后故障、设备态清除、未来提醒
+  outbox 与权威 search_records 重建和 provider 重新打开；merge
   空库全实体、设置保留、同 ID 异 hash 不覆盖、normalized folder 复用、Past 分隔与 anchor 重映、
   provenance 重复幂等、安全副本、成功/失败审计及事务故障注入；
 - 迁移：每个已发布版本到当前版本，并在迁移后执行仓储行为测试而不只比较表结构。

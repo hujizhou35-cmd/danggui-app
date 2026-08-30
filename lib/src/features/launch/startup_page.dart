@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../application/app_store.dart';
 import '../../core/theme/theme.dart';
+import '../../services/notifications/notification_coordinator.dart';
 
 const _holdStartupForReadmeScreenshot = bool.fromEnvironment(
   'README_SCREENSHOT_MODE',
@@ -149,6 +150,7 @@ class _StartupPageState extends ConsumerState<StartupPage> {
   void _queueNavigationWhenReady(AsyncValue<Object?> bootstrap) {
     if (_holdStartupForReadmeScreenshot ||
         _navigationQueued ||
+        ref.watch(notificationOpenIntentProvider) != null ||
         !_minimumDisplayElapsed ||
         bootstrap.isLoading ||
         bootstrap.hasError ||
@@ -303,8 +305,10 @@ class _BrandSeal extends StatelessWidget {
   Widget build(BuildContext context) {
     final terracotta = context.dangguiTheme.terra;
     return Semantics(
-      label: '当归印章',
+      key: const ValueKey<String>('startup-brand-seal'),
+      label: AppLocalizations.of(context).brandSeal,
       image: true,
+      excludeSemantics: true,
       child: Container(
         width: 25,
         height: 25,

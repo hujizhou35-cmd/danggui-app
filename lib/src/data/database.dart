@@ -533,7 +533,9 @@ class DangguiDatabase extends _$DangguiDatabase {
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
       await customStatement('PRAGMA journal_mode = WAL');
-      await customStatement('PRAGMA synchronous = NORMAL');
+      // User-authored local-only data favors power-loss durability over the
+      // small write-throughput gain of WAL synchronous=NORMAL.
+      await customStatement('PRAGMA synchronous = FULL');
       await customStatement('PRAGMA busy_timeout = 5000');
       await customStatement('PRAGMA secure_delete = FAST');
       if (details.wasCreated) {
@@ -622,6 +624,17 @@ class DangguiDatabase extends _$DangguiDatabase {
 
   Future<List<String>> quickCheck() async {
     final rows = await customSelect('PRAGMA quick_check').get();
+    return rows.map((row) => row.data.values.first.toString()).toList();
+  }
+
+  /// Performs SQLite's full b-tree, index, and uniqueness validation.
+  ///
+  /// [quickCheck] deliberately omits index/content cross-checks. It remains
+  /// suitable for the ordinary no-journal startup fast path, while every
+  /// backup, restore, candidate, safety-copy, and recovery decision must use
+  /// this full check instead.
+  Future<List<String>> integrityCheck() async {
+    final rows = await customSelect('PRAGMA integrity_check').get();
     return rows.map((row) => row.data.values.first.toString()).toList();
   }
 

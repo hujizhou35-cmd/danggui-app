@@ -88,6 +88,7 @@ enum AutomaticBackupStatus {
   notDue,
   alreadyCompleted,
   skippedMissingEncryptionPassphrase,
+  skippedEncryptionKeyUnavailable,
 }
 
 final class AutomaticBackupResult {
@@ -99,6 +100,7 @@ final class AutomaticBackupResult {
     required this.retentionCompleted,
     this.backup,
     this.retentionErrorCode,
+    this.keyErrorCode,
   });
 
   final AutomaticBackupStatus status;
@@ -111,6 +113,7 @@ final class AutomaticBackupResult {
   final int removedOldBackups;
   final bool retentionCompleted;
   final String? retentionErrorCode;
+  final String? keyErrorCode;
 }
 
 /// Best-effort daily backup policy for startup and foreground reconciliation.
@@ -239,7 +242,17 @@ final class AutomaticBackupCoordinator {
 
     String? passphrase;
     if (settings.backupEncryptionEnabled) {
-      passphrase = await readPassphrase();
+      try {
+        passphrase = await readPassphrase();
+      } on Object catch (error) {
+        return _resultWithRetention(
+          directory: directory,
+          status: AutomaticBackupStatus.skippedEncryptionKeyUnavailable,
+          trigger: trigger,
+          coveredLocalDate: lastCovered,
+          keyErrorCode: _stableErrorCode(error),
+        );
+      }
       if (passphrase == null || passphrase.length < 8) {
         return _resultWithRetention(
           directory: directory,
@@ -276,6 +289,7 @@ final class AutomaticBackupCoordinator {
     required AutomaticBackupTrigger trigger,
     required String? coveredLocalDate,
     BackupExport? backup,
+    String? keyErrorCode,
   }) async {
     final retention = await _rotateSafely(directory);
     return AutomaticBackupResult(
@@ -286,6 +300,7 @@ final class AutomaticBackupCoordinator {
       removedOldBackups: retention.removed,
       retentionCompleted: retention.errorCode == null,
       retentionErrorCode: retention.errorCode,
+      keyErrorCode: keyErrorCode,
     );
   }
 

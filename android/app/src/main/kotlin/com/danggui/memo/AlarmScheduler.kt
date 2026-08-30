@@ -15,8 +15,41 @@ internal class AlarmScheduler(context: Context) {
     fun canScheduleExactAlarms(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
 
+    fun activateDeviceGeneration(deviceGeneration: String?): AlarmActionOutcome =
+        synchronized(schedulerLock) {
+            val activation =
+                store.activateDeviceGeneration(deviceGeneration)
+                    ?: return AlarmActionOutcome(
+                        AlarmScheduleResult.DURABLE_STORE_WRITE_FAILED,
+                        0,
+                    )
+            val retiredRinging =
+                activation.retiredRecords.any { it.state == AlarmRecord.STATE_RINGING }
+            activation.retiredRecords.forEach { record ->
+                runCatching {
+                    cancelInstalledSystemAlarm(record)
+                    if (record.deviceGeneration == null) {
+                        cancelLegacySystemAlarm(record.reminderId)
+                    }
+                }
+            }
+            if (activation.changed) runCatching { restoreActivatedGeneration() }
+            if (retiredRinging || activation.changed) {
+                runCatching { AlarmActions.refreshSession(context, store) }
+            }
+            // The active-generation fence is the safety boundary. Platform
+            // cancellation is idempotent best effort and is retried from the
+            // preserved inactive mirror on every activation/reconciliation.
+            AlarmActionOutcome(AlarmScheduleResult.SUCCESS, activation.retiredRecords.size)
+        }
+
     fun schedule(record: AlarmRecord): AlarmScheduleResult = synchronized(schedulerLock) {
-        if (record.triggerAtEpochMs <= System.currentTimeMillis()) {
+        store.flushTerminalEvents()
+        if (!store.isActiveDeviceGeneration(record.deviceGeneration)) {
+            return AlarmScheduleResult.INACTIVE_DEVICE_GENERATION
+        }
+        val now = System.currentTimeMillis()
+        if (record.triggerAtEpochMs < now - AlarmDeliveryPolicy.MISSED_ALARM_GRACE_MILLIS) {
             return AlarmScheduleResult.INVALID_TRIGGER_TIME
         }
 
@@ -26,7 +59,11 @@ internal class AlarmScheduler(context: Context) {
             if (!canScheduleExactAlarms()) {
                 return AlarmScheduleResult.EXACT_ALARM_PERMISSION_REQUIRED
             }
-            val installed = installSystemAlarm(scheduledRecord)
+            val installed =
+                installSystemAlarm(
+                    scheduledRecord,
+                    triggerAtEpochMs = maxOf(scheduledRecord.triggerAtEpochMs, now + 1_000L),
+                )
             if (installed) cancelLegacySystemAlarm(scheduledRecord.reminderId)
             return if (installed) {
                 AlarmScheduleResult.SUCCESS
@@ -36,20 +73,54 @@ internal class AlarmScheduler(context: Context) {
                 AlarmScheduleResult.SYSTEM_ALARM_INSTALL_FAILED
             }
         }
-        if (previous != null && scheduledRecord.scheduleRevision <= previous.scheduleRevision) {
+        if (
+            previous != null &&
+                !AlarmIdentityPolicy.canReplace(
+                    currentRevision = previous.scheduleRevision,
+                    currentGeneration = previous.deviceGeneration,
+                    candidateRevision = scheduledRecord.scheduleRevision,
+                    candidateGeneration = scheduledRecord.deviceGeneration,
+                )
+        ) {
             return AlarmScheduleResult.STALE_SCHEDULE_REVISION
         }
 
-        val pending = scheduledRecord.copy(state = AlarmRecord.STATE_PENDING)
-        val alreadyStaged = store.get(record.reminderId, record.scheduleRevision) == pending
+        val transitionEvents = replacementEvents(previous, scheduledRecord)
+        val reservations = transitionEvents.filter(AlarmEventRetentionPolicy::isBusinessEvent)
+        val pendingTemplate =
+            scheduledRecord.copy(
+                state = AlarmRecord.STATE_PENDING,
+                reservedBusinessEvents = reservations,
+            )
+        val storedRevision =
+            store.get(
+                record.reminderId,
+                record.scheduleRevision,
+                record.deviceGeneration,
+            )
+        val alreadyStaged =
+            storedRevision?.state == AlarmRecord.STATE_PENDING &&
+                normalizedScheduled(storedRevision) == scheduledRecord
+        val pending = if (alreadyStaged) requireNotNull(storedRevision) else pendingTemplate
         val staged = alreadyStaged ||
             if (previous == null) {
                 store.stageInitial(scheduledRecord)
             } else {
-                store.stageReplacement(scheduledRecord) == previous
+                store.stageReplacement(scheduledRecord, reservations) == previous
             }
         if (!staged) {
-            return if ((store.latestRevision(record.reminderId) ?: Long.MIN_VALUE) >= record.scheduleRevision) {
+            return if (!store.hasBusinessEventCapacity(reservations)) {
+                AlarmScheduleResult.BUSINESS_EVENT_CAPACITY_EXCEEDED
+            } else if (
+                store.get(record.reminderId)?.let { current ->
+                    !AlarmIdentityPolicy.canReplace(
+                        currentRevision = current.scheduleRevision,
+                        currentGeneration = current.deviceGeneration,
+                        candidateRevision = record.scheduleRevision,
+                        candidateGeneration = record.deviceGeneration,
+                    )
+                } == true
+            ) {
                 AlarmScheduleResult.STALE_SCHEDULE_REVISION
             } else {
                 AlarmScheduleResult.DURABLE_STORE_WRITE_FAILED
@@ -59,7 +130,13 @@ internal class AlarmScheduler(context: Context) {
             return AlarmScheduleResult.EXACT_ALARM_PERMISSION_REQUIRED
         }
 
-        if (!installSystemAlarm(scheduledRecord)) {
+        if (
+            !installSystemAlarm(
+                scheduledRecord,
+                triggerAtEpochMs =
+                    maxOf(scheduledRecord.triggerAtEpochMs, System.currentTimeMillis() + 1_000L),
+            )
+        ) {
             return if (!canScheduleExactAlarms()) {
                 AlarmScheduleResult.EXACT_ALARM_PERMISSION_REQUIRED
             } else {
@@ -67,17 +144,24 @@ internal class AlarmScheduler(context: Context) {
             }
         }
 
-        val otherPending =
-            store.pending().filter {
-                it.reminderId == scheduledRecord.reminderId && it != pending
-            }
-        if (!store.commitPendingReplacement(pending, previous, replacementEvents(previous, scheduledRecord))) {
+        val retirementTargets =
+            store.recordsForReminder(scheduledRecord.reminderId).filter { it != pending }
+        if (
+            !store.commitPendingReplacement(
+                pending,
+                previous,
+                pendingCommitEvents(pending, previous, scheduledRecord),
+            )
+        ) {
             cancelInstalledSystemAlarm(scheduledRecord)
-            return AlarmScheduleResult.DURABLE_COMMIT_FAILED
+            return if (!store.hasBusinessEventCapacity(pending.reservedBusinessEvents)) {
+                AlarmScheduleResult.BUSINESS_EVENT_CAPACITY_EXCEEDED
+            } else {
+                AlarmScheduleResult.DURABLE_COMMIT_FAILED
+            }
         }
 
-        previous?.let { cancelInstalledSystemAlarm(it) }
-        otherPending.forEach { cancelInstalledSystemAlarm(it) }
+        retirementTargets.forEach { cancelInstalledSystemAlarm(it) }
         cancelLegacySystemAlarm(scheduledRecord.reminderId)
         if (previous?.state == AlarmRecord.STATE_RINGING) {
             AlarmActions.refreshSession(context, store)
@@ -90,6 +174,12 @@ internal class AlarmScheduler(context: Context) {
         snoozedRecord: AlarmRecord,
         snoozedEvent: AlarmEvent,
     ): AlarmScheduleResult = synchronized(schedulerLock) {
+        if (
+            !store.isActiveDeviceGeneration(ringingRecord.deviceGeneration) ||
+                !store.isActiveDeviceGeneration(snoozedRecord.deviceGeneration)
+        ) {
+            return AlarmScheduleResult.INACTIVE_DEVICE_GENERATION
+        }
         if (snoozedRecord.triggerAtEpochMs <= System.currentTimeMillis()) {
             return AlarmScheduleResult.INVALID_TRIGGER_TIME
         }
@@ -103,17 +193,40 @@ internal class AlarmScheduler(context: Context) {
             return AlarmScheduleResult.STALE_SCHEDULE_REVISION
         }
 
-        val pending =
+        val reservations = listOf(snoozedEvent)
+        val pendingTemplate =
             snoozedRecord.copy(
                 state = AlarmRecord.STATE_PENDING,
                 sessionId = null,
+                legacySessionId = null,
                 ringStartedElapsedRealtimeMs = null,
+                reservedBusinessEvents = reservations,
+            )
+        val storedRevision =
+            store.get(
+                snoozedRecord.reminderId,
+                snoozedRecord.scheduleRevision,
+                snoozedRecord.deviceGeneration,
             )
         val alreadyStaged =
-            store.get(snoozedRecord.reminderId, snoozedRecord.scheduleRevision) == pending
-        if (!alreadyStaged && store.stageReplacement(snoozedRecord) != ringingRecord) {
-            return if ((store.latestRevision(snoozedRecord.reminderId) ?: Long.MIN_VALUE) >=
-                snoozedRecord.scheduleRevision
+            storedRevision?.state == AlarmRecord.STATE_PENDING &&
+                normalizedScheduled(storedRevision) == normalizedScheduled(snoozedRecord)
+        val pending = if (alreadyStaged) requireNotNull(storedRevision) else pendingTemplate
+        if (
+            !alreadyStaged &&
+                store.stageReplacement(snoozedRecord, reservations) != ringingRecord
+        ) {
+            return if (!store.hasBusinessEventCapacity(reservations)) {
+                AlarmScheduleResult.BUSINESS_EVENT_CAPACITY_EXCEEDED
+            } else if (
+                store.get(snoozedRecord.reminderId)?.let { current ->
+                    !AlarmIdentityPolicy.canReplace(
+                        currentRevision = current.scheduleRevision,
+                        currentGeneration = current.deviceGeneration,
+                        candidateRevision = snoozedRecord.scheduleRevision,
+                        candidateGeneration = snoozedRecord.deviceGeneration,
+                    )
+                } == true
             ) {
                 AlarmScheduleResult.STALE_SCHEDULE_REVISION
             } else {
@@ -132,16 +245,19 @@ internal class AlarmScheduler(context: Context) {
             }
         }
 
-        val registered = registeredEvent(scheduled)
         if (
             !store.commitPendingReplacement(
                 pending = pending,
                 expectedPrevious = ringingRecord,
-                eventsToAppend = listOf(snoozedEvent, registered),
+                eventsToAppend = pendingCommitEvents(pending, ringingRecord, scheduled),
             )
         ) {
             cancelInstalledSystemAlarm(scheduled)
-            return AlarmScheduleResult.DURABLE_COMMIT_FAILED
+            return if (!store.hasBusinessEventCapacity(pending.reservedBusinessEvents)) {
+                AlarmScheduleResult.BUSINESS_EVENT_CAPACITY_EXCEEDED
+            } else {
+                AlarmScheduleResult.DURABLE_COMMIT_FAILED
+            }
         }
 
         cancelInstalledSystemAlarm(ringingRecord)
@@ -149,14 +265,24 @@ internal class AlarmScheduler(context: Context) {
         AlarmScheduleResult.SUCCESS
     }
 
-    fun cancel(reminderId: String): AlarmActionOutcome = synchronized(schedulerLock) {
+    fun cancel(
+        reminderId: String,
+        deviceGeneration: String? = null,
+    ): AlarmActionOutcome = synchronized(schedulerLock) {
+        // A delayed cancel from a database image that no longer owns native
+        // state is an idempotent no-op. It must not resolve by reminder ID into
+        // the currently active restored database generation.
+        if (!store.isActiveDeviceGeneration(deviceGeneration)) {
+            return AlarmActionOutcome(AlarmScheduleResult.SUCCESS, 0)
+        }
         val targets =
-            store.stageCancellation(reminderId)
+            store.stageCancellation(reminderId, deviceGeneration)
                 ?: return AlarmActionOutcome(AlarmScheduleResult.DURABLE_STORE_WRITE_FAILED, 0)
         val installedCancelled = targets.map(::cancelInstalledSystemAlarm).all { it }
         val legacyCancelled = cancelLegacySystemAlarm(reminderId)
         val systemCancelled = installedCancelled && legacyCancelled
-        val finalized = systemCancelled && store.finalizeCancellation(reminderId)
+        val finalized =
+            systemCancelled && store.finalizeCancellation(reminderId, deviceGeneration)
         val durableState =
             AlarmTransactionPolicy.afterCancelAttempt(
                 systemCancelSucceeded = systemCancelled,
@@ -181,13 +307,29 @@ internal class AlarmScheduler(context: Context) {
 
     /** Reinstalls durable alarms after boot, clock, timezone, permission, or package changes. */
     fun rescheduleAll(): Unit = synchronized(schedulerLock) {
+        // Reboot/package recovery retries any exact identities whose platform
+        // cancellation was interrupted after an activation handoff.
+        if (store.canRecoverActiveDeviceGeneration()) {
+            activateDeviceGeneration(store.activeDeviceGeneration())
+        }
+        store.flushTerminalEvents()
         recoverCancellationTombstones()
         reconcileExpiredStoredAlarms()
         val now = System.currentTimeMillis()
         recoverPendingTransactions(now)
         if (!canScheduleExactAlarms()) return
+        installScheduledRecords(now)
+    }
+
+    private fun installScheduledRecords(now: Long) {
         store.scheduled().forEach { record ->
-            if (store.get(record.reminderId, record.scheduleRevision) != record) return@forEach
+            if (
+                store.get(
+                    record.reminderId,
+                    record.scheduleRevision,
+                    record.deviceGeneration,
+                ) != record
+            ) return@forEach
             val installed =
                 installSystemAlarm(
                     record,
@@ -199,6 +341,7 @@ internal class AlarmScheduler(context: Context) {
                         reminderId = record.reminderId,
                         taskId = record.taskId,
                         scheduleRevision = record.scheduleRevision,
+                        deviceGeneration = record.deviceGeneration,
                         type = "error",
                         detailCode = "system_alarm_install_failed",
                     ),
@@ -207,8 +350,22 @@ internal class AlarmScheduler(context: Context) {
         }
     }
 
+    private fun restoreActivatedGeneration() {
+        val now = System.currentTimeMillis()
+        // Restored ringing mirrors were terminalized atomically with the
+        // active-generation fence. Only future scheduled routes are rearmed.
+        store.flushTerminalEvents()
+        reconcileExpiredStoredAlarms(now)
+        recoverPendingTransactions(now)
+        if (canScheduleExactAlarms()) installScheduledRecords(now)
+    }
+
     fun reconcileStoredAlarms(now: Long = System.currentTimeMillis()): Unit =
         synchronized(schedulerLock) {
+            if (store.canRecoverActiveDeviceGeneration()) {
+                activateDeviceGeneration(store.activeDeviceGeneration())
+            }
+            store.flushTerminalEvents()
             recoverCancellationTombstones()
             reconcileExpiredStoredAlarms(now)
             recoverPendingTransactions(now)
@@ -216,11 +373,14 @@ internal class AlarmScheduler(context: Context) {
 
     private fun recoverCancellationTombstones() {
         store.cancellationPending()
-            .groupBy(AlarmRecord::reminderId)
-            .forEach { (reminderId, records) ->
+            .groupBy { it.reminderId to it.deviceGeneration }
+            .forEach { (identity, records) ->
+                val (reminderId, deviceGeneration) = identity
                 val installedCancelled = records.map(::cancelInstalledSystemAlarm).all { it }
                 val legacyCancelled = cancelLegacySystemAlarm(reminderId)
-                if (installedCancelled && legacyCancelled) store.finalizeCancellation(reminderId)
+                if (installedCancelled && legacyCancelled) {
+                    store.finalizeCancellation(reminderId, deviceGeneration)
+                }
             }
     }
 
@@ -245,7 +405,11 @@ internal class AlarmScheduler(context: Context) {
         store.pending()
             .groupBy(AlarmRecord::reminderId)
             .forEach { (reminderId, pendingRecords) ->
-                val pending = pendingRecords.maxByOrNull(AlarmRecord::scheduleRevision) ?: return@forEach
+                val highestRevision =
+                    pendingRecords.maxOfOrNull(AlarmRecord::scheduleRevision) ?: return@forEach
+                val pending =
+                    pendingRecords.lastOrNull { it.scheduleRevision == highestRevision }
+                        ?: return@forEach
                 when (
                     AlarmTransactionPolicy.recoveryDecision(
                         triggerAtEpochMs = pending.triggerAtEpochMs,
@@ -262,7 +426,15 @@ internal class AlarmScheduler(context: Context) {
                     AlarmRecoveryDecision.INSTALL -> Unit
                 }
                 val previous = store.get(reminderId)
-                if (previous != null && pending.scheduleRevision <= previous.scheduleRevision) {
+                if (
+                    previous != null &&
+                        !AlarmIdentityPolicy.canReplace(
+                            currentRevision = previous.scheduleRevision,
+                            currentGeneration = previous.deviceGeneration,
+                            candidateRevision = pending.scheduleRevision,
+                            candidateGeneration = pending.deviceGeneration,
+                        )
+                ) {
                     cancelInstalledSystemAlarm(pending)
                     store.rollbackPending(pending)
                     return@forEach
@@ -279,27 +451,36 @@ internal class AlarmScheduler(context: Context) {
                             reminderId = pending.reminderId,
                             taskId = pending.taskId,
                             scheduleRevision = pending.scheduleRevision,
+                            deviceGeneration = pending.deviceGeneration,
                             type = "error",
                             detailCode = "pending_alarm_install_failed",
                         ),
                     )
                     return@forEach
                 }
-                if (!store.commitPendingReplacement(pending, previous, replacementEvents(previous, scheduled))) {
+                val retirementTargets =
+                    store.recordsForReminder(reminderId).filter { it != pending }
+                if (
+                    !store.commitPendingReplacement(
+                        pending,
+                        previous,
+                        pendingCommitEvents(pending, previous, scheduled),
+                    )
+                ) {
                     cancelInstalledSystemAlarm(scheduled)
                     store.appendEvent(
                         AlarmEvent(
                             reminderId = pending.reminderId,
                             taskId = pending.taskId,
                             scheduleRevision = pending.scheduleRevision,
+                            deviceGeneration = pending.deviceGeneration,
                             type = "error",
                             detailCode = "pending_alarm_commit_failed",
                         ),
                     )
                     return@forEach
                 }
-                previous?.let { cancelInstalledSystemAlarm(it) }
-                pendingRecords.filterNot { it == pending }.forEach { cancelInstalledSystemAlarm(it) }
+                retirementTargets.forEach { cancelInstalledSystemAlarm(it) }
                 cancelLegacySystemAlarm(reminderId)
                 refreshRingingSession = refreshRingingSession || previous?.state == AlarmRecord.STATE_RINGING
             }
@@ -310,8 +491,26 @@ internal class AlarmScheduler(context: Context) {
         record.copy(
             state = AlarmRecord.STATE_SCHEDULED,
             sessionId = null,
+            legacySessionId = null,
             ringStartedElapsedRealtimeMs = null,
+            reservedBusinessEvents = emptyList(),
         )
+
+    /**
+     * v1.1.5 pending records carry their business event reservation. Recovery
+     * appends that exact durable event, preserving its event/session identity.
+     * Older pending records have no reservation and keep the v1.1.4 fallback.
+     */
+    private fun pendingCommitEvents(
+        pending: AlarmRecord,
+        previous: AlarmRecord?,
+        scheduled: AlarmRecord,
+    ): List<AlarmEvent> =
+        if (pending.reservedBusinessEvents.isEmpty()) {
+            replacementEvents(previous, scheduled)
+        } else {
+            listOf(registeredEvent(scheduled))
+        }
 
     private fun replacementEvents(
         previous: AlarmRecord?,
@@ -324,6 +523,7 @@ internal class AlarmScheduler(context: Context) {
                         reminderId = previous.reminderId,
                         taskId = previous.taskId,
                         scheduleRevision = previous.scheduleRevision,
+                        deviceGeneration = previous.deviceGeneration,
                         type = "stopped",
                         sessionId = previous.sessionId,
                         detailCode = "replaced_by_schedule",
@@ -338,6 +538,7 @@ internal class AlarmScheduler(context: Context) {
             reminderId = record.reminderId,
             taskId = record.taskId,
             scheduleRevision = record.scheduleRevision,
+            deviceGeneration = record.deviceGeneration,
             type = "registered",
             nextTriggerAtEpochMs = record.triggerAtEpochMs,
         )
@@ -375,7 +576,12 @@ internal class AlarmScheduler(context: Context) {
 
     private fun alarmDeliveryPendingIntent(record: AlarmRecord): PendingIntent {
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        val identityUri = alarmIdentityUri(record.reminderId, record.scheduleRevision)
+        val identityUri =
+            alarmIdentityUri(
+                record.reminderId,
+                record.scheduleRevision,
+                record.deviceGeneration,
+            )
         return when (AlarmDeliveryPolicy.dispatchRouteForSdk(Build.VERSION.SDK_INT)) {
             AlarmDispatchRoute.WAKEFUL_RECEIVER ->
                 PendingIntent.getBroadcast(
@@ -386,6 +592,9 @@ internal class AlarmScheduler(context: Context) {
                         data = identityUri
                         putExtra(EXTRA_REMINDER_ID, record.reminderId)
                         putExtra(EXTRA_SCHEDULE_REVISION, record.scheduleRevision)
+                        record.deviceGeneration?.let {
+                            putExtra(EXTRA_DEVICE_GENERATION, it)
+                        }
                     },
                     flags,
                 )
@@ -399,6 +608,9 @@ internal class AlarmScheduler(context: Context) {
                             data = identityUri
                             putExtra(EXTRA_REMINDER_ID, record.reminderId)
                             putExtra(EXTRA_SCHEDULE_REVISION, record.scheduleRevision)
+                            record.deviceGeneration?.let {
+                                putExtra(EXTRA_DEVICE_GENERATION, it)
+                            }
                         },
                         flags,
                     )
@@ -437,16 +649,22 @@ internal class AlarmScheduler(context: Context) {
         const val ACTION_SHOW_ALARMS = "com.danggui.memo.action.SHOW_ALARMS"
         const val EXTRA_REMINDER_ID = "reminderId"
         const val EXTRA_SCHEDULE_REVISION = "scheduleRevision"
+        const val EXTRA_DEVICE_GENERATION = "deviceGeneration"
         private const val FIRE_ALARM_REQUEST_CODE = 7101
         private const val SHOW_ALARM_REQUEST_CODE = 7102
         private val schedulerLock = Any()
 
-        internal fun alarmIdentityUri(reminderId: String, scheduleRevision: Long): Uri =
+        internal fun alarmIdentityUri(
+            reminderId: String,
+            scheduleRevision: Long,
+            deviceGeneration: String? = null,
+        ): Uri =
             Uri.Builder()
                 .scheme("danggui")
                 .authority("alarm")
                 .appendPath(reminderId)
                 .appendPath(scheduleRevision.toString())
+                .apply { deviceGeneration?.let { appendPath(it) } }
                 .build()
     }
 }

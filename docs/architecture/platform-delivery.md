@@ -1,13 +1,13 @@
 # 平台、签名与交付架构
 
-> v1.1.4 以[独立公开 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.4)交付，仍不是稳定版。本页定义当前产物合同、源配置事实和仍待完成的实体机门禁。实时状态见 [v1.1.4 发布检查表](../release/v1.1.4-release-checklist.md)；既有 v1.1.3、v1.1.2、v1.1.0 与 v1.0.0 的标签、Release、附件和历史证据继续保留。
+> v1.1.5 以[独立公开 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5)交付，仍不是稳定版。本页定义当前产物合同、源配置事实和仍待完成的实体机门禁。实时状态见 [v1.1.5 发布检查表](../release/v1.1.5-release-checklist.md)；v1.1.4 及更早标签、Release、附件和历史证据继续保留。
 
 闹钟身份、两阶段替换、15 分钟窗口、能力等级和诊断字段以[闹钟投递合同](alarm-delivery-contract.md)为准。
 
 ## 平台不变量
 
 - Android application ID、namespace 与 Kotlin 包均为 `com.danggui.memo`。
-- iOS Bundle ID 为 `com.danggui.memo`，测试 Bundle ID 为 `com.danggui.memo.RunnerTests`。
+- iOS Bundle ID 为 `com.danggui.memo`，测试 Bundle ID 为 `com.danggui.memo.RunnerTests` 与 `com.danggui.memo.RunnerUITests`。
 - Android 最低 API 24，compile/target API 36；iOS 最低版本 15，仅支持手机竖屏。
 - 所有 Android 变体都不声明 `android.permission.INTERNET`；CI 会解析最终 APK 并阻止包含 INTERNET 的产物。
 - 应用禁用 Android 系统云备份与设备迁移，避免本地数据库被系统服务上传；跨设备迁移只走应用内、用户主动选择的 `.dgbak` 流程。
@@ -27,15 +27,15 @@ Android 主清单只包含以下八项经审计权限：
 - `WAKE_LOCK`：闹钟到点时短暂唤醒并维持必要处理。
 - `FOREGROUND_SERVICE` 与 `FOREGROUND_SERVICE_MEDIA_PLAYBACK`：仅在闹钟正在响铃时运行媒体播放前台服务。
 
-原生 `AlarmReceiver`、`AlarmActionReceiver`、`AlarmRescheduleReceiver`、`AlarmRingingService` 与 `AlarmActivity` 均不导出；插件的 `ScheduledNotificationReceiver`、`ScheduledNotificationBootReceiver` 和 `ActionBroadcastReceiver` 也全部 `exported=false`。v1.1.4 在 Android 8+ 让 AlarmManager PendingIntent 直接进入 `AlarmRingingService`；Android 7/7.1 则按平台的广播闹钟合同进入 `AlarmReceiver`，由 20 秒有界唤醒锁保护到 `startService` 完成，服务随后立即取得自己的有界唤醒锁。Receiver 同时承接 v1.1.3 升级兼容。Android 无法可靠查询某个 PendingIntent 是否仍在 AlarmManager 的真实队列，因此每个新进程首次协调都会以业务数据库为权威，仅幂等重装未来提醒；已经到点的提醒不因打开应用而补响。`AlarmRescheduleReceiver` 在重启、应用升级、系统时间/时区及精确权限状态变化后差异恢复未来闹钟。小米、华为、荣耀、OPPO、一加、vivo、iQOO 和三星的后台/自启动页面只作为用户可操作入口，应用不会自行改变厂商策略。
+原生 `AlarmReceiver`、`AlarmActionReceiver`、`AlarmRescheduleReceiver`、`AlarmRingingService` 与 `AlarmActivity` 均不导出；插件的 `ScheduledNotificationReceiver`、`ScheduledNotificationBootReceiver` 和 `ActionBroadcastReceiver` 也全部 `exported=false`。自 v1.1.4 起，Android 8+ 的 AlarmManager PendingIntent 直接进入 `AlarmRingingService`；Android 7/7.1 则按平台的广播闹钟合同进入 `AlarmReceiver`，由 20 秒有界唤醒锁保护到 `startService` 完成，服务随后立即取得自己的有界唤醒锁。Receiver 同时承接 v1.1.3 升级兼容。Android 无法可靠查询某个 PendingIntent 是否仍在 AlarmManager 的真实队列，因此每个新进程首次协调都会以业务数据库为权威，仅幂等重装未来提醒；已经到点的提醒不因打开应用而补响。`AlarmRescheduleReceiver` 在重启、应用升级、系统时间/时区及精确权限状态变化后差异恢复未来闹钟。小米、华为、荣耀、OPPO、一加、vivo、iQOO 和三星的后台/自启动页面只作为用户可操作入口，应用不会自行改变厂商策略。
 
 Android 启用 core library desugaring，并保留 `ic_stat_danggui` 通知小图标。普通通知仍由按声音/振动组合版本化的频道承载；原生响铃频道本身静音，实际声音通过 `USAGE_ALARM`/闹钟音频流播放，避免重复提示音。应用不声明 INTERNET、`USE_EXACT_ALARM` 或勿扰政策访问。
 
-iOS 的 `AppDelegate` 同时接入 `UNUserNotificationCenter` 与原生提醒桥。iOS 26+ 的有声提醒使用 AlarmKit，并以 `NSAlarmKitUsageDescription` 发起系统授权；iOS 15–25 以及未获 AlarmKit 授权的兼容路径使用 Time Sensitive 本地通知。项目唯一 entitlement 是 `com.apple.developer.usernotifications.time-sensitive`，不申请 Critical Alerts、远程推送或联网后台模式。通知/AlarmKit 授权只在用户明确开启未来提醒或在设置页操作时由应用发起，不在首次启动静默或突兀索取。
+iOS 的 `AppDelegate` 同时接入 `UNUserNotificationCenter` 与原生提醒桥。iOS 26+ 的有声提醒使用 AlarmKit，并以 `NSAlarmKitUsageDescription` 发起系统授权；iOS 15–25 以及未获 AlarmKit 授权的兼容路径使用 Time Sensitive 本地通知。项目唯一 entitlement 是 `com.apple.developer.usernotifications.time-sensitive`，不申请 Critical Alerts、远程推送或联网后台模式。通知/AlarmKit 授权只在用户明确开启未来提醒或在设置页操作时由应用发起，不在首次启动静默或突兀索取。v1.1.5 将两条动作路径都绑定 reminder/revision/session，保存 canonical IANA 时区，并把原生镜像、事务和诊断放在排除 iCloud 备份且受显式文件保护的 Application Support 目录。
 
 ## 长内容与反馈交互
 
-v1.1.3 引入的可拖动快速滚动条与有限时长 SnackBar 在 v1.1.4 保持不变；发布门禁继续运行组件测试和金图回归。
+v1.1.3 引入的可拖动快速滚动条与有限时长 SnackBar 在 v1.1.5 保持不变；发布门禁继续运行组件测试和金图回归。
 
 ## Android 签名决策
 
@@ -96,10 +96,10 @@ debug 回退包。仓库另以服务端 tag ruleset 限制 `v*` 的创建、更�
 
 CI 构建产出：
 
-- 从 `pubspec.yaml` 的 `1.1.4+5` 派生的通用 APK/AAB（versionCode `5`）。
-- `armeabi-v7a`、`arm64-v8a`、`x86_64` 分架构 APK（versionCode 分别为 `1005`、`2005`、`4005`）。
+- 从 `pubspec.yaml` 的 `1.1.5+6` 派生的通用 APK/AAB（versionCode `6`）。
+- `armeabi-v7a`、`arm64-v8a`、`x86_64` 分架构 APK（versionCode 分别为 `1006`、`2006`、`4006`）。
 - Android 构建内部的 `SHA256SUMS`、`SIGNING_MODE.txt`、`SIGNING_CERTIFICATE.txt`、`SIGNING_CERTIFICATE_SHA256.txt` 和工具链记录。
-- `danggui-ios-source-v1.1.4.zip`：由干净标签提交确定性打包的完整已跟踪 Flutter 跨平台源码、iOS/Xcode 工程、锁定依赖、资源、四语本地化、测试、许可证与构建说明。
+- `danggui-ios-source-v1.1.5.zip`：由干净标签提交确定性打包的完整已跟踪 Flutter 跨平台源码、iOS/Xcode 工程、锁定依赖、资源、四语本地化、测试、许可证与构建说明。
 - macOS 上的 unsigned `Runner.app` 压缩包，仅作为 iOS 源码可构建证据，不是 IPA，不能安装到普通 iPhone。
 
 CI Artifact 只用于构建审计和维护者验收，不自动等同于公开正式包。公开 Release 顶层采用严格的四文件合同：
@@ -111,7 +111,7 @@ CI Artifact 只用于构建审计和维护者验收，不自动等同于公开�
 
 签名证书 SHA-256 动态渲染在中英双语 Release 说明中，不再作为单独顶层附件。发布说明由 `docs/release/notes/v{version}.md` 提供经审阅的版本事实，必须包含亮点、下载、校验、已知限制和完整版本比较；工作流只替换证书指纹占位符，不从提交信息臆造功能描述。
 
-`v*` 受保护标签必须等待 Android、API 24、API 36 与 unsigned iOS 四项作业全绿，随后发布作业从同一 run 下载产物、先验证 Android/iOS 上游校验和，再组装并复核顶层及开发者归档的精确白名单。刷新已有 Pre-release 时先成功上传/覆盖新合同文件，再删除旧合同遗留附件，最后回读并比较完整名称集合与公开 `SHA256SUMS`；已经人工提升为 Stable 的 Release 始终拒绝改写。只有该标签 run 中 `SIGNING_MODE.txt=release` 且通过下述全部门禁的包，才可称为官方安装包。
+`v*` 受保护标签必须等待 Android、API 24、API 36、iOS 18.5 回退与 iOS 26.5 AlarmKit 五项作业全绿，随后发布作业从同一 run 下载产物、先验证 Android/iOS 上游校验和，再组装并复核顶层及开发者归档的精确白名单。刷新已有 Pre-release 时先成功上传/覆盖新合同文件，再删除旧合同遗留附件，最后回读并比较完整名称集合与公开 `SHA256SUMS`；已经人工提升为 Stable 的 Release 始终拒绝改写。只有该标签 run 中 `SIGNING_MODE.txt=release` 且通过下述全部门禁的包，才可称为官方安装包。
 
 ## Android 模拟器冷启动门禁
 
@@ -150,11 +150,15 @@ API 33+ 在每个 AVD attempt 的第一次 Flutter 构建、安装或启动之�
 
 Debug 回退包必须保留 `debug-fallback` 文件名，禁止上传应用商店或标记为正式 Release。
 
-### v1.1.4 预发布合同
+### v1.1.5 预发布合同
 
-标签 `v1.1.4` 必须与 `pubspec.yaml` 的 `1.1.4+5` 一致，并从合入后的受保护 `main` 创建。公开附件严格为 `danggui-android-universal-release.apk`、`danggui-ios-source-v1.1.4.zip`、`danggui-developer-assets-v1.1.4.zip` 和顶层 `SHA256SUMS`。Android 原生测试、API 24/36 验收、iOS unsigned build 与 RunnerTests 是标签门禁；源码和 unsigned `.app.zip` 仍不是 IPA。
+标签 `v1.1.5` 必须与 `pubspec.yaml` 的 `1.1.5+6` 一致，并从合入后的受保护 `main` 创建。公开附件严格为 `danggui-android-universal-release.apk`、`danggui-ios-source-v1.1.5.zip`、`danggui-developer-assets-v1.1.5.zip` 和顶层 `SHA256SUMS`。Android 原生测试、API 24/36 验收、双 Xcode/iOS Simulator、iOS unsigned build、RunnerTests 与 RunnerUITests 是标签门禁；源码和 unsigned `.app.zip` 仍不是 IPA。
 
-代表性小米/其他 OEM Android 及 iPhone 还需覆盖锁屏、声音、震动/触感、隔夜、重启和覆盖升级。发布后 ToDesk/Xcode 发现的问题修入新补丁版本，不改写 `v1.1.4` 标签。实体机门禁签署前保持 Pre-release。
+代表性小米/其他 OEM Android 及 iPhone 还需覆盖锁屏、声音、震动/触感、静音/专注、隔夜、重启、系统强杀和覆盖升级。发布后发现的问题修入新补丁版本，不改写 `v1.1.5` 标签。实体机门禁签署前保持 Pre-release。
+
+### v1.1.4 历史预发布合同
+
+`v1.1.4` 标签、附件和校验值保持不可变；其发布事实见 [v1.1.4 检查表](../release/v1.1.4-release-checklist.md)。
 
 ### v1.1.3 预发布合同
 

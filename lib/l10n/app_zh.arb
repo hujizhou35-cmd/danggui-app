@@ -1,10 +1,13 @@
 {
   "@@locale": "zh",
   "appName": "当归",
+  "brandSeal": "当归印章",
   "privacyTagline": "本地记录 · 不上传 · 不调用 AI",
   "loading": "正在加载…",
   "bootstrapError": "初始化未完成",
   "retry": "重试",
+  "reload": "重新加载",
+  "editorVersionConflict": "内容已在其他操作中更新。请重新加载后再继续编辑。",
   "tasksTab": "事项",
   "pastTab": "过往",
   "notesTab": "笔记",

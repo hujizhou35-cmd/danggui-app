@@ -13,6 +13,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get appName => '当归';
 
   @override
+  String get brandSeal => 'Danggui seal';
+
+  @override
   String get privacyTagline => 'Local only · No uploads · No AI';
 
   @override
@@ -23,6 +26,13 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get retry => 'Retry';
+
+  @override
+  String get reload => 'Reload';
+
+  @override
+  String get editorVersionConflict =>
+      'This content changed elsewhere. Reload it before continuing to edit.';
 
   @override
   String get tasksTab => 'Tasks';

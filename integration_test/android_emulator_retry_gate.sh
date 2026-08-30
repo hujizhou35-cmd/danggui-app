@@ -33,6 +33,11 @@ prepare_retry() {
   local path
   local classification_reason
   local classification_evidence
+  local classification_component
+  local focus_evidence_name
+  local launcher_package
+  local launcher_package_file
+  local launcher_package_pattern
   local expected_completion_partial
 
   deny_retry() {
@@ -67,7 +72,8 @@ prepare_retry() {
       .scope == "system-ui-permission-controller" and
       .apiLevel == $apiLevel and .attempt == 1 and
       (.component == "system-ui" or
-       .component == "permission-controller")
+       .component == "permission-controller" or
+       .component == "launcher")
     ' "${classification}" >/dev/null; then
     echo 'Primary classification does not identify an allowed system component.'
     deny_retry
@@ -113,6 +119,7 @@ prepare_retry() {
     return 0
   fi
   classification_reason="$(jq -r '.reason' "${classification}")"
+  classification_component="$(jq -r '.component' "${classification}")"
   classification_evidence="$(jq -r '.evidenceFile // empty' "${classification}")"
   if [[ ! "${classification_evidence}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
      [[ "${classification_evidence}" == '.' ]] ||
@@ -128,6 +135,53 @@ prepare_retry() {
     echo 'Primary ANR classification evidence is empty.'
     deny_retry
     return 0
+  fi
+  if [[ "${classification_component}" == 'launcher' ]]; then
+    if ! jq -e '
+        .reason == "health-gate-anr-dialog" and
+        .phase == "system-component-health-gate" and
+        .appAbsentBeforeHealth == true and
+        (.systemPackage | type == "string" and
+          test("^[A-Za-z0-9._]+$")) and
+        .launcherSelectionEvidence == "launcher-selection.txt" and
+        .launcherPackagePathEvidence == "launcher-package-path.txt" and
+        (.focusEvidenceFile | type == "string" and
+          test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+      ' "${classification}" >/dev/null; then
+      echo 'Launcher classification is missing its strict package evidence.'
+      deny_retry
+      return 0
+    fi
+    launcher_package="$(jq -r '.systemPackage' "${classification}")"
+    launcher_package_pattern="${launcher_package//./\\.}"
+    focus_evidence_name="$(jq -r '.focusEvidenceFile' "${classification}")"
+    launcher_package_file=''
+    if [[ -e "${evidence_dir}/launcher-package.txt" ]]; then
+      launcher_package_file="$(tr -d '\r[:space:]' \
+        < "${evidence_dir}/launcher-package.txt")"
+    fi
+    if [[ ! -e "${evidence_dir}/app-package-before-health.txt" ]] ||
+       [[ -n "$(tr -d '\r[:space:]' \
+         < "${evidence_dir}/app-package-before-health.txt")" ]] ||
+       [[ "${launcher_package_file}" != "${launcher_package}" ]] ||
+       ! grep -Eq \
+         "^${launcher_package_pattern}/[A-Za-z0-9._\$]+[[:space:]]*$" \
+         "${evidence_dir}/launcher-selection.txt" 2>/dev/null ||
+       ! grep -Eq '^package:/(system|system_ext|product|vendor|odm|apex)/.+' \
+         "${evidence_dir}/launcher-package-path.txt" 2>/dev/null ||
+       ! grep -Eq \
+         "(mCurrentFocus|mFocusedWindow)=.*Application Not Responding: ${launcher_package_pattern}([/}:[:space:]]|$)" \
+         "${evidence_dir}/${focus_evidence_name}" 2>/dev/null ||
+       ! grep -Fq 'package="android"' \
+         "${evidence_dir}/${classification_evidence}" ||
+       ! grep -Fq 'resource-id="android:id/aerr_close"' \
+         "${evidence_dir}/${classification_evidence}" ||
+       ! grep -Fq 'resource-id="android:id/aerr_wait"' \
+         "${evidence_dir}/${classification_evidence}"; then
+      echo 'Launcher classification evidence failed independent validation.'
+      deny_retry
+      return 0
+    fi
   fi
   if [[ "${classification_reason}" == 'permission-flow-anr-dialog' ]]; then
     expected_completion_partial="${evidence_dir}/seed-natural-completion.json.partial.$(
