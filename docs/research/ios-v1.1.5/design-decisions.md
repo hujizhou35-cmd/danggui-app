@@ -200,6 +200,12 @@
 - **理由**：PR runs `33236883417` 与 `33237782722` 在 API 24/36 证明大尺寸 multiline `TextField` 的外层几何中心可见却不会把焦点交给正文；runs `33240724730` 与 `33242490104` 证明把单个 `RawGestureDetector` 代理 render object 当成跨 binding 稳定身份会产生假阴性；run `33247239588` 又证明 live binding 的候选路径实际进入多个 pointer/semantics/scroll 层，但不包含被单独指定的 `RenderEditable`。字段子树交集直接证明坐标到达正确字段，同时不锁定 Flutter 3.47.1 的某一个中间接收层；焦点、真实 IME 和持久化门禁继续负责证明最终用户行为。
 - **未采用**：直接 `requestFocus`/`showKeyboard`、语义动作代替指针、锁定某个 Listener/recognizer/render proxy、重复点击直到成功或只延长超时。前三者会绕过真实手势或再次耦合框架内部层级，重复点击会隐藏首次交互缺陷，延长超时不能改变错误命中路径。
 
+## DD34 — Android 编辑器验收先证明外层滚动已停止并连续稳定
+
+- **决定**：正文指针验收在扫描命中点前，先读取目标 `TextField` 最近的外层 `ScrollableState`，要求 `isScrollingNotifier` 为假、滚动像素变化不超过 0.5 logical pixel 且连续稳定两帧、可见编辑区域宽高均不少于 24 logical pixel，随后才允许无副作用扫描字段子树命中路径。整个等待最多 5 秒，期间不发送任何指针；满足条件后仍只发送一次 16ms 短按。失败诊断只保留阶段、滚动态、像素、矩形和 render object 类型。
+- **理由**：PR run `33250543348` 的 API 24/36 路径都停在外层 `RenderScrollSemantics`/`RenderClipRect`，5×5 候选点没有进入字段子树；Flutter 的 `Scrollable` 会在 `DrivenScrollActivity.shouldIgnorePointer` 为真时用 `IgnorePointer` 临时屏蔽命中，而编辑器在焦点或文本更新后会为 caret `showOnScreen` 安排短时动画，IME/布局帧还会改变该动画实际开始的时机。固定等待 250ms 不能证明动画已经结束，几何可见也不能证明当前可交互；新增等待把这一竞态变为可观察合同。
+- **未采用**：继续增加固定延时、在滚动期间重试点击、直接聚焦正文或修改生产滚动行为。固定延时仍受设备帧率影响，重试点击会掩盖首次手势，直接聚焦绕过用户路径，而现有证据只证明验收与滚动动画存在竞态，尚不支持重写生产界面。
+
 ## 功能批次门禁
 
 1. 第一批 F01/F03/F04/F15/F17/F19：D01–D04 全部关闭且 iOS 18/26 合同无未解释差异。

@@ -376,81 +376,143 @@ Future<void> _tapEditable(
     findsOneWidget,
     reason: '$phase requires the shared editor viewport.',
   );
-  final editableState = tester.state<EditableTextState>(editable);
-  final renderEditable = editableState.renderEditable;
-  final fieldRenderObjects = _attachedRenderObjectsBelow(tester.element(field));
-  expect(
-    fieldRenderObjects,
-    isNotEmpty,
-    reason: '$phase requires an attached TextField render subtree.',
-  );
-  final visibleEditableRect = MatrixUtils.transformRect(
-    renderEditable.getTransformTo(null),
-    Offset.zero & renderEditable.size,
-  ).intersect(tester.getRect(editorViewport));
-  expect(
-    visibleEditableRect.width,
-    greaterThanOrEqualTo(24),
-    reason: '$phase must expose a tappable editor width.',
-  );
-  expect(
-    visibleEditableRect.height,
-    greaterThanOrEqualTo(24),
-    reason: '$phase must expose a tappable editor height.',
-  );
-
   // TextField intentionally delegates pointer handling away from its
   // RenderEditable. Flutter's exact intermediate receiver differs between
-  // test bindings, so require the real hit path to enter this TextField's own
-  // attached render subtree instead of coupling the acceptance test to one
-  // framework proxy. Then send one real gesture and still require focus plus
-  // the platform IME before direct text entry is allowed.
+  // test bindings. A Scrollable also ignores pointers while a driven scroll
+  // activity is settling (for example, EditableText.showOnScreen after an IME
+  // inset change). Wait for the outer editor scroll position to be idle and
+  // geometrically stable before requiring the real hit path to enter this
+  // TextField's attached render subtree. Then send exactly one real gesture
+  // and still require focus plus the platform IME before text entry is allowed.
+  final initialEditableState = tester.state<EditableTextState>(editable);
+  final focusNode = initialEditableState.widget.focusNode;
   final fieldView = View.of(tester.element(editable));
-  final focusNode = editableState.widget.focusNode;
   expect(
     focusNode.hasFocus,
     isFalse,
     reason: '$phase must begin without the target editor already focused.',
   );
-  final candidates = <Offset>[
-    for (final dy in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
-      for (final dx in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
-        Offset(
-          visibleEditableRect.left + visibleEditableRect.width * dx,
-          visibleEditableRect.top + visibleEditableRect.height * dy,
-        ),
-  ];
+
+  const readinessFrame = Duration(milliseconds: 16);
+  const readinessTimeout = Duration(seconds: 5);
+  final maximumReadinessPumps =
+      readinessTimeout.inMicroseconds ~/ readinessFrame.inMicroseconds;
+  ScrollPosition? previousPosition;
+  double? previousPixels;
+  var stableFrames = 0;
   Offset? tapPoint;
-  final hitPathDiagnostics = <String>[];
-  for (final candidate in candidates) {
-    final hitTest = tester.hitTestOnBinding(
-      candidate,
-      viewId: fieldView.viewId,
+  Rect? visibleEditableRect;
+  var readinessPhase = 'initializing';
+  var lastScrolling = false;
+  double? lastPixels;
+  double? lastMinScrollExtent;
+  double? lastMaxScrollExtent;
+  var lastHitTypes = <Type>[];
+
+  for (var attempt = 0; attempt < maximumReadinessPumps; attempt += 1) {
+    final scrollable = Scrollable.maybeOf(tester.element(field));
+    expect(
+      scrollable,
+      isNotNull,
+      reason: '$phase requires the shared editor scrollable.',
     );
-    if (hitPathDiagnostics.length < 5) {
-      hitPathDiagnostics.add(
-        '$candidate=[${hitTest.path.map((entry) => entry.target.runtimeType).join('>')}]',
+    final position = scrollable!.position;
+    if (!identical(position, previousPosition)) {
+      previousPosition = position;
+      previousPixels = null;
+      stableFrames = 0;
+    }
+    lastScrolling = position.isScrollingNotifier.value;
+    lastPixels = position.hasPixels ? position.pixels : null;
+    lastMinScrollExtent = position.hasContentDimensions
+        ? position.minScrollExtent
+        : null;
+    lastMaxScrollExtent = position.hasContentDimensions
+        ? position.maxScrollExtent
+        : null;
+    if (!lastScrolling &&
+        lastPixels != null &&
+        previousPixels != null &&
+        (lastPixels - previousPixels).abs() <= 0.5) {
+      stableFrames += 1;
+    } else {
+      stableFrames = 0;
+    }
+    previousPixels = lastPixels;
+
+    final editableState = tester.state<EditableTextState>(editable);
+    final renderEditable = editableState.renderEditable;
+    visibleEditableRect = MatrixUtils.transformRect(
+      renderEditable.getTransformTo(null),
+      Offset.zero & renderEditable.size,
+    ).intersect(tester.getRect(editorViewport));
+    final geometryReady =
+        visibleEditableRect.width >= 24 && visibleEditableRect.height >= 24;
+
+    readinessPhase = lastScrolling
+        ? 'scrolling'
+        : stableFrames < 2
+        ? 'pixels-unstable'
+        : !geometryReady
+        ? 'geometry-not-tappable'
+        : 'hit-test-not-ready';
+
+    if (!lastScrolling && stableFrames >= 2 && geometryReady) {
+      final fieldRenderObjects = _attachedRenderObjectsBelow(
+        tester.element(field),
       );
+      expect(
+        fieldRenderObjects,
+        isNotEmpty,
+        reason: '$phase requires an attached TextField render subtree.',
+      );
+      final candidates = <Offset>[
+        for (final dy in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
+          for (final dx in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
+            Offset(
+              visibleEditableRect.left + visibleEditableRect.width * dx,
+              visibleEditableRect.top + visibleEditableRect.height * dy,
+            ),
+      ];
+      for (final candidate in candidates) {
+        final hitTest = tester.hitTestOnBinding(
+          candidate,
+          viewId: fieldView.viewId,
+        );
+        lastHitTypes = hitTest.path
+            .map((entry) => entry.target.runtimeType)
+            .toList(growable: false);
+        final hitsFieldSubtree = hitTest.path
+            .map((entry) => entry.target)
+            .whereType<RenderObject>()
+            .any(fieldRenderObjects.contains);
+        if (hitsFieldSubtree) {
+          tapPoint = candidate;
+          readinessPhase = 'ready';
+          break;
+        }
+      }
+      if (tapPoint != null) break;
     }
-    final fieldTargets = hitTest.path
-        .map((entry) => entry.target)
-        .whereType<RenderObject>()
-        .where(fieldRenderObjects.contains)
-        .toList(growable: false);
-    hitPathDiagnostics.add(
-      '$candidate=field[${fieldTargets.map((target) => target.runtimeType).join('>')}]',
-    );
-    if (fieldTargets.isNotEmpty) {
-      tapPoint = candidate;
-      break;
-    }
+
+    await tester.pump(readinessFrame);
+    _expectNoUnhandledException(tester, '$phase readiness');
   }
+
   expect(
     tapPoint,
     isNotNull,
     reason:
-        '$phase must expose a hit-test path into its TextField subtree within '
-        '$visibleEditableRect. samples=${hitPathDiagnostics.join('; ')}.',
+        '$phase did not expose an idle, stable, hit-testable TextField within '
+        '${readinessTimeout.inSeconds} seconds. readiness=$readinessPhase, '
+        'scrolling=$lastScrolling, pixels=$lastPixels, '
+        'min=$lastMinScrollExtent, max=$lastMaxScrollExtent, '
+        'visibleRect=$visibleEditableRect, hitTypes=$lastHitTypes.',
+  );
+  expect(
+    visibleEditableRect,
+    isNotNull,
+    reason: '$phase must expose a transformed editor rectangle.',
   );
   final gesture = await tester.startGesture(tapPoint!, view: fieldView);
   await tester.pump(const Duration(milliseconds: 16));

@@ -14,6 +14,7 @@ import 'package:danggui/src/services/backup/automatic_backup_coordinator.dart';
 import 'package:danggui/src/ui/components/components.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -157,7 +158,7 @@ void main() {
   );
 
   testWidgets(
-    'visible note body pointer transfers focus from the title',
+    'note body pointer waits for outer scroll idle before focus transfer',
     (tester) => _withMountedApp(
       tester,
       () => _withAndroidPlatform(() async {
@@ -190,52 +191,71 @@ void main() {
         tester.view.viewInsets = const FakeViewPadding(bottom: 427);
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 250));
-        await tester.ensureVisible(body);
-        await tester.pump(const Duration(milliseconds: 250));
-
-        final renderEditable = tester
-            .state<EditableTextState>(bodyEditable)
-            .renderEditable;
-        final bodyRenderObjects = _attachedRenderObjectsBelow(
-          tester.element(body),
+        final scrollable = Scrollable.maybeOf(tester.element(body));
+        expect(scrollable, isNotNull);
+        final position = scrollable!.position;
+        expect(
+          position.maxScrollExtent - position.minScrollExtent,
+          greaterThan(24),
         );
-        expect(bodyRenderObjects, isNotEmpty);
-        final visibleBodyEditor = MatrixUtils.transformRect(
-          renderEditable.getTransformTo(null),
-          Offset.zero & renderEditable.size,
-        ).intersect(tester.getRect(find.byKey(EditorPageFrame.editorKey)));
-        expect(visibleBodyEditor.width, greaterThanOrEqualTo(24));
-        expect(visibleBodyEditor.height, greaterThanOrEqualTo(24));
-        final candidates = <Offset>[
-          for (final dy in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
-            for (final dx in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
-              Offset(
-                visibleBodyEditor.left + visibleBodyEditor.width * dx,
-                visibleBodyEditor.top + visibleBodyEditor.height * dy,
-              ),
-        ];
-        Offset? tapPoint;
-        for (final candidate in candidates) {
-          final hitsBodySubtree = tester
-              .hitTestOnBinding(candidate)
-              .path
-              .map((entry) => entry.target)
-              .whereType<RenderObject>()
-              .any(bodyRenderObjects.contains);
-          if (hitsBodySubtree) {
-            tapPoint = candidate;
-            break;
+        position.jumpTo(position.minScrollExtent);
+        await tester.pump();
+        final scrollCompletion = position.animateTo(
+          position.maxScrollExtent,
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.linear,
+        );
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(position.isScrollingNotifier.value, isTrue);
+
+        var pointerDownCount = 0;
+        var pointerUpCount = 0;
+        final scrollingDuringPointerEvents = <bool>[];
+        void recordPointer(PointerEvent event) {
+          if (event is PointerDownEvent) {
+            pointerDownCount += 1;
+            scrollingDuringPointerEvents.add(
+              position.isScrollingNotifier.value,
+            );
+          } else if (event is PointerUpEvent) {
+            pointerUpCount += 1;
+            scrollingDuringPointerEvents.add(
+              position.isScrollingNotifier.value,
+            );
           }
         }
-        expect(tapPoint, isNotNull);
-        final gesture = await tester.startGesture(tapPoint!);
-        await tester.pump(const Duration(milliseconds: 16));
-        await gesture.up();
-        await tester.pump(const Duration(milliseconds: 32));
-        expect(
-          tester.widget<EditableText>(bodyEditable).focusNode.hasFocus,
-          isTrue,
-        );
+
+        GestureBinding.instance.pointerRouter.addGlobalRoute(recordPointer);
+        try {
+          final readiness = await _waitForEditableTapTarget(
+            tester,
+            field: body,
+            editable: bodyEditable,
+            editorViewport: find.byKey(EditorPageFrame.editorKey),
+            scrollable: scrollable,
+          );
+          await scrollCompletion;
+          expect(readiness.observedScrolling, isTrue);
+          expect(position.isScrollingNotifier.value, isFalse);
+          expect(pointerDownCount, 0);
+          expect(pointerUpCount, 0);
+
+          final gesture = await tester.startGesture(readiness.tapPoint);
+          await tester.pump(const Duration(milliseconds: 16));
+          await gesture.up();
+          await tester.pump(const Duration(milliseconds: 32));
+          expect(pointerDownCount, 1);
+          expect(pointerUpCount, 1);
+          expect(scrollingDuringPointerEvents, everyElement(isFalse));
+          expect(
+            tester.widget<EditableText>(bodyEditable).focusNode.hasFocus,
+            isTrue,
+          );
+        } finally {
+          GestureBinding.instance.pointerRouter.removeGlobalRoute(
+            recordPointer,
+          );
+        }
       }),
     ),
   );
@@ -307,6 +327,72 @@ Set<RenderObject> _attachedRenderObjectsBelow(Element root) {
 
   visit(root);
   return result;
+}
+
+Future<({Offset tapPoint, bool observedScrolling})> _waitForEditableTapTarget(
+  WidgetTester tester, {
+  required Finder field,
+  required Finder editable,
+  required Finder editorViewport,
+  required ScrollableState scrollable,
+}) async {
+  double? previousPixels;
+  var stableFrames = 0;
+  var observedScrolling = false;
+
+  for (var attempt = 0; attempt < 313; attempt += 1) {
+    final position = scrollable.position;
+    final scrolling = position.isScrollingNotifier.value;
+    observedScrolling |= scrolling;
+    final pixels = position.hasPixels ? position.pixels : null;
+    if (!scrolling &&
+        pixels != null &&
+        previousPixels != null &&
+        (pixels - previousPixels).abs() <= 0.5) {
+      stableFrames += 1;
+    } else {
+      stableFrames = 0;
+    }
+    previousPixels = pixels;
+
+    final renderEditable = tester
+        .state<EditableTextState>(editable)
+        .renderEditable;
+    final visibleRect = MatrixUtils.transformRect(
+      renderEditable.getTransformTo(null),
+      Offset.zero & renderEditable.size,
+    ).intersect(tester.getRect(editorViewport));
+    if (!scrolling &&
+        stableFrames >= 2 &&
+        visibleRect.width >= 24 &&
+        visibleRect.height >= 24) {
+      final fieldRenderObjects = _attachedRenderObjectsBelow(
+        tester.element(field),
+      );
+      final candidates = <Offset>[
+        for (final dy in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
+          for (final dx in <double>[0.1, 0.25, 0.5, 0.75, 0.9])
+            Offset(
+              visibleRect.left + visibleRect.width * dx,
+              visibleRect.top + visibleRect.height * dy,
+            ),
+      ];
+      for (final candidate in candidates) {
+        final hitsFieldSubtree = tester
+            .hitTestOnBinding(candidate)
+            .path
+            .map((entry) => entry.target)
+            .whereType<RenderObject>()
+            .any(fieldRenderObjects.contains);
+        if (hitsFieldSubtree) {
+          return (tapPoint: candidate, observedScrolling: observedScrolling);
+        }
+      }
+    }
+    await tester.pump(const Duration(milliseconds: 16));
+  }
+
+  fail('The note body never became idle, stable, and hit-testable.');
 }
 
 Future<void> _withAndroidPlatform(Future<void> Function() body) async {
