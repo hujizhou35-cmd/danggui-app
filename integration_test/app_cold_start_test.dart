@@ -379,8 +379,9 @@ Future<void> _tapEditable(
   // TextField intentionally delegates pointer handling away from its
   // RenderEditable. Flutter's exact intermediate receiver differs between
   // test bindings. A Scrollable also ignores pointers while a driven scroll
-  // activity is settling (for example, EditableText.showOnScreen after an IME
-  // inset change). Wait for the outer editor scroll position to be idle and
+  // activity is settling. EditableText can schedule showOnScreen after focus
+  // or text updates, with IME/layout frames affecting when it starts. Wait for
+  // every relevant ancestor or field-internal scroll position to be idle and
   // geometrically stable before requiring the real hit path to enter this
   // TextField's attached render subtree. Then send exactly one real gesture
   // and still require focus plus the platform IME before text entry is allowed.
@@ -397,48 +398,56 @@ Future<void> _tapEditable(
   const readinessTimeout = Duration(seconds: 5);
   final maximumReadinessPumps =
       readinessTimeout.inMicroseconds ~/ readinessFrame.inMicroseconds;
-  ScrollPosition? previousPosition;
-  double? previousPixels;
-  var stableFrames = 0;
+  final previousPixels = Map<ScrollPosition, double?>.identity();
+  final stableFrames = Map<ScrollPosition, int>.identity();
   Offset? tapPoint;
   Rect? visibleEditableRect;
   var readinessPhase = 'initializing';
   var lastScrolling = false;
-  double? lastPixels;
-  double? lastMinScrollExtent;
-  double? lastMaxScrollExtent;
+  var lastScrollDiagnostics = <String>[];
   var lastHitTypes = <Type>[];
 
   for (var attempt = 0; attempt < maximumReadinessPumps; attempt += 1) {
-    final scrollable = Scrollable.maybeOf(tester.element(field));
+    final scrollables = _scrollableStatesForEditable(tester, field);
     expect(
-      scrollable,
-      isNotNull,
-      reason: '$phase requires the shared editor scrollable.',
+      scrollables,
+      isNotEmpty,
+      reason: '$phase requires at least one editor scrollable.',
     );
-    final position = scrollable!.position;
-    if (!identical(position, previousPosition)) {
-      previousPosition = position;
-      previousPixels = null;
-      stableFrames = 0;
+    final positions = Set<ScrollPosition>.identity()
+      ..addAll(scrollables.map((scrollable) => scrollable.position));
+    previousPixels.removeWhere((position, _) => !positions.contains(position));
+    stableFrames.removeWhere((position, _) => !positions.contains(position));
+
+    lastScrolling = false;
+    var allPositionsStable = true;
+    lastScrollDiagnostics = <String>[];
+    for (final position in positions) {
+      final scrolling = position.isScrollingNotifier.value;
+      final pixels = position.hasPixels ? position.pixels : null;
+      final previous = previousPixels[position];
+      final stableCount =
+          !scrolling &&
+              pixels != null &&
+              previous != null &&
+              (pixels - previous).abs() <= 0.5
+          ? (stableFrames[position] ?? 0) + 1
+          : 0;
+      previousPixels[position] = pixels;
+      stableFrames[position] = stableCount;
+      lastScrolling |= scrolling;
+      allPositionsStable &= stableCount >= 2;
+      final min = position.hasContentDimensions
+          ? position.minScrollExtent
+          : null;
+      final max = position.hasContentDimensions
+          ? position.maxScrollExtent
+          : null;
+      lastScrollDiagnostics.add(
+        '${position.runtimeType}(scrolling=$scrolling,pixels=$pixels,'
+        'min=$min,max=$max)',
+      );
     }
-    lastScrolling = position.isScrollingNotifier.value;
-    lastPixels = position.hasPixels ? position.pixels : null;
-    lastMinScrollExtent = position.hasContentDimensions
-        ? position.minScrollExtent
-        : null;
-    lastMaxScrollExtent = position.hasContentDimensions
-        ? position.maxScrollExtent
-        : null;
-    if (!lastScrolling &&
-        lastPixels != null &&
-        previousPixels != null &&
-        (lastPixels - previousPixels).abs() <= 0.5) {
-      stableFrames += 1;
-    } else {
-      stableFrames = 0;
-    }
-    previousPixels = lastPixels;
 
     final editableState = tester.state<EditableTextState>(editable);
     final renderEditable = editableState.renderEditable;
@@ -451,13 +460,13 @@ Future<void> _tapEditable(
 
     readinessPhase = lastScrolling
         ? 'scrolling'
-        : stableFrames < 2
+        : !allPositionsStable
         ? 'pixels-unstable'
         : !geometryReady
         ? 'geometry-not-tappable'
         : 'hit-test-not-ready';
 
-    if (!lastScrolling && stableFrames >= 2 && geometryReady) {
+    if (!lastScrolling && allPositionsStable && geometryReady) {
       final fieldRenderObjects = _attachedRenderObjectsBelow(
         tester.element(field),
       );
@@ -505,8 +514,7 @@ Future<void> _tapEditable(
     reason:
         '$phase did not expose an idle, stable, hit-testable TextField within '
         '${readinessTimeout.inSeconds} seconds. readiness=$readinessPhase, '
-        'scrolling=$lastScrolling, pixels=$lastPixels, '
-        'min=$lastMinScrollExtent, max=$lastMaxScrollExtent, '
+        'scrolling=$lastScrolling, scrollables=$lastScrollDiagnostics, '
         'visibleRect=$visibleEditableRect, hitTypes=$lastHitTypes.',
   );
   expect(
@@ -524,6 +532,21 @@ Future<void> _tapEditable(
     phase: '$phase at $tapPoint within $visibleEditableRect',
     timeout: const Duration(seconds: 3),
   );
+}
+
+Set<ScrollableState> _scrollableStatesForEditable(
+  WidgetTester tester,
+  Finder field,
+) {
+  final result = Set<ScrollableState>.identity();
+  final ancestor = Scrollable.maybeOf(tester.element(field));
+  if (ancestor != null) result.add(ancestor);
+  result.addAll(
+    tester.stateList<ScrollableState>(
+      find.descendant(of: field, matching: find.byType(Scrollable)),
+    ),
+  );
+  return result;
 }
 
 Set<RenderObject> _attachedRenderObjectsBelow(Element root) {

@@ -232,7 +232,6 @@ void main() {
             field: body,
             editable: bodyEditable,
             editorViewport: find.byKey(EditorPageFrame.editorKey),
-            scrollable: scrollable,
           );
           await scrollCompletion;
           expect(readiness.observedScrolling, isTrue);
@@ -273,6 +272,22 @@ void main() {
       );
 
       final editor = find.byKey(const Key('past-continuous-document-editor'));
+      final editable = find.descendant(
+        of: editor,
+        matching: find.byType(EditableText),
+      );
+      expect(Scrollable.maybeOf(tester.element(editor)), isNull);
+      final readiness = await _waitForEditableTapTarget(
+        tester,
+        field: editor,
+        editable: editable,
+        editorViewport: find.byKey(EditorPageFrame.editorKey),
+      );
+      final gesture = await tester.startGesture(readiness.tapPoint);
+      await tester.pump(const Duration(milliseconds: 16));
+      await gesture.up();
+      await tester.pump(const Duration(milliseconds: 32));
+      expect(tester.widget<EditableText>(editable).focusNode.hasFocus, isTrue);
       await tester.enterText(editor, '第一行\n\n第二行');
       await _expectImeCycle(
         tester,
@@ -334,26 +349,37 @@ Future<({Offset tapPoint, bool observedScrolling})> _waitForEditableTapTarget(
   required Finder field,
   required Finder editable,
   required Finder editorViewport,
-  required ScrollableState scrollable,
 }) async {
-  double? previousPixels;
-  var stableFrames = 0;
+  final previousPixels = Map<ScrollPosition, double?>.identity();
+  final stableFrames = Map<ScrollPosition, int>.identity();
   var observedScrolling = false;
 
   for (var attempt = 0; attempt < 313; attempt += 1) {
-    final position = scrollable.position;
-    final scrolling = position.isScrollingNotifier.value;
-    observedScrolling |= scrolling;
-    final pixels = position.hasPixels ? position.pixels : null;
-    if (!scrolling &&
-        pixels != null &&
-        previousPixels != null &&
-        (pixels - previousPixels).abs() <= 0.5) {
-      stableFrames += 1;
-    } else {
-      stableFrames = 0;
+    final scrollables = _scrollableStatesForEditable(tester, field);
+    expect(scrollables, isNotEmpty);
+    final positions = Set<ScrollPosition>.identity()
+      ..addAll(scrollables.map((scrollable) => scrollable.position));
+    previousPixels.removeWhere((position, _) => !positions.contains(position));
+    stableFrames.removeWhere((position, _) => !positions.contains(position));
+    var scrolling = false;
+    var allPositionsStable = true;
+    for (final position in positions) {
+      final positionScrolling = position.isScrollingNotifier.value;
+      final pixels = position.hasPixels ? position.pixels : null;
+      final previous = previousPixels[position];
+      final stableCount =
+          !positionScrolling &&
+              pixels != null &&
+              previous != null &&
+              (pixels - previous).abs() <= 0.5
+          ? (stableFrames[position] ?? 0) + 1
+          : 0;
+      previousPixels[position] = pixels;
+      stableFrames[position] = stableCount;
+      scrolling |= positionScrolling;
+      allPositionsStable &= stableCount >= 2;
     }
-    previousPixels = pixels;
+    observedScrolling |= scrolling;
 
     final renderEditable = tester
         .state<EditableTextState>(editable)
@@ -363,7 +389,7 @@ Future<({Offset tapPoint, bool observedScrolling})> _waitForEditableTapTarget(
       Offset.zero & renderEditable.size,
     ).intersect(tester.getRect(editorViewport));
     if (!scrolling &&
-        stableFrames >= 2 &&
+        allPositionsStable &&
         visibleRect.width >= 24 &&
         visibleRect.height >= 24) {
       final fieldRenderObjects = _attachedRenderObjectsBelow(
@@ -393,6 +419,21 @@ Future<({Offset tapPoint, bool observedScrolling})> _waitForEditableTapTarget(
   }
 
   fail('The note body never became idle, stable, and hit-testable.');
+}
+
+Set<ScrollableState> _scrollableStatesForEditable(
+  WidgetTester tester,
+  Finder field,
+) {
+  final result = Set<ScrollableState>.identity();
+  final ancestor = Scrollable.maybeOf(tester.element(field));
+  if (ancestor != null) result.add(ancestor);
+  result.addAll(
+    tester.stateList<ScrollableState>(
+      find.descendant(of: field, matching: find.byType(Scrollable)),
+    ),
+  );
+  return result;
 }
 
 Future<void> _withAndroidPlatform(Future<void> Function() body) async {

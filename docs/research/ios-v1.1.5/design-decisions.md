@@ -206,6 +206,12 @@
 - **理由**：PR run `33250543348` 的 API 24/36 路径都停在外层 `RenderScrollSemantics`/`RenderClipRect`，5×5 候选点没有进入字段子树；Flutter 的 `Scrollable` 会在 `DrivenScrollActivity.shouldIgnorePointer` 为真时用 `IgnorePointer` 临时屏蔽命中，而编辑器在焦点或文本更新后会为 caret `showOnScreen` 安排短时动画，IME/布局帧还会改变该动画实际开始的时机。固定等待 250ms 不能证明动画已经结束，几何可见也不能证明当前可交互；新增等待把这一竞态变为可观察合同。
 - **未采用**：继续增加固定延时、在滚动期间重试点击、直接聚焦正文或修改生产滚动行为。固定延时仍受设备帧率影响，重试点击会掩盖首次手势，直接聚焦绕过用户路径，而现有证据只证明验收与滚动动画存在竞态，尚不支持重写生产界面。
 
+## DD35 — 编辑器验收同时观察外层和字段内部滚动位置
+
+- **决定**：可交互等待收集目标字段最近的祖先 `ScrollableState`（若存在）以及字段子树内全部 `ScrollableState`，并要求当前所有不同身份的 `ScrollPosition` 都停止且连续稳定；位置对象替换时不得继承旧位置的稳定计数。无外层滚动容器但含 `EditableText` 内部滚动位置的展开式编辑器同样可验收。
+- **理由**：PR run `33283037478` 的 API 24 已越过事项和笔记正文，随后在 `past editor focus requires the shared editor scrollable` 失败。Past 使用占满可用区域的 expanding `TextField`，滚动由字段内部 controller 管理，没有祖先 `Scrollable`；把所有编辑器强行等同于“外层滚动页面”是错误的测试假设。字段内部滚动也可能执行 caret 动画，把两类相关位置纳入同一稳定合同既保持笔记竞态修复，也覆盖 Past 的真实结构。
+- **未采用**：为 Past 人工增加生产外层滚动容器、完全跳过 Past 的稳定等待，或只把空祖先视作静止。前者无产品证据且可能造成双滚动，后两者无法观察字段内部实际滚动活动。
+
 ## 功能批次门禁
 
 1. 第一批 F01/F03/F04/F15/F17/F19：D01–D04 全部关闭且 iOS 18/26 合同无未解释差异。
