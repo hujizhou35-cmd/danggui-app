@@ -94,7 +94,10 @@ jobs:
         run: bash integration_test/run_android_emulator_smoke_self_test.sh
 
       - name: Test Android emulator infrastructure gate
-        run: bash integration_test/android_emulator_infrastructure_self_test.sh
+        run: |
+          bash integration_test/android_emulator_infrastructure_self_test.sh
+          bash integration_test/adb_no_streaming_wrapper_self_test.sh
+          bash integration_test/install_adb_no_streaming_wrapper_self_test.sh
 
       - name: Analyze
         run: flutter analyze --fatal-infos
@@ -457,6 +460,9 @@ jobs:
             -no-boot-anim -camera-back none -camera-front none
           disable-animations: true
           disable-spellchecker: true
+          pre-emulator-launch-script: >-
+            bash integration_test/install_adb_no_streaming_wrapper.sh
+            "${{ matrix.api-level }}"
           script: bash integration_test/run_android_emulator_smoke.sh "${{ matrix.api-level }}"
 
       - name: Classify primary emulator failure
@@ -493,6 +499,9 @@ jobs:
             -no-boot-anim -camera-back none -camera-front none
           disable-animations: true
           disable-spellchecker: true
+          pre-emulator-launch-script: >-
+            bash integration_test/install_adb_no_streaming_wrapper.sh
+            "${{ matrix.api-level }}"
           script: bash integration_test/run_android_emulator_smoke.sh "${{ matrix.api-level }}"
 
       - name: Enforce emulator acceptance result

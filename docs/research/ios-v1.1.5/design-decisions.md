@@ -212,6 +212,12 @@
 - **理由**：PR run `33283037478` 的 API 24 已越过事项和笔记正文，随后在 `past editor focus requires the shared editor scrollable` 失败。Past 使用占满可用区域的 expanding `TextField`，滚动由字段内部 controller 管理，没有祖先 `Scrollable`；把所有编辑器强行等同于“外层滚动页面”是错误的测试假设。字段内部滚动也可能执行 caret 动画，把两类相关位置纳入同一稳定合同既保持笔记竞态修复，也覆盖 Past 的真实结构。
 - **未采用**：为 Past 人工增加生产外层滚动容器、完全跳过 Past 的稳定等待，或只把空祖先视作静止。前者无产品证据且可能造成双滚动，后两者无法观察字段内部实际滚动活动。
 
+## DD36 — API 24 的 Flutter 安装只在验收子进程中固定为 ADB 非流式模式
+
+- **决定**：在固定版本的 emulator runner 完成 SDK/AVD 准备后、启动模拟器前部署并核验 ADB 传输入口。API 24 才把 SDK 中固定位置的 canonical `adb` 原子替换为可审计薄 wrapper；wrapper 在 runner 阶段默认逐字透传，只有当归验收子进程显式启用。API 36 控制通道保留原生 canonical `adb`，不安装 wrapper。wrapper 正确解析 ADB 顶层全局参数，只为 `install`、`install-multiple`、`install-multi-package` 注入 `--no-streaming`，拒绝显式 streamed/incremental 冲突，并以 `exec` 保留参数、输出、退出码和信号。CI 记录部署阶段、API、实际模式、platform-tools revision、真实客户端与 wrapper SHA-256；成功门禁还要求 API 24 至少出现一次格式受限的非流式安装记录，且调用证据不记录路径、设备序列号或用户数据。
+- **理由**：PR run `33284183958` 的 API 24 已通过真实编辑器点击、冷启动和 seed；同一 AVD 随后的显式 `adb install --no-streaming` 覆盖也成功，但 Flutter 3.47.1 内部第二次默认 streamed reinstall 等待 165.5 秒后以空 ADB 错误退出，测试主体尚未启动。Android 官方把 `--no-streaming` 定义为先推送 APK、再调用 Package Manager；Flutter 上游也记录过 streamed install 连接失败。把传输模式固定在已由同一设备证明健康的官方路径，消除的是启动前基础设施竞态，不改变任何应用断言。
+- **未采用**：延长等待、把失败直接归为成功、为 API 24 开放无证据 fresh-AVD 重试、修改缓存中的 Flutter snapshot，或让 wrapper 影响 API 36/emulator runner。前四项会掩盖或脆化门禁，最后一项扩大了无必要的变更面。
+
 ## 功能批次门禁
 
 1. 第一批 F01/F03/F04/F15/F17/F19：D01–D04 全部关闭且 iOS 18/26 合同无未解释差异。

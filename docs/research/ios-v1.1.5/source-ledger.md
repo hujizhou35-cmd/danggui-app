@@ -29,6 +29,7 @@ Apple 页面没有提交哈希，因此记录本次访问日 `2026-08-28` 和精
 | S03 | [SQLite Online Backup API](https://www.sqlite.org/backup.html) | 在活动数据库上获得一致快照的官方机制 | F10/F12 | 100 |
 | S04 | [SQLite PRAGMA integrity_check/quick_check](https://www.sqlite.org/pragma.html#pragma_integrity_check) | `quick_check` 不验证 UNIQUE/索引一致性的全部约束，完整审计需 `integrity_check` | F12/F16/F18 | 100 |
 | S05 | [RFC 9106 Argon2](https://www.rfc-editor.org/rfc/rfc9106.html)、[NIST SP 800-38D GCM](https://csrc.nist.gov/pubs/sp/800/38/d/final) | KDF 参数、随机 salt 和认证加密的标准边界 | F11 | 100 |
+| S06 | [Android ADB 命令参考 `1cf2f017d312f73b3dc53bda85ef2610e35a80e9`](https://android.googlesource.com/platform/packages/modules/adb/+/1cf2f017d312f73b3dc53bda85ef2610e35a80e9/docs/user/adb.1.md) | `--no-streaming` 明确定义为先推送 APK、再调用 Package Manager；`--streaming`/`--incremental` 属于不同传输模式 | F28 | 100 |
 | C01 | [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)、[公开仓库 Actions 计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions) | 标准 runner 标签、公开仓库标准 runner 的计费边界；不能据此假设某一 Xcode image 永久存在 | F26/F28 | 96 |
 | C02 | [actions/runner-images `fe6859a246ddeeb78fc8698ec1ff37b628394fe0`](https://github.com/actions/runner-images/tree/fe6859a246ddeeb78fc8698ec1ff37b628394fe0) | 2026-08-28 runner image 清单和软件清单的固定快照 | F26/F28 | 94 |
 | C03 | [Flutter iOS build/release](https://docs.flutter.dev/deployment/ios)、[Flutter integration testing](https://docs.flutter.dev/testing/integration-tests) | unsigned/Simulator 构建与集成测试的官方工具边界 | F19/F28 | 94 |
@@ -130,6 +131,7 @@ Apple 页面没有提交哈希，因此记录本次访问日 `2026-08-28` 和精
 | X18 | [Firefox-iOS #34571](https://github.com/mozilla-mobile/firefox-ios/issues/34571) | 后台恢复的系统 quick action 路由未生效，Simulator 与真机还可能不同 | F01/F22/F28 |
 | X19 | [Simplenote-iOS #1705](https://github.com/Automattic/simplenote-ios/issues/1705) | 同步恢复旧状态覆盖较新内容 | F02/F07/F17 |
 | X20 | [flutter_local_notifications #2097](https://github.com/MaikuB/flutter_local_notifications/issues/2097)、[修复 #2112](https://github.com/MaikuB/flutter_local_notifications/pull/2112) | `presentSound` 的配置曾意外改变后台声音行为，说明 alert/presentation 与 sound 必须分开验证 | F03/F04/F21 |
+| X21 | [Flutter #66779](https://github.com/flutter/flutter/issues/66779)、[#47563](https://github.com/flutter/flutter/issues/47563) | Flutter 调用默认 ADB streamed install 时可能在设备/模拟器连接或 Package Manager 状态异常下失败 | F28 |
 
 issue 证明“失败确实会发生”，不证明 issue 中猜测的根因。只有能由代码、复现或修复提交交叉证明的原因才进入“已证实缺陷”。
 
@@ -156,7 +158,7 @@ issue 证明“失败确实会发生”，不证明 issue 中猜测的根因。�
 
 ## 采用结论
 
-- 直接用于合同：A01–A14、S01–S05。
+- 直接用于合同：A01–A14、S01–S06。
 - 可借鉴实现/测试模式：R01、R03–R06、R12；实际复制前仍要核对 notice 和移除成本。
 - 仅研究行为和测试：R02、R07–R10；许可证不允许本计划默认复制。
 - MPL 特别评估：R11；本版只参考场景路由与 XCUITest 设计。

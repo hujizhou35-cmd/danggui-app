@@ -1079,6 +1079,8 @@ final class _Audit {
       'bash tool/render_release_notes.sh --self-test',
       'bash integration_test/run_android_emulator_smoke_self_test.sh',
       'bash integration_test/android_emulator_infrastructure_self_test.sh',
+      'bash integration_test/adb_no_streaming_wrapper_self_test.sh',
+      'bash integration_test/install_adb_no_streaming_wrapper_self_test.sh',
       'bash tool/verify_android_artifacts.sh',
       'bash tool/build_ios_unsigned.sh',
       'bash tool/build_ios_source_zip.sh',
@@ -1456,6 +1458,34 @@ final class _Audit {
       _expectContains(
         smokePath,
         smoke,
+        'DANGGUI_ADB_FORCE_NO_STREAMING=1',
+        'API 24 device acceptance must opt into deterministic ADB push installs',
+      );
+      _expectContains(
+        smokePath,
+        smoke,
+        'DANGGUI_ADB_MODE_EVIDENCE',
+        'ADB install-mode overrides must leave content-free evidence',
+      );
+      for (final transportContract in <String>[
+        'validate_adb_transport_setup()',
+        'Post-SDK ADB transport attestation failed',
+        'validate_adb_install_invocations()',
+        'adb-install-invocations.txt',
+        'top_level_command=(install|install-multiple|install-multi-package) mode=no-streaming',
+        'ADB install invocation evidence failed the release gate',
+        'native-default-pass-through',
+      ]) {
+        _expectContains(
+          smokePath,
+          smoke,
+          transportContract,
+          'device smoke must fail closed on deployed and exercised ADB transport evidence',
+        );
+      }
+      _expectContains(
+        smokePath,
+        smoke,
         'show_ime_with_hard_keyboard',
         'device editor acceptance must expose a real soft-keyboard inset',
       );
@@ -1502,6 +1532,93 @@ final class _Audit {
         '$smokePath must not let an unbounded diagnostic mask exit status 75',
       );
     }
+
+    const adbWrapperPath = 'integration_test/adb_no_streaming_wrapper.sh';
+    final adbWrapper = _requiredText(adbWrapperPath);
+    if (adbWrapper != null) {
+      for (final contract in <String>[
+        'DANGGUI_ADB_FORCE_NO_STREAMING',
+        'DANGGUI_REAL_ADB',
+        'install|install-multiple|install-multi-package',
+        '--no-streaming',
+        '--streaming',
+        '--incremental|--incr',
+        'DANGGUI_ADB_MODE_EVIDENCE',
+        r'exec "${real_adb_path}" "${args[@]}"',
+      ]) {
+        _expectContains(
+          adbWrapperPath,
+          adbWrapper,
+          contract,
+          'API 24 ADB install shim must be scoped, fail-closed, and transparent',
+        );
+      }
+      _expect(
+        !adbWrapper.contains('eval ') && !adbWrapper.contains(r'"$*"'),
+        'ADB install shim preserves argument boundaries',
+        '$adbWrapperPath must not evaluate or flatten tool arguments',
+      );
+    }
+
+    const adbInstallerPath =
+        'integration_test/install_adb_no_streaming_wrapper.sh';
+    final adbInstaller = _requiredText(adbInstallerPath);
+    if (adbInstaller != null) {
+      for (final contract in <String>[
+        r'^(24|36)$',
+        'DANGGUI_EMULATOR_ATTEMPT',
+        'post-sdk-install-pre-emulator-launch',
+        'native-default-pass-through',
+        'script-scoped-no-streaming',
+        'sourceWrapperSha256',
+        'installedWrapperSha256',
+        'platformToolsRevision',
+        'adb-install-mode.json',
+        r'mv -f -- "${attestation_next}" "${attestation}"',
+      ]) {
+        _expectContains(
+          adbInstallerPath,
+          adbInstaller,
+          contract,
+          'post-SDK ADB setup must be scoped, atomic, and independently attested',
+        );
+      }
+      _expect(
+        !adbInstaller.contains(r'GITHUB_ENV') &&
+            !adbInstaller.contains(r'rm -rf'),
+        'ADB wrapper deployment avoids cross-step environment assumptions and recursive deletion',
+        '$adbInstallerPath must be local to the action invocation and recoverable',
+      );
+    }
+
+    for (final workflowContract in <String>[
+      'pre-emulator-launch-script:',
+      'integration_test/install_adb_no_streaming_wrapper.sh',
+    ]) {
+      _expectContains(
+        '$workflowPath#android-emulator-smoke',
+        androidEmulatorJob,
+        workflowContract,
+        'emulator CI must install and attest the scoped ADB transport shim',
+      );
+    }
+    _expect(
+      RegExp(
+            r'^\s*pre-emulator-launch-script:',
+            multiLine: true,
+          ).allMatches(androidEmulatorJob).length ==
+          2,
+      'both primary and sole fresh-AVD action deploy ADB policy after SDK setup',
+      '$workflowPath must contain exactly two post-SDK ADB setup hooks',
+    );
+    _expect(
+      !androidEmulatorJob.contains(
+            'Force deterministic non-streaming ADB installs',
+          ) &&
+          !androidEmulatorJob.contains('DANGGUI_REAL_ADB='),
+      'emulator CI has no stale pre-action ADB deployment',
+      '$workflowPath must not attest a wrapper before the action updates platform-tools',
+    );
 
     const releaseBinarySmokePath =
         'integration_test/run_android_release_binary_smoke.sh';
