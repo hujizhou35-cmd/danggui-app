@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  compareReleaseVersions,
   fetchReleaseChannel,
   parseReleaseChannelManifest,
 } from './release-channel.ts';
@@ -76,6 +77,19 @@ test('rejects channel and prerelease contradictions', () => {
   const previewMarkedStable = manifest();
   previewMarkedStable.preview.prerelease = false;
   assert.equal(parseReleaseChannelManifest(previewMarkedStable), null);
+});
+
+test('keeps Stable recommended and only treats a higher Preview as newer', () => {
+  const stable = manifest({ channel: 'stable', version: '1.1.5' });
+  const preview = manifest({ channel: 'preview', version: '1.2.0' }).preview;
+  stable.preview = preview;
+  assert.equal(parseReleaseChannelManifest(stable)?.recommended, 'stable');
+
+  stable.recommended = 'preview';
+  assert.equal(parseReleaseChannelManifest(stable), null);
+  assert.ok(compareReleaseVersions('1.2.0', '1.1.5') > 0);
+  assert.ok(compareReleaseVersions('1.1.4', '1.1.5') < 0);
+  assert.equal(compareReleaseVersions('1.1.5', '1.1.5'), 0);
 });
 
 test('returns no release when the upstream request times out', async () => {

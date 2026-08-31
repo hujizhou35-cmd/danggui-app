@@ -28,6 +28,7 @@ export function SiteFooter({ locale }: { locale: Locale }) {
           <a href={localePath(locale, '/support')}>{ui.nav.support}</a>
           <a href={repositoryUrl} target="_blank" rel="noreferrer">
             {ui.footer.source}
+            <span className="sr-only"> ({ui.common.openNewWindow})</span>
           </a>
         </nav>
       </div>
@@ -36,10 +37,12 @@ export function SiteFooter({ locale }: { locale: Locale }) {
         <span aria-hidden="true">·</span>
         <a href={licenseUrl} target="_blank" rel="noreferrer">
           {ui.footer.license}
+          <span className="sr-only"> ({ui.common.openNewWindow})</span>
         </a>
         <span aria-hidden="true">·</span>
         <a href={trademarkUrl} target="_blank" rel="noreferrer">
           {ui.footer.trademark}
+          <span className="sr-only"> ({ui.common.openNewWindow})</span>
         </a>
       </div>
     </footer>

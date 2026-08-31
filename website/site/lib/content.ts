@@ -21,7 +21,9 @@ const imageMap: Record<string, string> = {
   'story-01-only-here-it-sprouts.webp': '/assets/story-01.webp',
   'story-03-past-has-rings.webp': '/assets/story-03.webp',
   'story-04-gentle-reminder.webp': '/assets/story-04.webp',
+  'story-05-blank-page-kept.webp': '/assets/story-05.webp',
   'story-06-unsent-paper-plane.webp': '/assets/story-06.webp',
+  'story-08-rain-in-wooden-box.webp': '/assets/story-08.webp',
   'pose-holding-note.png': '/assets/pose-holding-note.png',
   'pose-guarding-seed.png': '/assets/pose-guarding-seed.png',
 };

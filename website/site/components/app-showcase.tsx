@@ -32,7 +32,8 @@ export function AppShowcase({
                     src={`/assets/ui/v1.1.5/${language}/${file}`}
                     alt={`${alt}：${item.title} · ${frameIndex + 1}`}
                     fill
-                    loading="eager"
+                    priority={index === 0 && frameIndex === 0}
+                    loading={index === 0 && frameIndex === 0 ? undefined : 'lazy'}
                     sizes="(max-width: 600px) 36vw, (max-width: 1100px) 17vw, 12vw"
                   />
                 </div>

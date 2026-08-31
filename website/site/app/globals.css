@@ -741,6 +741,10 @@ h3 {
 .text-link,
 .back-link,
 .all-releases-link {
+  display: inline-flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 44px;
   color: var(--sage-deep);
   font-size: 0.82rem;
   font-weight: 800;
@@ -877,6 +881,8 @@ h3 {
 
 .story-deck-panel a {
   display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   margin-top: 16px;
   color: var(--paper-card);
   font-size: 0.8rem;
@@ -1025,6 +1031,12 @@ h3 {
   gap: 8px;
   color: var(--ink-soft);
   font-size: 0.7rem;
+}
+
+.footer-legal a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
 }
 
 .inner-main,
@@ -1205,6 +1217,42 @@ h3 {
   gap: 22px;
 }
 
+.release-overview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding: 20px 22px;
+  border: 1px solid var(--line);
+  background: rgba(251, 248, 242, 0.68);
+  gap: 24px;
+}
+
+.release-overview p {
+  margin: 0;
+}
+
+.release-overview-label {
+  color: var(--terracotta-deep);
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.release-overview-status {
+  margin-top: 3px !important;
+  font-family: var(--serif);
+  font-size: clamp(1.55rem, 3vw, 2.25rem);
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+.release-overview .release-date {
+  margin-top: 3px !important;
+  margin-bottom: 0 !important;
+}
+
 .platform-card {
   position: relative;
   padding: clamp(28px, 4vw, 48px);
@@ -1320,8 +1368,8 @@ h3 {
 }
 
 .release-highlights {
-  margin-top: 72px;
-  padding-top: 34px;
+  margin-top: 52px;
+  padding-top: 28px;
   border-top: 1px solid var(--line);
 }
 
@@ -1357,7 +1405,7 @@ h3 {
 }
 
 .release-highlight-grid article {
-  min-height: 220px;
+  min-height: 176px;
   padding: 26px;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -1808,6 +1856,10 @@ h3 {
 }
 
 @media (max-width: 1199px) {
+  .home-section {
+    scroll-margin-top: 132px;
+  }
+
   .home-main {
     display: block;
   }
@@ -1856,6 +1908,8 @@ h3 {
     display: inline-flex;
     align-items: center;
     flex: 0 0 auto;
+    justify-content: center;
+    min-width: 44px;
     min-height: 44px;
     color: var(--sage-deep);
     font-size: 0.74rem;
@@ -2009,7 +2063,7 @@ h3 {
 
 @media (max-width: 600px) {
   h1 {
-    font-size: clamp(2.8rem, 14vw, 3.8rem);
+    font-size: clamp(2.6rem, 12.5vw, 3.25rem);
   }
 
   h2 {
@@ -2054,6 +2108,16 @@ h3 {
 
   .status-row {
     margin-bottom: 22px;
+  }
+
+  .release-overview {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 18px;
+  }
+
+  .release-overview .button {
+    width: 100%;
   }
 
   .hero-description {
@@ -2199,6 +2263,11 @@ h3 {
 
   .footer-main nav {
     justify-content: flex-start;
+  }
+
+  .footer-main nav a {
+    justify-content: center;
+    min-width: 44px;
   }
 
   .inner-main,

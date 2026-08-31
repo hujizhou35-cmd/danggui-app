@@ -34,6 +34,7 @@ export function SiteHeader({ locale, routeSuffix = '' }: SiteHeaderProps) {
           ))}
           <a href={repositoryUrl} target="_blank" rel="noreferrer">
             {ui.nav.github}
+            <span className="sr-only"> ({ui.common.openNewWindow})</span>
           </a>
         </nav>
 
@@ -55,6 +56,7 @@ export function SiteHeader({ locale, routeSuffix = '' }: SiteHeaderProps) {
               ))}
               <a href={repositoryUrl} target="_blank" rel="noreferrer">
                 {ui.nav.github}
+                <span className="sr-only"> ({ui.common.openNewWindow})</span>
               </a>
             </div>
           </details>

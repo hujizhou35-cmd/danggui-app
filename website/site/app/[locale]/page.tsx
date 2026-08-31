@@ -51,6 +51,7 @@ export default async function LocaleHome({ params }: PageProps) {
                   className="button button-primary"
                   readyLabel={ui.home.primaryCta}
                   unavailableLabel={ui.download.allReleasesCta}
+                  newWindowLabel={ui.common.openNewWindow}
                 />
                 <a className="button button-quiet" href="#preview">{ui.home.secondaryCta}</a>
               </div>
