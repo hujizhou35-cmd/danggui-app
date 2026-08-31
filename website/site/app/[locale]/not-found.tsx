@@ -14,19 +14,19 @@ const copy: Record<Locale, { eyebrow: string; title: string; body: string; home:
   en: {
     eyebrow: '404 · This page has not sprouted',
     title: 'The paper ends in a quiet blank',
-    body: 'The page you are looking for is not in Little Danggui’s garden.',
-    home: 'Back to Danggui',
+    body: 'The page you are looking for is not in 小当归’s paper garden.',
+    home: 'Back to 当归',
   },
   ja: {
     eyebrow: '404 · このページはまだ芽吹いていません',
     title: '紙の先は、静かな余白でした',
-    body: 'お探しのページは、小さな当帰の紙の庭にはありません。',
-    home: '当帰のホームへ戻る',
+    body: 'お探しのページは、小当归の紙の庭にはありません。',
+    home: '当归のホームへ戻る',
   },
   ru: {
     eyebrow: '404 · Эта страница ещё не проросла',
     title: 'Лист закончился тихой пустотой',
-    body: 'Такой страницы нет в бумажном саду Маленького Danggui.',
+    body: 'Такой страницы нет в бумажном саду 小当归.',
     home: 'Вернуться на главную',
   },
 };

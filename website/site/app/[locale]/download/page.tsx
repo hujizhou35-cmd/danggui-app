@@ -36,6 +36,26 @@ export default async function DownloadPage({ params }: PageProps) {
           <p>{ui.download.intro}</p>
         </header>
         <ReleaseDownloadPanels locale={locale} common={ui.common} copy={ui.download} />
+        <section className="release-highlights" aria-labelledby="release-highlights-title">
+          <header className="release-highlights-heading">
+            <p className="eyebrow">{ui.download.releaseHighlightsEyebrow}</p>
+            <h2 id="release-highlights-title">{ui.download.releaseHighlightsTitle}</h2>
+            <p>{ui.download.releaseHighlightsIntro}</p>
+          </header>
+          <div className="release-highlight-grid">
+            {ui.download.releaseHighlights.map((item, index) => (
+              <article key={item.title}>
+                <span aria-hidden="true">0{index + 1}</span>
+                <h3>{item.title}</h3>
+                <p>{item.body}</p>
+              </article>
+            ))}
+          </div>
+          <aside className="evidence-boundary">
+            <h3>{ui.download.evidenceTitle}</h3>
+            <p>{ui.download.evidenceBody}</p>
+          </aside>
+        </section>
         <section className="before-panel">
           <h2>{ui.download.beforeTitle}</h2>
           <ol>

@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img alt="Версия: публичная предварительная v1.1.5" src="https://img.shields.io/badge/version-v1.1.5%20pre--release-B5684C?style=flat-square" />
+  <img alt="Версия: стабильная v1.1.5" src="https://img.shields.io/badge/version-v1.1.5%20stable-6F8068?style=flat-square" />
   <img alt="Платформы: Android и исходники iOS" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20source-6F8068?style=flat-square" />
   <img alt="Данные: локальные и переносимые" src="https://img.shields.io/badge/data-local--first%20%7C%20portable-81786F?style=flat-square" />
   <img alt="Лицензия: Apache 2.0" src="https://img.shields.io/badge/code-Apache--2.0-2E2925?style=flat-square" />
@@ -88,10 +88,10 @@
 
 | Платформа | Рекомендуемый источник | Текущая поставка |
 | --- | --- | --- |
-| Android 7.0+ | [Публичная предварительная версия v1.1.5](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5) | Универсальный APK с официальной подписью; большинству нужен `danggui-android-universal-release.apk` |
+| Android 7.0+ | [Стабильная версия v1.1.5](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5) | Универсальный APK с официальной подписью; большинству нужен `danggui-android-universal-release.apk` |
 | iOS | [Инструкция по сборке из исходников](../architecture/ios-source-build.md) | Полный проект Xcode и подтверждение сборки без подписи; без IPA и TestFlight |
 
-v1.1.5 остаётся **Pre-release**. Публикация выполняется только после проверок Android, двух закреплённых сред iOS Simulator и unsigned-сборки iOS. Результаты разделяются на `contract-proven`, `simulator-proven` и `device-unverified`; звук и тактильная отдача реального iPhone, беззвучный режим/Focus, ночная блокировка, перезагрузка и завершение процесса пока не проверены. Сверяйте `SHA256SUMS`; доказательства находятся в `danggui-developer-assets-v1.1.5.zip`. Полные границы описаны в [руководстве](../architecture/platform-delivery.md) и [списке проверок v1.1.5](../release/v1.1.5-release-checklist.md).
+v1.1.5 — текущая рекомендуемая **стабильная версия**. Для Android доступен официально подписанный универсальный APK; для iOS по-прежнему предоставляются только полный исходный код и свидетельство сборки без подписи — без IPA и TestFlight. Статус Stable не расширяет границы доказательств: `contract-proven`, `simulator-proven` и `device-unverified` различаются, а звук и тактильная отдача реального iPhone, беззвучный режим/Focus, ночная блокировка, перезагрузка и завершение процесса остаются непроверенными. Перед установкой сделайте резервную копию и сверьте файлы с `SHA256SUMS` из того же Release. Доказательства находятся в `danggui-developer-assets-v1.1.5.zip`; полные границы описаны в [руководстве](../architecture/platform-delivery.md) и [списке проверок v1.1.5](../release/v1.1.5-release-checklist.md).
 
 ## История версий
 

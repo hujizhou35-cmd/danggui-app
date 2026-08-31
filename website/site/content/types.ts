@@ -129,6 +129,12 @@ export interface UiCopy {
     previewAvailable: string;
     previewCta: string;
     allReleasesCta: string;
+    releaseHighlightsEyebrow: string;
+    releaseHighlightsTitle: string;
+    releaseHighlightsIntro: string;
+    releaseHighlights: Array<{ title: string; body: string }>;
+    evidenceTitle: string;
+    evidenceBody: string;
     beforeTitle: string;
     beforeItems: string[];
   };

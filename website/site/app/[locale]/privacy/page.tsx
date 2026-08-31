@@ -76,15 +76,15 @@ export default async function PrivacyPage({ params }: PageProps) {
             <p>{ui.privacy.proofBody}</p>
           </div>
           <div className="proof-actions">
-            <a className="button button-light" href="/go/privacy-audit" target="_blank" rel="noreferrer">{ui.privacy.proofCta}</a>
-            <a className="button button-dark-outline" href={repositoryUrl} target="_blank" rel="noreferrer">GitHub</a>
+            <a className="button button-light" href="/go/privacy-audit" target="_blank" rel="noreferrer">{ui.privacy.proofCta}<span className="sr-only"> ({ui.common.openNewWindow})</span></a>
+            <a className="button button-dark-outline" href={repositoryUrl} target="_blank" rel="noreferrer">GitHub<span className="sr-only"> ({ui.common.openNewWindow})</span></a>
           </div>
         </section>
         <aside className="site-privacy-note">
           <h2>{ui.privacy.siteTitle}</h2>
           <div>
             <p>{ui.privacy.siteBody}</p>
-            <a className="text-link" href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('[Danggui] Privacy')}`}>
+            <a className="text-link" href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('[当归] Privacy')}`}>
               {ui.privacy.contactCta}: {SUPPORT_EMAIL}
             </a>
           </div>

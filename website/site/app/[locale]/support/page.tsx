@@ -31,7 +31,7 @@ export default async function SupportPage({ params }: PageProps) {
   const { locale } = await params;
   if (!isLocale(locale)) notFound();
   const { ui } = getLocaleData(locale);
-  const mailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(`[Danggui] ${ui.support.title}`)}`;
+  const mailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(`[当归] ${ui.support.title}`)}`;
 
   return (
     <>

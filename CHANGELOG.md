@@ -3,7 +3,7 @@
 All notable changes to Danggui are documented here. The project follows
 [Semantic Versioning](https://semver.org/) for public releases.
 
-## 1.1.5 - reference-driven iOS reliability audit pre-release (2026-08-29)
+## 1.1.5 - reference-driven iOS reliability audit stable release (2026-08-30)
 
 ### Fixed
 

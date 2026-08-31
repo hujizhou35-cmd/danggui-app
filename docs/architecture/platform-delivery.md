@@ -1,6 +1,6 @@
 # 平台、签名与交付架构
 
-> v1.1.5 以[独立公开 Pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5)交付，仍不是稳定版。本页定义当前产物合同、源配置事实和仍待完成的实体机门禁。实时状态见 [v1.1.5 发布检查表](../release/v1.1.5-release-checklist.md)；v1.1.4 及更早标签、Release、附件和历史证据继续保留。
+> v1.1.5 已作为[当前稳定版](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5)交付。本页定义当前产物合同、源配置事实和仍待完成的实体机验证；稳定版状态不会扩大这些证据边界。实时状态见 [v1.1.5 发布检查表](../release/v1.1.5-release-checklist.md)；v1.1.4 及更早标签、Release、附件和历史证据继续保留。
 
 闹钟身份、两阶段替换、15 分钟窗口、能力等级和诊断字段以[闹钟投递合同](alarm-delivery-contract.md)为准。
 
@@ -150,11 +150,11 @@ API 33+ 在每个 AVD attempt 的第一次 Flutter 构建、安装或启动之�
 
 Debug 回退包必须保留 `debug-fallback` 文件名，禁止上传应用商店或标记为正式 Release。
 
-### v1.1.5 预发布合同
+### v1.1.5 稳定版合同
 
 标签 `v1.1.5` 必须与 `pubspec.yaml` 的 `1.1.5+6` 一致，并从合入后的受保护 `main` 创建。公开附件严格为 `danggui-android-universal-release.apk`、`danggui-ios-source-v1.1.5.zip`、`danggui-developer-assets-v1.1.5.zip` 和顶层 `SHA256SUMS`。Android 原生测试、API 24/36 验收、双 Xcode/iOS Simulator、iOS unsigned build、RunnerTests 与 RunnerUITests 是标签门禁；源码和 unsigned `.app.zip` 仍不是 IPA。
 
-代表性小米/其他 OEM Android 及 iPhone 还需覆盖锁屏、声音、震动/触感、静音/专注、隔夜、重启、系统强杀和覆盖升级。发布后发现的问题修入新补丁版本，不改写 `v1.1.5` 标签。实体机门禁签署前保持 Pre-release。
+代表性小米/其他 OEM Android 及 iPhone 仍需覆盖锁屏、声音、震动/触感、静音/专注、隔夜、重启、系统强杀和覆盖升级。这些项目继续标为 `device-unverified`，不得因稳定版状态写成已通过；发布后发现的问题修入新补丁版本，不改写 `v1.1.5` 标签或既有附件。
 
 ### v1.1.4 历史预发布合同
 

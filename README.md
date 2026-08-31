@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img alt="版本：v1.1.5 公开预发布" src="https://img.shields.io/badge/版本-v1.1.5%20公开预发布-B5684C?style=flat-square" />
+  <img alt="版本：v1.1.5 稳定版" src="https://img.shields.io/badge/版本-v1.1.5%20稳定版-6F8068?style=flat-square" />
   <img alt="平台：Android 与 iOS 源码" src="https://img.shields.io/badge/平台-Android%20%7C%20iOS%20源码-6F8068?style=flat-square" />
   <img alt="数据：本地优先、可读导出" src="https://img.shields.io/badge/数据-本地优先%20%7C%20可读导出-81786F?style=flat-square" />
   <img alt="许可证：Apache 2.0" src="https://img.shields.io/badge/代码许可-Apache--2.0-2E2925?style=flat-square" />
@@ -88,10 +88,10 @@
 
 | 平台 | 推荐入口 | 当前交付 |
 | --- | --- | --- |
-| Android 7.0+ | [v1.1.5 公开预发布](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5) | 正式签名的通用 APK；多数用户下载 `danggui-android-universal-release.apk` |
+| Android 7.0+ | [v1.1.5 稳定版](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5) | 正式签名的通用 APK；多数用户下载 `danggui-android-universal-release.apk` |
 | iOS | [源码构建说明](docs/architecture/ios-source-build.md) | 完整 Xcode 源码与无签名构建证据；不提供 IPA 或 TestFlight |
 
-v1.1.5 仍标记为 **Pre-release**：Android 自动化门禁、iOS 双运行时 Simulator 与无签名构建通过后才会发布。合同测试与模拟器结果会分别标记为 `contract-proven`、`simulator-proven`；iPhone 的真实声音、触感、静音/专注、隔夜锁屏、重启及系统强杀后投递仍是 `device-unverified`。安装前建议备份已有数据并用 Release 中的 `SHA256SUMS` 核对文件。分架构 APK、AAB、iOS 证据、签名证书与校验记录统一收在 `danggui-developer-assets-v1.1.5.zip`；完整边界见[交付说明](docs/architecture/platform-delivery.md)与 [v1.1.5 检查表](docs/release/v1.1.5-release-checklist.md)。
+v1.1.5 是当前推荐的 **稳定版**。Android 提供正式签名的通用 APK；iOS 仍只提供完整源码与无签名构建证据，不提供 IPA 或 TestFlight。稳定版状态不会扩大验证边界：合同测试与模拟器结果分别标记为 `contract-proven`、`simulator-proven`，iPhone 的真实声音、触感、静音/专注、隔夜锁屏、重启及系统强杀后投递仍是 `device-unverified`。安装前请先备份，并使用同一 Release 中的 `SHA256SUMS` 核对文件。分架构 APK、AAB、iOS 证据、签名证书与校验记录位于 `danggui-developer-assets-v1.1.5.zip`；完整边界见[交付说明](docs/architecture/platform-delivery.md)与 [v1.1.5 检查表](docs/release/v1.1.5-release-checklist.md)。
 
 ## 版本演进
 

@@ -1,7 +1,11 @@
 import Image from 'next/image';
 import type { Locale, UiCopy } from '@/content/types';
 
-const files = ['01-plan.png', '02-reflect.png', '03-export.png'];
+const workflowFrames = [
+  ['01-startup.png', '02-tasks-reminders.png'],
+  ['03-task-detail.png', '04-past.png'],
+  ['05-notes.png', '06-export-settings.png'],
+] as const;
 
 export function AppShowcase({
   locale,
@@ -22,12 +26,18 @@ export function AppShowcase({
         {copy.map((item, index) => (
           <figure className="showcase-card" key={item.title}>
             <div className="showcase-image">
-              <Image
-                src={`/assets/ui/v1.1.2/${language}/${files[index]}`}
-                alt={`${alt}：${item.title}`}
-                fill
-                sizes="(max-width: 760px) 92vw, (max-width: 1100px) 44vw, 30vw"
-              />
+              {workflowFrames[index].map((file, frameIndex) => (
+                <div className="showcase-device" key={file}>
+                  <Image
+                    src={`/assets/ui/v1.1.5/${language}/${file}`}
+                    alt={`${alt}：${item.title} · ${frameIndex + 1}`}
+                    fill
+                    priority={index === 0 && frameIndex === 0}
+                    loading={index === 0 && frameIndex === 0 ? undefined : 'lazy'}
+                    sizes="(max-width: 600px) 36vw, (max-width: 1100px) 17vw, 12vw"
+                  />
+                </div>
+              ))}
             </div>
             <figcaption>
               <span aria-hidden="true">0{index + 1}</span>

@@ -129,6 +129,8 @@ export function parseReleaseChannelManifest(value: unknown): ReleaseChannelManif
   const preview = value.preview === null ? null : parseRelease(value.preview, 'preview');
   if ((value.stable !== null && !stable) || (value.preview !== null && !preview)) return null;
   if (value.recommended && !{ stable, preview }[value.recommended]) return null;
+  if (stable && value.recommended !== 'stable') return null;
+  if (!stable && preview && value.recommended !== 'preview') return null;
 
   return {
     schemaVersion: 1,
@@ -138,6 +140,15 @@ export function parseReleaseChannelManifest(value: unknown): ReleaseChannelManif
     preview,
     recommended: value.recommended,
   };
+}
+
+export function compareReleaseVersions(left: string, right: string) {
+  const leftParts = left.split('.').map(Number);
+  const rightParts = right.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] !== rightParts[index]) return leftParts[index] - rightParts[index];
+  }
+  return 0;
 }
 
 export function getRecommendedRelease(manifest: ReleaseChannelManifest): PublishedRelease | null {

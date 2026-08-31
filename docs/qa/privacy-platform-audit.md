@@ -70,7 +70,7 @@ dart run tool/audit_offline_boundary.dart
 flutter test test/platform/privacy_platform_config_test.dart --reporter expanded
 ```
 
-静态测试还会在临时副本中主动注入 INTERNET/`USE_EXACT_ALARM`、Firebase 依赖、未受控通知调度 API、HTTPS 端点和未经审阅的 iOS entitlement，并破坏 iOS 系统备份排除、文件保护及 Keychain 本机限定选项，确认审计器会失败关闭，而不是只验证当前“恰好通过”的文件。v1.1.5 标签的 Android/iOS 编译、最终二进制和实体机门禁在真实完成前仍保持未签署状态。
+静态测试还会在临时副本中主动注入 INTERNET/`USE_EXACT_ALARM`、Firebase 依赖、未受控通知调度 API、HTTPS 端点和未经审阅的 iOS entitlement，并破坏 iOS 系统备份排除、文件保护及 Keychain 本机限定选项，确认审计器会失败关闭，而不是只验证当前“恰好通过”的文件。v1.1.5 标签已产生正式签名 Android APK、iOS 源码与无签名构建证据；尚未完成的实体机声音、触感、后台投递和突然断电场景仍按 `device-unverified` 或 `power-loss-unverified` 记录。
 
 ## 源配置与最终产物的边界
 
