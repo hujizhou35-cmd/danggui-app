@@ -1407,8 +1407,8 @@ final class _Audit {
       final releaseNotesPath = 'docs/release/notes/v${releaseVersion.name}.md';
       final releaseNotes = _requiredText(releaseNotesPath) ?? '';
       for (final notesContract in <String>[
-        '# 当归 v${releaseVersion.name} 预发布 / '
-            'Danggui v${releaseVersion.name} Pre-release',
+        '# 当归 v${releaseVersion.name} 稳定版 / '
+            'Danggui v${releaseVersion.name} Stable Release',
         '## 亮点 / Highlights',
         '## 下载 / Downloads',
         '## 校验 / Verify',

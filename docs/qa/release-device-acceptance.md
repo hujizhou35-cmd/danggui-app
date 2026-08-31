@@ -1,6 +1,6 @@
 # 发布设备验收记录
 
-本文档是 v1.1.5 预发布门禁的证据清单。Android 模拟器作业包含两个不能混称的阶段：第一阶段使用 Debug 测试宿主和临时 VM-service 清单完成数据保留、权限、提醒与通知交互验收；第二阶段安装同一 workflow SHA 的 `android-linux` 通用 Release-mode APK，验证精确二进制的冷启动、包名/版本、基础导航和无崩溃。iOS 另由固定 iOS 18.5/26.5 Simulator 执行 RunnerTests 与 RunnerUITests。它们都不代替特定 OEM 或 iPhone 的锁屏、声音、触感、隔夜和覆盖升级验收。
+本文档是 v1.1.5 稳定版的设备证据清单。Android 模拟器作业包含两个不能混称的阶段：第一阶段使用 Debug 测试宿主和临时 VM-service 清单完成数据保留、权限、提醒与通知交互验收；第二阶段安装同一 workflow SHA 的 `android-linux` 通用 Release-mode APK，验证精确二进制的冷启动、包名/版本、基础导航和无崩溃。iOS 另由固定 iOS 18.5/26.5 Simulator 执行 RunnerTests 与 RunnerUITests。它们都不代替特定 OEM 或 iPhone 的锁屏、声音、触感、隔夜和覆盖升级验收；未完成项继续保留为公开限制。
 
 ## API 24 / 36 模拟器自动证据
 

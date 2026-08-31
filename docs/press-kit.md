@@ -83,7 +83,7 @@
 
 ## Release 传播模板
 
-v1.1.2 当前统一写作“公开预发布”或 “Pre-release”，不得写成“稳定版”“正式稳定发布”或“已完成全部实体机验收”。推荐链接为 [v1.1.2 Release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.2)，普通 Android 用户只推荐 `danggui-android-universal-release.apk`。
+v1.1.5 当前统一写作“稳定版”或 “Stable Release”，推荐链接为 [v1.1.5 Release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5)，普通 Android 用户只推荐 `danggui-android-universal-release.apk`。稳定版状态不得扩写成“已完成全部实体机验收”；iOS 仍只能描述为源码与无签名构建证据。
 
 Release 摘要按以下顺序组织：
 
@@ -106,7 +106,7 @@ Release 摘要按以下顺序组织：
 | Android 正式清单不声明 `INTERNET` | 永远不会发生任何数据泄露 |
 | 本地生成 Markdown + JSON 可读导出 | AI 会自动理解你的生活 |
 | 可选加密 `.dgbak` 用于完整备份恢复 | 数据绝不丢失 |
-| v1.1.2 是公开 Pre-release | 稳定版、已完成所有设备验收 |
+| v1.1.5 是当前稳定版，仍公开未验证边界 | 已完成所有设备验收 |
 | iOS 提供完整源码和无签名证据 | iOS 可直接下载 IPA 或通过 TestFlight 安装 |
 
 ## 品牌使用边界

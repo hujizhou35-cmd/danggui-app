@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version: v1.1.5 public pre-release" src="https://img.shields.io/badge/version-v1.1.5%20pre--release-B5684C?style=flat-square" />
+  <img alt="Version: v1.1.5 stable release" src="https://img.shields.io/badge/version-v1.1.5%20stable-6F8068?style=flat-square" />
   <img alt="Platforms: Android and iOS source" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20source-6F8068?style=flat-square" />
   <img alt="Data: local-first and portable" src="https://img.shields.io/badge/data-local--first%20%7C%20portable-81786F?style=flat-square" />
   <img alt="License: Apache 2.0" src="https://img.shields.io/badge/code-Apache--2.0-2E2925?style=flat-square" />
@@ -88,10 +88,10 @@ Use the [official download page](https://danggui.hujizhou35.workers.dev/en/downl
 
 | Platform | Recommended entry | Current delivery |
 | --- | --- | --- |
-| Android 7.0+ | [v1.1.5 public pre-release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5) | Formally signed universal APK; most users want `danggui-android-universal-release.apk` |
+| Android 7.0+ | [v1.1.5 Stable Release](https://github.com/hujizhou35-cmd/danggui-app/releases/tag/v1.1.5) | Formally signed universal APK; most users want `danggui-android-universal-release.apk` |
 | iOS | [Source build guide](../architecture/ios-source-build.md) | Complete Xcode source and unsigned build evidence; no IPA or TestFlight distribution |
 
-v1.1.5 remains a **Pre-release**. It is published only after Android automation, both fixed iOS Simulator runtimes, and the unsigned iOS build pass. Results are separated into `contract-proven`, `simulator-proven`, and `device-unverified`; real iPhone sound, haptics, silent/Focus modes, overnight lock-screen delivery, reboot, and process termination remain unverified. Back up existing data and verify `SHA256SUMS`. Split APKs, the AAB, iOS evidence, and signing records are grouped in `danggui-developer-assets-v1.1.5.zip`. See the [delivery guide](../architecture/platform-delivery.md) and [v1.1.5 checklist](../release/v1.1.5-release-checklist.md).
+v1.1.5 is the current recommended **Stable Release**. Android includes a formally signed universal APK; iOS remains complete source and unsigned-build evidence only, with no IPA or TestFlight build. Stable status does not expand the evidence boundary: `contract-proven`, `simulator-proven`, and `device-unverified` remain distinct, and physical-iPhone sound, haptics, silent/Focus modes, overnight lock-screen delivery, reboot, and process termination are still unverified. Back up existing data and verify files against `SHA256SUMS` from the same Release. Split APKs, the AAB, iOS evidence, and signing records are grouped in `danggui-developer-assets-v1.1.5.zip`. See the [delivery guide](../architecture/platform-delivery.md) and [v1.1.5 checklist](../release/v1.1.5-release-checklist.md).
 
 ## Version journey
 

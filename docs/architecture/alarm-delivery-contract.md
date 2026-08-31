@@ -43,4 +43,4 @@
 ## 验收边界
 
 - 自动化门禁验证合同、Android API 24/36、正式 APK 元数据、iOS unsigned build、RunnerTests，以及固定 iOS 18.5/26.5 上的两条跨模块 XCUITest。
-- 模拟器不能证明真实扬声器、震动/触感、静音/专注、锁屏隔夜、重启和进程被系统终止后的投递。这些项目在实体小米/其他 OEM Android 与 iPhone 完成前，v1.1.5 保持 Pre-release，并标为 `device-unverified`。
+- 模拟器不能证明真实扬声器、震动/触感、静音/专注、锁屏隔夜、重启和进程被系统终止后的投递。v1.1.5 虽已是稳定版，这些项目在实体小米/其他 OEM Android 与 iPhone 完成前仍标为 `device-unverified`，不得扩大解释。
